@@ -36,7 +36,7 @@ To maintain a strict 0€ budget while building production-grade prototypes, you
 
 **Focus:** Leveraging the ext-apps iframe SDK for rich visuals and Category SDK SPIs to bypass bureaucratic friction.
 
-### 1. The "Subscription Guillotine"
+### 1. $${\color{red}The "Subscription Guillotine"}$$
 * **The Problem:** People bleed money from unused subscriptions because canceling them requires logging in, finding the hidden cancel button, and navigating dark patterns.
 * **The Clever Fix:** An MCP server that connects to a user's bank via a free Open Banking API (like Plaid's development tier). The ext-apps framework renders a horrifying pie chart of wasted money on the Echo Show. You just say, "Alexa, kill the gym membership." The server acts as an agent, automatically generating and sending the legally binding cancellation email to the provider.
 * **Stack:** Node.js MCP server, React for the ext-apps iframe, Nodemailer for sending cancellation requests.
