@@ -36,7 +36,7 @@ To maintain a strict 0€ budget while building production-grade prototypes, you
 
 **Focus:** Leveraging the ext-apps iframe SDK for rich visuals and Category SDK SPIs to bypass bureaucratic friction.
 
-### 1. $${\color{red}The "Subscription Guillotine"}$$
+### 1. $${\color{red}The "Subscription\spaceGuillotine"}$$
 * **The Problem:** People bleed money from unused subscriptions because canceling them requires logging in, finding the hidden cancel button, and navigating dark patterns.
 * **The Clever Fix:** An MCP server that connects to a user's bank via a free Open Banking API (like Plaid's development tier). The ext-apps framework renders a horrifying pie chart of wasted money on the Echo Show. You just say, "Alexa, kill the gym membership." The server acts as an agent, automatically generating and sending the legally binding cancellation email to the provider.
 * **Stack:** Node.js MCP server, React for the ext-apps iframe, Nodemailer for sending cancellation requests.
@@ -129,7 +129,7 @@ To maintain a strict 0€ budget while building production-grade prototypes, you
 
 **Focus:** Harnessing continuous passive listening to solve memory gaps and improve communication habits without ever looking at a screen.
 
-### 1. The "Name-Drop Savior"
+### 1. $${\color{red}The "Name-Drop\spaceSavior"}$$
 * **The Problem:** Forgetting a person's name 10 seconds after they introduce themselves at a networking event or party.
 * **The Clever Fix:** Bee passively listens to ambient conversations. When someone says the phrase, "Hi, I'm [Name]," Bee extracts and logs it. 20 minutes later, when you're talking to them again and your heart drops because you forgot their name, you can tap your pocket (or look at the companion app) and see the name of the last person who introduced themselves to you.
 * **Stack:** Bee SDK (continuous text transcript stream), local LLM for Named Entity Recognition (NER).
@@ -139,7 +139,7 @@ To maintain a strict 0€ budget while building production-grade prototypes, you
 * **The Clever Fix:** You wear Bee into the auto repair shop. It passively captures the mechanic telling you about your "catalytic converter, differential fluid, and serpentine belt." By the time you sit in the waiting room, the companion app has translated the mechanic's entire speech into plain English, telling you exactly what is actually broken and what the average cost should be, preventing you from being up-sold.
 * **Stack:** Bee SDK, local Llama 3 instance prompted for automotive knowledge.
 
-### 3. "The Tone-Deafness Mirror"
+### 3. $${\color{red}The "Tone-Deafness Mirror"}$$
 * **The Problem:** People unknowingly ruining their careers or relationships because they have an aggressive or condescending tone they are completely blind to.
 * **The Clever Fix:** Bee analyzes only your side of the conversation using a local sentiment analysis model. If you use condescending phrases, constantly interrupt others, or raise your voice unnecessarily during the workday, the app generates a private, brutal "empathy report card" at 5 PM to help you become self-aware.
 * **Stack:** Bee transcript stream, free sentiment analysis library (like VADER or TextBlob in Python).
@@ -149,7 +149,7 @@ To maintain a strict 0€ budget while building production-grade prototypes, you
 * **The Clever Fix:** A mental health gamification tool. Bee tracks how many times a day you verbally complain about the weather, traffic, or minor inconveniences. If you exceed your daily "whine limit," the app financially penalizes you (by transferring $1 to a charity via an API) or locks you out of your favorite social media app until you go for a 10-minute walk.
 * **Stack:** Bee SDK, simple keyword matching or lightweight zero-shot classification model.
 
-### 5. The "Action-State" OCD Reliever
+### 5. $${\color{red}The "Action-State" OCD Reliever}$$
 * **The Problem:** The crippling daily anxiety of "Wait, did I lock the front door?" or "Did I turn off the oven?"
 * **The Clever Fix:** When you do an important task, you simply state it aloud to the empty room: "I am unplugging the iron." Bee passively logs these specific "action state" phrases. Hours later, when you panic at the office, you don't need to drive all the way home. You just check the Bee app dashboard, which confirms a timestamped log: You stated the iron was unplugged at 8:14 AM.
 * **Stack:** Bee SDK, simple Regex pattern matching ("I am [action] the [object]").
