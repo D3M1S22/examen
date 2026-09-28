@@ -1,155 +1,113 @@
-# amazon_challenge
+# 🐝 EXAMEN: Ambient Knowledge & Action Engine
 
-# Build, Ship, Shape: Amazon Developer Hackathon 2026
-
-## The "Clever Utility" Strategy: Solving Real-World Friction at Zero Cost
-
-Judges at major hackathons often suffer from "productivity fatigue"—seeing the same generic to-do lists and CRM clones over and over. To stand out and compete for the $190,000 prize pool, your project must address incredibly common, highly frustrating everyday problems (bureaucracy, household passive-aggression, decision paralysis, digital clutter) but solve them in unusual, hyper-efficient ways.
-
-This document outlines 20 highly clever utility concepts, strictly isolated across the four hardware tracks, alongside the zero-cost architecture required to build them.
-
----
-
-## 🛠️ The 0€ Infrastructure & Implementation Guide
-
-To maintain a strict 0€ budget while building production-grade prototypes, you will rely entirely on local compute, free tunneling, and open-source models.
-
-### 1. The Compute & Hosting Layer (0€)
-* **Local Hosting:** Run your backend directly on your development machine.
-* **Cloudflared (Free):** Use Cloudflare Tunnels (`cloudflared tunnel --url http://localhost:3000`) to expose your local Node.js or Python server to the internet via a secure HTTPS URL. This fulfills the requirement that your server must be accessible via a remote URL using Streamable HTTP.
-
-### 2. The AI & Logic Layer (0€)
-* **Ollama (Free):** Bypass expensive API keys by running models like Llama 3 or Mistral locally on your machine via Ollama.
-* **Google AI Studio (Free Tier):** If your hardware cannot run local LLMs, utilize Google AI Studio's generous free tier for developers.
-
-### 3. The Database Layer (0€)
-* **Supabase (Free Tier):** Use Supabase for your PostgreSQL database and WebSocket connections.
-* **Local SQLite:** For absolute zero-latency data persistence during a demo, use a local SQLite file.
-
-### 4. Development Workflow
-* Use the free `@alexa-ai/cli` (`npm install -g @alexa-ai/cli`) to authenticate your developer account and automatically scaffold your project.
-* Run `alexa-ai new mcp --name "YourProject"` to instantly generate the necessary `addon.json` and project structure.
+> **Amazon Developer Hackathon 2026**  
+> **Track Principale:** Bee Wearable AI (Ambient Intelligence)  
+> **Integrazioni Ecosistema:** Alexa+ (Echo Show MCP Server & Ext-Apps UI)  
+> **Mini-Challenge:** AWS Builder Challenge (AWS Bedrock & AgentCore)  
+> **Etimo & Visione:** *Dal latino "exāmen" (sciame d'api, ma anche esame attento e ponderazione).*  
+> **Tagline:** *Dall'ascolto ambientale all'azione aumentata: memoria relazionale, tranquillità quotidiana e ricerca autonoma cross-device.*
 
 ---
 
-## 🎙️ Track 1: Alexa+ (Pure Model Context Protocol & Category SDK)
+## 🌟 Visione & Valore Chiave
 
-**Focus:** Leveraging the ext-apps iframe SDK for rich visuals and Category SDK SPIs to bypass bureaucratic friction.
+La maggior parte degli assistenti vocali e delle app per wearable soffre di due limiti strutturali:
+1. **Richiedono input attivo:** Devi fermarti, aprire un'app, premere un tasto o pronunciare keyword innaturali (*"Alexa, aggiungi alla lista..."*).
+2. **Archiviazione passiva priva di intelligenza:** I wearable attuali si limitano a registrare o trascrivere log grezzi, riversando sull'utente il carico di rileggere e organizzare i dati.
 
-### 1. $${\color{red}The \space "Subscription \space Guillotine"}$$
-* **The Problem:** People bleed money from unused subscriptions because canceling them requires logging in, finding the hidden cancel button, and navigating dark patterns.
-* **The Clever Fix:** An MCP server that connects to a user's bank via a free Open Banking API (like Plaid's development tier). The ext-apps framework renders a horrifying pie chart of wasted money on the Echo Show. You just say, "Alexa, kill the gym membership." The server acts as an agent, automatically generating and sending the legally binding cancellation email to the provider.
-* **Stack:** Node.js MCP server, React for the ext-apps iframe, Nodemailer for sending cancellation requests.
+**EXAMEN** trasforma il flusso audio continuo catturato dal wearable **Bee** in un **Knowledge & Action Fabric proattivo**. Grazie a una pipeline agentica intelligente su **AWS Bedrock** e **AgentCore**, il sistema filtra passivamente il parlato naturale, estrae entità e intenzioni, arricchisce autonomamente i contenuti tramite ricerche web e serve le informazioni su richiesta tramite **Alexa+** su **Echo Show**.
 
-### 2. The "Impulsive Shopping Interceptor"
-* **The Problem:** Late-night doom-spending on useless items.
-* **The Clever Fix:** An MCP server paired with a free browser extension. When you try to buy something non-essential, the browser pings Alexa+. Alexa interrupts you and uses the ext-apps UI to render a graph showing exactly how many hours of your specific salary you have to work to pay for that item. You must verbally justify the purchase to the AI before the browser extension unlocks the checkout button.
-* **Stack:** Simple Chrome Extension, Node.js MCP server handling state.
-
-### 3. "Leftover Alchemist" (Food Ordering SPI)
-* **The Problem:** Food waste. You have three random ingredients but are missing the core item to make a meal, leading to expensive takeout.
-* **The Clever Fix:** You tell Alexa you have chicken, rice, and broccoli. The MCP server generates a recipe for a stir-fry but realizes you need soy sauce. Instead of ordering a whole meal, it seamlessly hands off to the `com.amazon.alexa.foodordering.v1` Service Provider Interface (SPI) to automatically order just a bottle of soy sauce from a local grocery delivery service.
-* **Stack:** Local LLM for recipe generation, Category SDK (Food Ordering SPI).
-
-### 4. The "Roommate Diplomat"
-* **The Problem:** Household chores cause massive passive-aggressive arguments because nobody wants to be the "bad guy" who nags.
-* **The Clever Fix:** An MCP server acting as a neutral mediator. You complain to Alexa: "The kitchen is a disaster." Alexa logs the complaint, calculates whose turn it actually is based on a free Google Calendar integration, and sends a highly diplomatic, non-aggressive push notification/dashboard update to the correct roommate, completely removing human-to-human conflict.
-* **Stack:** Node.js, Google Calendar API (Free), SQLite for tracking chore scores.
-
-### 5. "Bureaucracy Sniper" (Local Booking SPI)
-* **The Problem:** Finding early appointments at the DMV or local government offices is impossible without checking the website every hour.
-* **The Clever Fix:** A clever inversion of the Local Booking SPI. Your MCP server constantly scrapes the local government booking site (or uses open data). The moment someone cancels and a slot opens up, the server pushes the availability to Alexa+, which proactively asks you, "A DMV slot opened at 2 PM today, should I grab it?" and utilizes the CreateAppointment payload to secure it.
-* **Stack:** Python Web Scraper (BeautifulSoup), Category SDK (Local Booking SPI).
-
----
-
-## 📺 Track 2: Fire TV (Pure Vega OS & React Native)
-
-**Focus:** Solving living room friction—decision paralysis, distractions, and accessibility—using React Native on Vega OS.
-
-### 1. The "30-Second Ultimatum"
-* **The Problem:** Couples and families spend 45 minutes scrolling through Netflix trying to find a movie to watch, eventually getting frustrated and going to sleep.
-* **The Clever Fix:** A Vega OS React Native app that syncs the watchlists of everyone in the room. When launched, it presents three options on the TV. The room has exactly 30 seconds to agree on one. If the timer hits zero without a consensus, the app ruthlessly auto-plays a public domain documentary about dirt. It aggressively solves the paradox of choice.
-* **Stack:** React Native (Vega OS), free TMDB API for movie data.
-
-### 2. "Context-Catcher" (Anti-Spoiler Companion)
-* **The Problem:** You forget who a character is in a complex show, but if you Google them on your phone, you accidentally read a massive spoiler about their death.
-* **The Clever Fix:** A Fire TV app where, when you pause the movie, the screen uses React Native to overlay a spoiler-free "Who is this?" character relationship map tailored strictly to the current episode you are on.
-* **Stack:** React Native, TMDB API (filtered by episode air-date logic).
-
-### 3. "Posture Police"
-* **The Problem:** "Shrimping"—sitting in terrible, spine-damaging postures while binge-watching TV for hours.
-* **The Clever Fix:** A Vega OS app that connects via a local WebSocket to a free webpage open on your phone (propped up on the coffee table). The phone uses a lightweight, free local browser-based Pose Detection model (like MediaPipe). If it detects you slouching for more than 15 minutes, the Fire TV app slowly dims the screen's brightness. The only way to restore the picture is to sit up straight.
-* **Stack:** React Native (Vega OS), WebSockets, MediaPipe Pose (running client-side for free).
-
-### 4. "PiP Delivery Defender"
-* **The Problem:** Missing food deliveries or important packages because the TV volume is too loud to hear the doorbell.
-* **The Clever Fix:** A background React Native service running on the Fire TV. It listens to a simple local webhook. When your food delivery app sends a notification to your phone that the driver is "1 minute away", the webhook triggers the Fire TV to display an un-ignorable Picture-in-Picture (PiP) alert: "Put on pants, your pizza is in the driveway."
-* **Stack:** React Native, simple local Node.js webhook listener.
-
-### 5. "Grandma Mode" (Remote Accessibility)
-* **The Problem:** Aging relatives constantly hit the wrong button on the TV remote, get lost in complex UI menus, and have to call you for tech support.
-* **The Clever Fix:** A completely simplified, high-contrast Fire TV launcher built in React Native specifically for the elderly. The clever part: You manage their TV layout remotely via a free web dashboard. If they want to watch a specific show, you search it on your phone and push the exact tile directly to their TV screen, removing all navigation friction for them.
-* **Stack:** React Native (Vega OS), Supabase (Free Tier for remote database syncing).
+```
+    [ Bee Wearable AI ] (Ascolto passivo continuo)
+            │
+            ▼ (beemcp / audio transcript stream)
+ ┌────────────────────────────────────────────────────────┐
+ │ 1. SCREMAGGIO (Semantic Gatekeeper su AWS Bedrock)      │ ──> [ Scarta Parlato Irrilevante (90%+) ]
+ └──────────────────────────┬─────────────────────────────┘
+                            │ (Chunk di valore categorizzati)
+                            ▼
+ ┌────────────────────────────────────────────────────────┐
+ │ 2. ROUTING & STATE GRAPH (AgentCore / LangGraph)        │
+ └──────┬───────────────────┼────────────────────┬────────┘
+        │                   │                    │
+        ▼                   ▼                    ▼
+ ┌──────────────┐   ┌──────────────┐   ┌──────────────────────────┐
+ │ 3A. SOCIAL   │   │ 3B. ACTION   │   │ 3C. DEEP TOPIC & LECTURE │
+ │     RECALL   │   │     STATE    │   │     RESEARCH ENGINE      │
+ │ (Nomi, Ruoli,│   │ (Routine &   │   │ (Bug, Feature, Tech &    │
+ │  Promesse)   │   │  Task Ledger)│   │  Lezioni + Web Search)   │
+ └──────┬───────┘   └───────┬──────┘   └─────────────┬────────────┘
+        │                   │                        │
+        └───────────────────┼────────────────────────┘
+                            ▼
+ ┌────────────────────────────────────────────────────────┐
+ │ 4. PERSISTENT CONTEXT STORE (SQLite / DynamoDB)        │
+ └──────────────────────────┬─────────────────────────────┘
+                            │
+                            ▼
+ ┌────────────────────────────────────────────────────────┐
+ │ 5. SERVING VIA MCP SERVER (Alexa+ & Echo Show UI)       │
+ └────────────────────────────────────────────────────────┘
+            │                               │
+            ▼ (Interazione Vocale)          ▼ (Visual Dashboard)
+     "Alexa, ho staccato             Schede Relazionali,
+      il ferro da stiro?"            Task Timeline, Report Tech
+```
 
 ---
 
-## 🔔 Track 3: Ring (Pure Ring APIs & SDKs)
+## 🎯 I Tre Domini Applicativi di EXAMEN
 
-**Focus:** Moving beyond basic security to create practical, proactive household automation using motion and computer vision.
-
-### 1. The "Solicitor Blackhole"
-* **The Problem:** Unwanted door-to-door sales people ringing the bell and waking the baby or interrupting remote work.
-* **The Clever Fix:** When Ring detects motion, a local script grabs the snapshot and runs it through a free local object detection model. If it detects a person holding a clipboard or wearing a high-vis sales vest, it bypasses the indoor chime completely. Instead, it triggers the Ring two-way audio to automatically state: "We are currently observing a vow of silence, please leave your pamphlet on the mat."
-* **Stack:** Ring API Webhooks, local Python script with OpenCV/YOLOv8.
-
-### 2. "Trash-Can Accountability"
-* **The Problem:** The weekly panic of forgetting to take the trash bins down to the curb on garbage night.
-* **The Clever Fix:** On Thursday nights at 9 PM, a local script accesses the Ring camera facing your driveway. It uses basic computer vision color-matching to look for the distinct color of your city's trash bin at the curb. If the bin is not detected in the frame, it flashes your smart living room lights red until you take it out.
-* **Stack:** Ring Snapshot API, OpenCV (Color Thresholding), local HTTP requests to smart bulb APIs.
-
-### 3. The "Escape Artist" Threshold Monitor
-* **The Problem:** Toddlers or pets sneaking into rooms they shouldn't be in (like a home office or kitchen) without you noticing.
-* **The Clever Fix:** Utilizing indoor Ring cameras. You define a "virtual tripwire" in the frame. If the camera detects a small object crossing that specific threshold, it instantly sends a local network request to the nearest Alexa smart speaker to play a custom audio warning: "The dog is in the kitchen again."
-* **Stack:** Ring Motion Zones, Node.js script to trigger Alexa text-to-speech routines.
-
-### 4. "Weather-Aware Delivery Saver"
-* **The Problem:** Packages getting ruined by sudden rainstorms while you are at work.
-* **The Clever Fix:** Listens to Ring motion alerts for a delivery driver. Once a package is dropped off, the script checks the free Open-Meteo local weather API. If rain is expected within the next two hours, it upgrades the standard Ring notification to a critical "Emergency" push alert on your phone: "Package delivered and it is about to rain, call a neighbor to grab it."
-* **Stack:** Ring Webhooks, Open-Meteo API (Free), Pushover/Discord webhook for alerts.
-
-### 5. The "Garage Guardian"
-* **The Problem:** The anxiety of getting into bed and wondering if you left the garage door wide open for the whole neighborhood to see.
-* **The Clever Fix:** Place an old Ring camera in the garage. A local script checks the snapshot every night at 11:00 PM. It measures the overall brightness/pixel data of the image. If it sees the bright streetlights outside instead of the dark interior of the closed garage door, it triggers a loud alarm on your phone.
-* **Stack:** Ring API, Python (basic pixel array analysis, no heavy AI needed).
+| Canale | Input Rilevato da Bee | Elaborazione & Enrichment | Output su Alexa+ / Echo Show |
+| :--- | :--- | :--- | :--- |
+| **🧠 Social Recall** | *"Piacere Marco, sono tech lead di Acme Corp, mandami la repo..."* | Estrazione anagrafica, ruolo aziendale, argomenti trattati e impegni bidirezionali presi. | *"Alexa, chi ho conosciuto oggi?"* ➔ Scheda anagrafica visiva su Echo Show con task di follow-up collegati. |
+| **🔒 Action-State & Routine** | *"Sto chiudendo il gas e staccando il ferro da stiro."* oppure *"Ho fatto il merge della PR #42."* | Verifica asserzione in prima persona, classificazione del dominio (sicurezza domestica vs produttività) e marcatura timestamp con score di confidenza. | *"Alexa, ho staccato il ferro?"* ➔ Conferma vocale istantanea e badge verde di stato verificato a schermo. |
+| **📚 Deep Meeting & Lecture Intelligence** | Discussione di bug complessi, architetture, nuove tecnologie (es. *AgentCore, DuckDB*) o concetti accademici. | Rilevamento topic, ricerca web autonoma per documentazione/esempi, sintesi di un **Briefing Esecutivo** o **Study Sheet**. | *"Alexa, mostrami il report sulle tecnologie discusse oggi"* ➔ Report interattivo su Echo Show e invio sintesi. |
 
 ---
 
-## 🐝 Track 4: Bee Wearable AI (Pure Ambient Intelligence)
+## 🏗️ I 5 Livelli dell'Architettura
 
-**Focus:** Harnessing continuous passive listening to solve memory gaps and improve communication habits without ever looking at a screen.
+1. **Scremaggio (Semantic Gatekeeper):** Valutazione ultrarapida ed economica dei chunk di trascrizione tramite modello ultra-light su Bedrock (es. *Claude 3.5 Haiku* o *Amazon Nova Micro*). Se il testo è chiacchiericcio o rumore di fondo viene scartato a costo computazionale nullo per i moduli successivi.
+2. **Routing Semantico:** I chunk ammessi vengono categorizzati (`social`, `action`, `deep_research`) e instradati al rispettivo sub-agent/nodo del grafo.
+3. **Estrazione & Arricchimento:**
+   - **Social:** Schema JSON strutturato dei contatti e promesse.
+   - **Action-State:** Filtraggio stringente per evitare falsi positivi (solo azioni compiute, non intenzioni future o dubbi).
+   - **Deep Topic Research:** Query automatica verso tool di web search (documentazione tecnica, articoli, basi di conoscenza) e stesura del dossier di approfondimento.
+4. **Salvataggio Dati:** Context Database unificato (SQLite locale per latenza zero o AWS DynamoDB per cloud storage), indicizzato per query semantiche e temporali.
+5. **Serving Layer (MCP Server per Alexa+):** Server basato su **Model Context Protocol (MCP)** che espone tool specialistici ad Alexa+, corredato da una GUI per Echo Show tramite **ext-apps iframe SDK**.
 
-### 1. $${\color{red}The \space "Name-Drop \space Savior"}$$
-* **The Problem:** Forgetting a person's name 10 seconds after they introduce themselves at a networking event or party.
-* **The Clever Fix:** Bee passively listens to ambient conversations. When someone says the phrase, "Hi, I'm [Name]," Bee extracts and logs it. 20 minutes later, when you're talking to them again and your heart drops because you forgot their name, you can tap your pocket (or look at the companion app) and see the name of the last person who introduced themselves to you.
-* **Stack:** Bee SDK (continuous text transcript stream), local LLM for Named Entity Recognition (NER).
+---
 
-### 2. Auto-Mechanic Jargon Translator
-* **The Problem:** Getting scammed or overcharged at the mechanic because you don't understand the highly technical automotive jargon they are using.
-* **The Clever Fix:** You wear Bee into the auto repair shop. It passively captures the mechanic telling you about your "catalytic converter, differential fluid, and serpentine belt." By the time you sit in the waiting room, the companion app has translated the mechanic's entire speech into plain English, telling you exactly what is actually broken and what the average cost should be, preventing you from being up-sold.
-* **Stack:** Bee SDK, local Llama 3 instance prompted for automotive knowledge.
+## 💻 Tech Stack & Integrazioni Ecosistema
 
-### 3. $${\color{red}The \space "Tone-Deafness \space Mirror"}$$
-* **The Problem:** People unknowingly ruining their careers or relationships because they have an aggressive or condescending tone they are completely blind to.
-* **The Clever Fix:** Bee analyzes only your side of the conversation using a local sentiment analysis model. If you use condescending phrases, constantly interrupt others, or raise your voice unnecessarily during the workday, the app generates a private, brutal "empathy report card" at 5 PM to help you become self-aware.
-* **Stack:** Bee transcript stream, free sentiment analysis library (like VADER or TextBlob in Python).
+- **Input Wearable:** Bee Wearable AI via bridge [`beemcp`](https://github.com/OkGoDoIt/beemcp) / Bee CLI transcript stream.
+- **LLM Provider:** **AWS Bedrock**
+  - *Claude 3.5 Haiku / Nova Micro:* Scremaggio e Routing a latenza minima e costo irrisorio.
+  - *Claude 3.5 Sonnet / Nova Pro:* Estrazione avanzata, sintesi dossier e report di ricerca.
+- **Agent Harness:** **AgentCore** / LangGraph per la gestione asincrona del grafo di stati e l'invocazione di tool.
+- **Tool di Ricerca:** Bedrock Web Search / Tavily API per l'arricchimento autonomo dei topic.
+- **Storage:** SQLite strutturato con tabelle dedicate e supporto full-text.
+- **Serving & Voice UI:** Alexa+ (Echo Show) tramite Model Context Protocol (Streamable HTTP / Cloudflare Tunnel / AWS Lambda).
+- **Frontend UI:** Ext-Apps Iframe SDK per schermi multimodali Echo Show.
 
-### 4. The "Optimism Enforcer"
-* **The Problem:** Chronic complaining about things completely out of your control, which ruins your mood and annoys everyone around you.
-* **The Clever Fix:** A mental health gamification tool. Bee tracks how many times a day you verbally complain about the weather, traffic, or minor inconveniences. If you exceed your daily "whine limit," the app financially penalizes you (by transferring $1 to a charity via an API) or locks you out of your favorite social media app until you go for a 10-minute walk.
-* **Stack:** Bee SDK, simple keyword matching or lightweight zero-shot classification model.
+---
 
-### 5. $${\color{red}The \space "Action-State" \space OCD \space Reliever}$$
-* **The Problem:** The crippling daily anxiety of "Wait, did I lock the front door?" or "Did I turn off the oven?"
-* **The Clever Fix:** When you do an important task, you simply state it aloud to the empty room: "I am unplugging the iron." Bee passively logs these specific "action state" phrases. Hours later, when you panic at the office, you don't need to drive all the way home. You just check the Bee app dashboard, which confirms a timestamped log: You stated the iron was unplugged at 8:14 AM.
-* **Stack:** Bee SDK, simple Regex pattern matching ("I am [action] the [object]").
+## 🏆 Allineamento Criteri Hackathon & Premi Target
+
+| Criterio / Track | Come EXAMEN Massimizza il Punteggio |
+| :--- | :--- |
+| **Track 1: Bee Wearable AI ($12.000)** | Supera il banale "data logging" integrando estrazione semantica in tempo reale, arricchimento autonomo con web search e self-improvement cognitivo. |
+| **Mini-Challenge: AWS Builder ($5.000 + $5.000 crediti)** | Utilizzo nativo di AWS Bedrock con multi-model routing (Haiku per gatekeeper, Sonnet per sintesi) e orchestrazione agentica tramite AgentCore. |
+| **Cross-Device Orchestration** | Esperienza simbiotica continua: **Bee** cattura il contesto nel mondo fisico in mobilità, **Alexa+ su Echo Show** lo sintetizza a casa o in ufficio sia a voce che visivamente. |
+
+---
+
+## 📂 Struttura della Documentazione di Progetto
+
+I dettagli operativi, tecnici e strategici sono organizzati nei seguenti documenti dedicati:
+
+* 📄 [01_architettura_flusso.md](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/docs/01_architettura_flusso.md): Dettaglio tecnico dei 5 stadi (Scremaggio, Routing, Estrazione/Enrichment, Storage, Serving).
+* 📄 [02_pipeline_bedrock_agentcore.md](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/docs/02_pipeline_bedrock_agentcore.md): Implementazione del grafo con AWS Bedrock, AgentCore/LangGraph, schemi Pydantic, prompt e tool di ricerca.
+* 📄 [03_mcp_alexa_serving.md](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/docs/03_mcp_alexa_serving.md): Specifiche del server MCP per Alexa+, definizione dei tool, schemi JSON-RPC e wireframe UI per Echo Show (ext-apps).
+* 📄 [04_hackathon_strategia_demo.md](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/docs/04_hackathon_strategia_demo.md): Script e storyboard del video demo da 3 minuti, allineamento ai criteri di valutazione e piano di sviluppo.
