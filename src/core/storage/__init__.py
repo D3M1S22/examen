@@ -20,13 +20,13 @@ def get_storage_store(custom_settings: Optional[Settings] = None) -> AbstractCon
     if backend == "sqlite":
         _store_instance = SQLiteContextStore(db_path=cfg.sqlite_db_path)
     elif backend == "dynamo":
-        # Placeholder per DynamoDBContextStore (Fase 2 Cloud)
-        raise NotImplementedError("DynamoDB storage backend verrà attivato in Fase 2 Cloud.")
+        # Placeholder for DynamoDBContextStore (Stage 2 Cloud)
+        raise NotImplementedError("DynamoDB storage backend will be activated in Stage 2 Cloud.")
     elif backend == "agentcore_memory":
-        # Placeholder per AgentCoreMemoryStore (Fase 2 Cloud)
-        raise NotImplementedError("AgentCore Memory storage backend verrà attivato in Fase 2 Cloud.")
+        # Placeholder for AgentCoreMemoryStore (Stage 2 Cloud)
+        raise NotImplementedError("AgentCore Memory storage backend will be activated in Stage 2 Cloud.")
     else:
-        # Default di fallback su SQLite
+        # Default fallback to SQLite
         _store_instance = SQLiteContextStore(db_path=cfg.sqlite_db_path)
 
     return _store_instance

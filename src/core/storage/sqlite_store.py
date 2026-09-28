@@ -25,7 +25,7 @@ class SQLiteContextStore(AbstractContextStore):
         with self._get_connection() as conn:
             cursor = conn.cursor()
 
-            # 1. Tabella Azioni Verificate
+            # 1. Verified Actions Table
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS verified_actions (
                     id TEXT PRIMARY KEY,
@@ -40,7 +40,7 @@ class SQLiteContextStore(AbstractContextStore):
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_actions_type ON verified_actions (action_type);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_actions_time ON verified_actions (timestamp DESC);")
 
-            # 2. Tabella Contatti Social
+            # 2. Social Contacts Table
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS social_contacts (
                     id TEXT PRIMARY KEY,
@@ -54,7 +54,7 @@ class SQLiteContextStore(AbstractContextStore):
             """)
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_social_name ON social_contacts (person_name);")
 
-            # 3. Tabella Topic Briefings
+            # 3. Topic Briefings Table
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS topic_briefings (
                     id TEXT PRIMARY KEY,
@@ -69,7 +69,7 @@ class SQLiteContextStore(AbstractContextStore):
             """)
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_briefings_time ON topic_briefings (created_at DESC);")
 
-            # 4. Configurazione FTS5 (se supportato dall'ambiente SQLite)
+            # 4. FTS5 Virtual Tables (if supported by SQLite runtime)
             try:
                 cursor.execute("""
                     CREATE VIRTUAL TABLE IF NOT EXISTS fts_actions USING fts5(
@@ -88,7 +88,7 @@ class SQLiteContextStore(AbstractContextStore):
                 """)
                 self._has_fts = True
             except sqlite3.OperationalError:
-                # Fallback trasparente a LIKE se FTS5 non è abilitato
+                # Transparent fallback to LIKE matching if FTS5 is not compiled in SQLite
                 self._has_fts = False
 
             conn.commit()
@@ -313,5 +313,5 @@ class SQLiteContextStore(AbstractContextStore):
         return None
 
     def close(self) -> None:
-        """Chiude eventuali pool o risorse se necessario."""
+        """Close connection pools or resources if applicable."""
         pass

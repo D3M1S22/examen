@@ -1,116 +1,116 @@
 # 🐝 EXAMEN: Ambient Knowledge & Action Engine
 
 > **Amazon Developer Hackathon 2026**  
-> **Track Principale:** Bee Wearable AI (Ambient Intelligence)  
-> **Integrazioni Ecosistema:** Alexa+ (Echo Show MCP Server & Ext-Apps UI)  
+> **Primary Track:** Bee Wearable AI (Ambient Intelligence)  
+> **Ecosystem Integrations:** Alexa+ (Echo Show MCP Server & Ext-Apps UI)  
 > **Mini-Challenge:** AWS Builder Challenge (AWS Bedrock & AgentCore)  
-> **Etimo & Visione:** *Dal latino "exāmen" (sciame d'api, ma anche esame attento e ponderazione).*  
-> **Tagline:** *Dall'ascolto ambientale all'azione aumentata: memoria relazionale, tranquillità quotidiana e ricerca autonoma cross-device.*
+> **Etymology & Vision:** *From Latin "exāmen" (a swarm of bees, but also a careful examination and weighing).*  
+> **Tagline:** *From ambient listening to augmented action: relational memory, daily peace of mind, and autonomous cross-device research.*
 
 ---
 
-## 🌟 Visione & Valore Chiave
+## 🌟 Vision & Key Value
 
-La maggior parte degli assistenti vocali e delle app per wearable soffre di due limiti strutturali:
-1. **Richiedono input attivo:** Devi fermarti, aprire un'app, premere un tasto o pronunciare keyword innaturali (*"Alexa, aggiungi alla lista..."*).
-2. **Archiviazione passiva priva di intelligenza:** I wearable attuali si limitano a registrare o trascrivere log grezzi, riversando sull'utente il carico di rileggere e organizzare i dati.
+Most voice assistants and wearable applications suffer from two structural bottlenecks:
+1. **Require Active Input:** You must stop, unlock a phone, open an app, press a button, or speak awkward wake words (*"Alexa, add to list..."*).
+2. **Passive, Unintelligent Storage:** Current wearables merely record or transcribe raw logs, shifting the cognitive burden onto the user to re-read and organize the data.
 
-**EXAMEN** trasforma il flusso audio continuo catturato dal wearable **Bee** in un **Knowledge & Action Fabric proattivo**. Grazie a una pipeline agentica intelligente su **AWS Bedrock** e **AgentCore**, il sistema filtra passivamente il parlato naturale, estrae entità e intenzioni, arricchisce autonomamente i contenuti tramite ricerche web e serve le informazioni su richiesta tramite **Alexa+** su **Echo Show**.
+**EXAMEN** transforms the continuous audio stream captured by the **Bee** wearable into a proactive **Knowledge & Action Fabric**. Powered by an intelligent agentic pipeline on **AWS Bedrock** and **AgentCore**, the system passively filters ambient speech, extracts entities and intentions, autonomously enriches topics via web research, and serves the knowledge on demand through **Alexa+** on **Echo Show**.
 
 ```
-    [ Bee Wearable AI ] (Ascolto passivo continuo)
+    [ Bee Wearable AI ] (Continuous passive listening)
             │
             ▼ (beemcp / audio transcript stream)
  ┌────────────────────────────────────────────────────────┐
- │ 1. SCREMAGGIO (Semantic Gatekeeper su AWS Bedrock)      │ ──> [ Scarta Parlato Irrilevante (90%+) ]
+ │ 1. SCREENING (Fast Semantic Gatekeeper on AWS Bedrock) │ ──> [ Drop Irrelevant Chit-chat (90%+) ]
  └──────────────────────────┬─────────────────────────────┘
-                            │ (Chunk di valore categorizzati)
+                            │ (Valuable categorized chunks)
                             ▼
  ┌────────────────────────────────────────────────────────┐
- │ 2. ROUTING & STATE GRAPH (AgentCore / LangGraph)        │
+ │ 2. ROUTING & STATE GRAPH (AgentCore / LangGraph)       │
  └──────┬───────────────────┼────────────────────┬────────┘
         │                   │                    │
         ▼                   ▼                    ▼
  ┌──────────────┐   ┌──────────────┐   ┌──────────────────────────┐
  │ 3A. SOCIAL   │   │ 3B. ACTION   │   │ 3C. DEEP TOPIC & LECTURE │
  │     RECALL   │   │     STATE    │   │     RESEARCH ENGINE      │
- │ (Nomi, Ruoli,│   │ (Routine &   │   │ (Bug, Feature, Tech &    │
- │  Promesse)   │   │  Task Ledger)│   │  Lezioni + Web Search)   │
+ │ (Names, Roles│   │ (Routine &   │   │ (Bugs, Features, Tech &  │
+ │  Promises)   │   │  Task Ledger)│   │  Lectures + Web Search)  │
  └──────┬───────┘   └───────┬──────┘   └─────────────┬────────────┘
         │                   │                        │
         └───────────────────┼────────────────────────┘
                             ▼
  ┌────────────────────────────────────────────────────────┐
- │ 4. PERSISTENT CONTEXT STORE (SQLite / DynamoDB)        │
+ │ 4. PERSISTENT CONTEXT STORE (SQLite / DynamoDB / ACMem)│
  └──────────────────────────┬─────────────────────────────┘
                             │
                             ▼
  ┌────────────────────────────────────────────────────────┐
- │ 5. SERVING VIA MCP SERVER (Alexa+ & Echo Show UI)       │
+ │ 5. SERVING VIA MCP SERVER (Alexa+ & Echo Show UI)      │
  └────────────────────────────────────────────────────────┘
             │                               │
-            ▼ (Interazione Vocale)          ▼ (Visual Dashboard)
-     "Alexa, ho staccato             Schede Relazionali,
-      il ferro da stiro?"            Task Timeline, Report Tech
+            ▼ (Voice Interaction)           ▼ (Visual Dashboard)
+     "Alexa, did I unplug             Relational Rolodex,
+      the clothes iron?"              Task Timeline, Tech Briefings
 ```
 
 ---
 
-## 🎯 I Tre Domini Applicativi di EXAMEN
+## 🎯 The Three Core Application Domains
 
-| Canale | Input Rilevato da Bee | Elaborazione & Enrichment | Output su Alexa+ / Echo Show |
+| Channel | Input Captured by Bee | Autonomous Enrichment | Output on Alexa+ / Echo Show |
 | :--- | :--- | :--- | :--- |
-| **🧠 Social Recall** | *"Piacere Marco, sono tech lead di Acme Corp, mandami la repo..."* | Estrazione anagrafica, ruolo aziendale, argomenti trattati e impegni bidirezionali presi. | *"Alexa, chi ho conosciuto oggi?"* ➔ Scheda anagrafica visiva su Echo Show con task di follow-up collegati. |
-| **🔒 Action-State & Routine** | *"Sto chiudendo il gas e staccando il ferro da stiro."* oppure *"Ho fatto il merge della PR #42."* | Verifica asserzione in prima persona, classificazione del dominio (sicurezza domestica vs produttività) e marcatura timestamp con score di confidenza. | *"Alexa, ho staccato il ferro?"* ➔ Conferma vocale istantanea e badge verde di stato verificato a schermo. |
-| **📚 Deep Meeting & Lecture Intelligence** | Discussione di bug complessi, architetture, nuove tecnologie (es. *AgentCore, DuckDB*) o concetti accademici. | Rilevamento topic, ricerca web autonoma per documentazione/esempi, sintesi di un **Briefing Esecutivo** o **Study Sheet**. | *"Alexa, mostrami il report sulle tecnologie discusse oggi"* ➔ Report interattivo su Echo Show e invio sintesi. |
+| **🧠 Social Recall** | *"Nice to meet you Marco, I'm Tech Lead at Acme Corp, send me your repo..."* | Extracts name, company, role, salient topics, and bilateral commitments. | *"Alexa, who did I meet today?"* ➔ Visual profile card on Echo Show with pending follow-up action items. |
+| **🔒 Action-State & Routine** | *"I'm turning off the stove and unplugging the iron."* or *"I just merged PR #42."* | Verifies first-person completed actions, classifies safety vs work domains, timestamps with confidence score. | *"Alexa, did I unplug the iron?"* ➔ Instant voice confirmation and certified green verification badge on screen. |
+| **📚 Deep Meeting & Lecture Intelligence** | Discussions on complex bugs, architecture, new libraries (*AgentCore, DuckDB*), or academic lectures. | Detects salient topics, invokes autonomous web search for documentation/examples, synthesizes an **Executive Briefing**. | *"Alexa, show me the briefing on tech discussed today"* ➔ Interactive report on Echo Show with sources and action items. |
 
 ---
 
-## 🏗️ I 5 Livelli dell'Architettura
+## 🏗️ 5-Stage System Architecture
 
-1. **Scremaggio (Semantic Gatekeeper):** Valutazione ultrarapida ed economica dei chunk di trascrizione tramite modello ultra-light su Bedrock (es. *Claude 3.5 Haiku* o *Amazon Nova Micro*). Se il testo è chiacchiericcio o rumore di fondo viene scartato a costo computazionale nullo per i moduli successivi.
-2. **Routing Semantico:** I chunk ammessi vengono categorizzati (`social`, `action`, `deep_research`) e instradati al rispettivo sub-agent/nodo del grafo.
-3. **Estrazione & Arricchimento:**
-   - **Social:** Schema JSON strutturato dei contatti e promesse.
-   - **Action-State:** Filtraggio stringente per evitare falsi positivi (solo azioni compiute, non intenzioni future o dubbi).
-   - **Deep Topic Research:** Query automatica verso tool di web search (documentazione tecnica, articoli, basi di conoscenza) e stesura del dossier di approfondimento.
-4. **Salvataggio Dati:** Context Database unificato (SQLite locale per latenza zero o AWS DynamoDB per cloud storage), indicizzato per query semantiche e temporali.
-5. **Serving Layer (MCP Server per Alexa+):** Server basato su **Model Context Protocol (MCP)** che espone tool specialistici ad Alexa+, corredato da una GUI per Echo Show tramite **ext-apps iframe SDK**.
+1. **Screening (Semantic Gatekeeper):** Ultra-fast, cost-effective evaluation of incoming audio chunks via lightweight Bedrock foundation models (*Claude 3.5 Haiku* or *Amazon Nova Micro*). If text is trivial chit-chat or background silence, it drops immediately at zero downstream computation cost.
+2. **Semantic Routing:** Qualified chunks are categorized (`social`, `action`, `deep_topic`) and dynamically dispatched to specialized sub-agents.
+3. **Extraction & Autonomous Enrichment:**
+   - **Social:** Structured Pydantic schema for contacts, roles, and commitments.
+   - **Action-State:** Strict veracity filtering to prevent false positives (completed actions only, discarding doubts or future intentions).
+   - **Deep Topic Research:** Formulates search queries, retrieves documentation via web search, and synthesizes executive dossiers with Claude 3.5 Sonnet.
+4. **Context Knowledge Store:** Unified persistence layer with SQLite + FTS5 for local zero-latency development, and AWS DynamoDB + AgentCore Memory for cloud scale.
+5. **Serving Layer (Alexa+ MCP Server & Ext-Apps UI):** Streamable-HTTP **Model Context Protocol (MCP)** server exposing tools to Alexa+, coupled with an interactive touch UI for Echo Show via **ext-apps iframe SDK**.
 
 ---
 
-## 💻 Tech Stack & Integrazioni Ecosistema
+## 💻 Tech Stack & Ecosystem Integrations
 
-- **Input Wearable:** Bee Wearable AI via bridge [`beemcp`](https://github.com/OkGoDoIt/beemcp) / Bee CLI transcript stream.
+- **Wearable Ingestion:** Bee Wearable AI via [`resources/bee-cli/`](resources/bee-cli/) SSE stream (`new-utterance`) and `beemcp` bridge.
 - **LLM Provider:** **AWS Bedrock**
-  - *Claude 3.5 Haiku / Nova Micro:* Scremaggio e Routing a latenza minima e costo irrisorio.
-  - *Claude 3.5 Sonnet / Nova Pro:* Estrazione avanzata, sintesi dossier e report di ricerca.
-- **Agent Harness:** **AgentCore** / LangGraph per la gestione asincrona del grafo di stati e l'invocazione di tool.
-- **Tool di Ricerca:** Bedrock Web Search / Tavily API per l'arricchimento autonomo dei topic.
-- **Storage:** SQLite strutturato con tabelle dedicate e supporto full-text.
-- **Serving & Voice UI:** Alexa+ (Echo Show) tramite Model Context Protocol (Streamable HTTP / Cloudflare Tunnel / AWS Lambda).
-- **Frontend UI:** Ext-Apps Iframe SDK per schermi multimodali Echo Show.
+  - *Claude 3.5 Haiku / Nova Micro:* Low-latency screening and deterministic extraction ($<350\text{ ms}$).
+  - *Claude 3.5 Sonnet / Nova Pro:* High-reasoning topic research, technical dossier synthesis, and markdown formatting.
+- **Agent Harness:** **AgentCore** / LangGraph for state management, conditional edges, and serverless runtime microVM hosting.
+- **Search Tooling:** DuckDuckGo Search / Tavily API for background technical research.
+- **Storage:** SQLite with Full-Text Search (FTS5) for local dev; Amazon DynamoDB, S3, and Bedrock AgentCore Memory for cloud production.
+- **Serving & Voice UI:** Alexa+ (Echo Show) via Model Context Protocol (Streamable HTTP JSON-RPC 2.0).
+- **Frontend UI:** Ext-Apps Iframe SDK for multimodal Echo Show touch displays.
 
 ---
 
-## 🏆 Allineamento Criteri Hackathon & Premi Target
+## 🏆 Hackathon Alignment & Target Awards
 
-| Criterio / Track | Come EXAMEN Massimizza il Punteggio |
+| Track / Challenge | How EXAMEN Maximizes Score |
 | :--- | :--- |
-| **Track 1: Bee Wearable AI ($12.000)** | Supera il banale "data logging" integrando estrazione semantica in tempo reale, arricchimento autonomo con web search e self-improvement cognitivo. |
-| **Mini-Challenge: AWS Builder ($5.000 + $5.000 crediti)** | Utilizzo nativo di AWS Bedrock con multi-model routing (Haiku per gatekeeper, Sonnet per sintesi) e orchestrazione agentica tramite AgentCore. |
-| **Cross-Device Orchestration** | Esperienza simbiotica continua: **Bee** cattura il contesto nel mondo fisico in mobilità, **Alexa+ su Echo Show** lo sintetizza a casa o in ufficio sia a voce che visivamente. |
+| **Track 1: Bee Wearable AI ($12,000)** | Goes beyond passive audio logging by providing real-time ambient understanding, proactive web enrichment, and cross-device intelligence. |
+| **Mini-Challenge: AWS Builder ($5,000 + $5,000 credits)** | Native deep integration with AWS Bedrock multi-model tiering (Haiku for screening, Sonnet for synthesis) and orchestration on Bedrock AgentCore. |
+| **Cross-Device Orchestration** | Frictionless synergy: **Bee** captures context in the physical world on the go; **Alexa+ on Echo Show** synthesizes and surfaces it at home or office. |
 
 ---
 
-## 📂 Struttura della Documentazione di Progetto
+## 📂 Project Documentation Structure
 
-I dettagli operativi, tecnici e strategici sono organizzati nei seguenti documenti dedicati:
+Detailed technical, architectural, and operational documentation is organized across the following dedicated guides:
 
-* 📄 [01_architettura_flusso.md](docs/01_architettura_flusso.md): Dettaglio tecnico dei 5 stadi (Scremaggio, Routing, Estrazione/Enrichment, Storage, Serving).
-* 📄 [02_pipeline_bedrock_agentcore.md](docs/02_pipeline_bedrock_agentcore.md): Implementazione del grafo con AWS Bedrock, AgentCore/LangGraph, schemi Pydantic, prompt e tool di ricerca.
-* 📄 [03_mcp_alexa_serving.md](docs/03_mcp_alexa_serving.md): Specifiche del server MCP per Alexa+, definizione dei tool, schemi JSON-RPC e wireframe UI per Echo Show (ext-apps).
-* 📄 [04_hackathon_strategia_demo.md](docs/04_hackathon_strategia_demo.md): Script e storyboard del video demo da 3 minuti, allineamento ai criteri di valutazione e piano di sviluppo.
-* 📄 [05_stack_tecnologico_risorse.md](docs/05_stack_tecnologico_risorse.md): Stack tecnologico completo, framework, API, integrazione del sottomodulo AWS AgentCore e LangGraph.
-* 📄 [06_architettura_deployment_cloud_aws.md](docs/06_architettura_deployment_cloud_aws.md): Architettura di deployment cloud su AWS (AgentCore Runtime, AgentCore Memory, S3, DynamoDB, Alexa+ MCP e CloudFront).
-* 📄 [07_struttura_repository_e_moduli.md](docs/07_struttura_repository_e_moduli.md): Struttura dettagliata del repository, mappa dei moduli per target di deploy e guida allo sviluppo.
+* 📄 [01_architecture_flow.md](docs/01_architecture_flow.md): In-depth 5-stage architecture, end-to-end dataflow, and Mermaid diagrams.
+* 📄 [02_bedrock_agentcore_pipeline.md](docs/02_bedrock_agentcore_pipeline.md): LangGraph state graph implementation, Pydantic V2 schemas, Bedrock prompts, and search tools.
+* 📄 [03_alexa_mcp_serving.md](docs/03_alexa_mcp_serving.md): MCP Server specifications for Alexa+, JSON-RPC tool schemas, and Echo Show ext-apps wireframes.
+* 📄 [04_hackathon_strategy_demo.md](docs/04_hackathon_strategy_demo.md): 3-minute video demo script, judging criteria alignment, and 4-sprint roadmap.
+* 📄 [05_tech_stack_resources.md](docs/05_tech_stack_resources.md): Comprehensive tech stack, frameworks, APIs, and submodule references (`agentcore-samples`, `bee-cli`).
+* 📄 [06_aws_cloud_deployment_architecture.md](docs/06_aws_cloud_deployment_architecture.md): AWS Cloud deployment architecture (AgentCore Runtime, AgentCore Memory, S3, DynamoDB, Alexa+ MCP, CloudFront).
+* 📄 [07_repository_structure_modules.md](docs/07_repository_structure_modules.md): Detailed repository layout, modular monorepo mapping by deployment target, and developer quickstart.
