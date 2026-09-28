@@ -1,0 +1,21 @@
+[project]
+name = "examen"
+version = "0.1.0"
+description = "Ambient Knowledge & Action Engine for Bee Wearable AI, AWS Bedrock AgentCore, and Alexa+"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.7.0",
+    "pydantic-settings>=2.2.0",
+    "python-dotenv>=1.0.0",
+    "boto3>=1.34.0",
+    "langchain-aws>=0.2.0",
+    "langgraph>=0.2.0",
+    "mcp>=1.10.0,<2.0.0",
+    "duckduckgo-search>=6.0.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+asyncio_mode = "auto"

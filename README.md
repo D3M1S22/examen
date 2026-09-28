@@ -113,3 +113,4 @@ I dettagli operativi, tecnici e strategici sono organizzati nei seguenti documen
 * 📄 [04_hackathon_strategia_demo.md](docs/04_hackathon_strategia_demo.md): Script e storyboard del video demo da 3 minuti, allineamento ai criteri di valutazione e piano di sviluppo.
 * 📄 [05_stack_tecnologico_risorse.md](docs/05_stack_tecnologico_risorse.md): Stack tecnologico completo, framework, API, integrazione del sottomodulo AWS AgentCore e LangGraph.
 * 📄 [06_architettura_deployment_cloud_aws.md](docs/06_architettura_deployment_cloud_aws.md): Architettura di deployment cloud su AWS (AgentCore Runtime, AgentCore Memory, S3, DynamoDB, Alexa+ MCP e CloudFront).
+* 📄 [07_struttura_repository_e_moduli.md](docs/07_struttura_repository_e_moduli.md): Struttura dettagliata del repository, mappa dei moduli per target di deploy e guida allo sviluppo.
