@@ -112,3 +112,4 @@ I dettagli operativi, tecnici e strategici sono organizzati nei seguenti documen
 * 📄 [03_mcp_alexa_serving.md](docs/03_mcp_alexa_serving.md): Specifiche del server MCP per Alexa+, definizione dei tool, schemi JSON-RPC e wireframe UI per Echo Show (ext-apps).
 * 📄 [04_hackathon_strategia_demo.md](docs/04_hackathon_strategia_demo.md): Script e storyboard del video demo da 3 minuti, allineamento ai criteri di valutazione e piano di sviluppo.
 * 📄 [05_stack_tecnologico_risorse.md](docs/05_stack_tecnologico_risorse.md): Stack tecnologico completo, framework, API, integrazione del sottomodulo AWS AgentCore e LangGraph.
+* 📄 [06_architettura_deployment_cloud_aws.md](docs/06_architettura_deployment_cloud_aws.md): Architettura di deployment cloud su AWS (AgentCore Runtime, AgentCore Memory, S3, DynamoDB, Alexa+ MCP e CloudFront).
