@@ -107,7 +107,8 @@ La maggior parte degli assistenti vocali e delle app per wearable soffre di due 
 
 I dettagli operativi, tecnici e strategici sono organizzati nei seguenti documenti dedicati:
 
-* 📄 [01_architettura_flusso.md](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/docs/01_architettura_flusso.md): Dettaglio tecnico dei 5 stadi (Scremaggio, Routing, Estrazione/Enrichment, Storage, Serving).
-* 📄 [02_pipeline_bedrock_agentcore.md](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/docs/02_pipeline_bedrock_agentcore.md): Implementazione del grafo con AWS Bedrock, AgentCore/LangGraph, schemi Pydantic, prompt e tool di ricerca.
-* 📄 [03_mcp_alexa_serving.md](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/docs/03_mcp_alexa_serving.md): Specifiche del server MCP per Alexa+, definizione dei tool, schemi JSON-RPC e wireframe UI per Echo Show (ext-apps).
-* 📄 [04_hackathon_strategia_demo.md](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/docs/04_hackathon_strategia_demo.md): Script e storyboard del video demo da 3 minuti, allineamento ai criteri di valutazione e piano di sviluppo.
+* 📄 [01_architettura_flusso.md](docs/01_architettura_flusso.md): Dettaglio tecnico dei 5 stadi (Scremaggio, Routing, Estrazione/Enrichment, Storage, Serving).
+* 📄 [02_pipeline_bedrock_agentcore.md](docs/02_pipeline_bedrock_agentcore.md): Implementazione del grafo con AWS Bedrock, AgentCore/LangGraph, schemi Pydantic, prompt e tool di ricerca.
+* 📄 [03_mcp_alexa_serving.md](docs/03_mcp_alexa_serving.md): Specifiche del server MCP per Alexa+, definizione dei tool, schemi JSON-RPC e wireframe UI per Echo Show (ext-apps).
+* 📄 [04_hackathon_strategia_demo.md](docs/04_hackathon_strategia_demo.md): Script e storyboard del video demo da 3 minuti, allineamento ai criteri di valutazione e piano di sviluppo.
+* 📄 [05_stack_tecnologico_risorse.md](docs/05_stack_tecnologico_risorse.md): Stack tecnologico completo, framework, API, integrazione del sottomodulo AWS AgentCore e LangGraph.
