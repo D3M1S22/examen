@@ -71,6 +71,43 @@ class VerifiedAction(BaseModel):
         default=False,
         description="True if the action was subsequently canceled or revoked."
     )
+    matched_task_id: Optional[str] = Field(
+        default=None,
+        description="Linked PlannedTask id if this action fulfilled a scheduled task."
+    )
+
+
+class PlannedTask(BaseModel):
+    id: Optional[str] = Field(default=None, description="Unique task identifier.")
+    title: str = Field(description="Task description (e.g. 'unplug clothes iron', 'take blood pressure medication').")
+    domain: Literal["safety", "routine", "work_task"] = Field(
+        default="routine",
+        description="Domain of action (safety, routine, work_task)."
+    )
+    scheduled_time: Optional[str] = Field(
+        default=None,
+        description="Target scheduled time (HH:MM or ISO timestamp)."
+    )
+    recurrence: Literal["none", "daily", "weekdays", "weekly"] = Field(
+        default="none",
+        description="Recurrence schedule pattern."
+    )
+    status: Literal["pending", "completed", "overdue", "skipped"] = Field(
+        default="pending",
+        description="Current task status."
+    )
+    completed_at: Optional[str] = Field(
+        default=None,
+        description="ISO timestamp when the task was completed."
+    )
+    verified_action_id: Optional[str] = Field(
+        default=None,
+        description="Foreign key linking to the VerifiedAction that fulfilled this task."
+    )
+    created_at: str = Field(
+        default_factory=lambda: datetime.now().isoformat(),
+        description="Creation timestamp."
+    )
 
 
 # ============================================================================

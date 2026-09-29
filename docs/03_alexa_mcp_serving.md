@@ -18,6 +18,7 @@ Alexa+ interfaces with EXAMEN using the open standard **Model Context Protocol (
  ┌────────────────────────────────────────────────────────┐
  │           EXAMEN MCP Server (Python FastMCP)           │
  ├────────────────────────────────────────────────────────┤
+ │ 🔧 Tool: create_planned_task(title, domain, ...)       │
  │ 🔧 Tool: verify_action_status(action_query)            │
  │ 🔧 Tool: get_daily_actions_recap(date, domain)         │
  │ 🔧 Tool: query_social_contact(name_or_query)           │
@@ -32,7 +33,31 @@ Alexa+ interfaces with EXAMEN using the open standard **Model Context Protocol (
 
 ## 🛠️ Exposed MCP Tool Specifications
 
-### 1. `verify_action_status` (Peace of Mind)
+### 1. `create_planned_task` (Routine & Task Setup)
+Registers a scheduled routine or domestic safety task to be tracked and automatically resolved via ambient listening.
+* **Tool Description:** *"Schedule a domestic safety check, daily routine, or planned work task with optional recurrence or scheduled time."*
+* **Input Parameters:**
+  - `title` *(string, required)*: Task description (e.g. `"unplug clothes iron"`, `"take blood pressure medication"`, `"backup production database"`).
+  - `domain` *(string, optional, default: `"routine"`)*: Category (`"safety"`, `"routine"`, `"work_task"`).
+  - `scheduled_time` *(string, optional)*: Target scheduled time (e.g. `"08:30"`, `"21:00"`).
+  - `recurrence` *(string, optional, default: `"none"`)*: Recurrence frequency (`"none"`, `"daily"`, `"weekdays"`, `"weekly"`).
+* **Structured Response:**
+  ```json
+  {
+    "status": "scheduled",
+    "task_id": "pt-8a12b3c4",
+    "title": "unplug clothes iron",
+    "domain": "safety",
+    "scheduled_time": "08:30",
+    "recurrence": "daily",
+    "tracking_status": "watching_ambient_stream"
+  }
+  ```
+* **Alexa Spoken Response:** *"I have scheduled your daily safety check to unplug the clothes iron at 08:30. I will monitor your ambient speech and check it off automatically once you do it."*
+
+---
+
+### 2. `verify_action_status` (Peace of Mind)
 Instantly verifies whether a domestic safety action or routine task has been executed.
 * **Tool Description:** *"Check the completion status and timestamp of a domestic safety action (e.g., iron, stove, front door, medication) or work task."*
 * **Input Parameters:**
@@ -47,6 +72,7 @@ Instantly verifies whether a domestic safety action or routine task has been exe
     "raw_statement": "I'm unplugging the clothes iron before leaving",
     "confidence": 0.96,
     "elapsed_time_human": "3 hours and 12 minutes ago",
+    "matched_task_id": "pt-8a12b3c4",
     "ui_card_type": "ACTION_VERIFIED_BADGE"
   }
   ```
@@ -54,25 +80,54 @@ Instantly verifies whether a domestic safety action or routine task has been exe
 
 ---
 
-### 2. `get_daily_actions_recap` (Daily Log & Standup)
-Returns an ordered chronological timeline of verified actions and work tasks completed throughout the day.
-* **Tool Description:** *"Retrieve the chronological timeline of routine actions completed and work tasks performed."*
+### 3. `get_daily_actions_recap` (Daily Checklist & Log)
+Returns a dual report of scheduled routines (completed vs pending vs overdue) and spontaneous actions discovered throughout the day.
+* **Tool Description:** *"Retrieve the daily checklist of planned routines and chronological timeline of spontaneous ambient actions."*
 * **Input Parameters:**
-  - `domain` *(string, optional)*: Filter category (`"all"`, `"safety"`, `"work_task"`).
+  - `domain` *(string, optional)*: Filter category (`"all"`, `"safety"`, `"routine"`, `"work_task"`).
   - `limit` *(integer, optional, default: 10)*.
 * **Structured Response:**
   ```json
   {
     "date": "2026-09-28",
-    "total_actions": 4,
-    "items": [
-      {"time": "08:14", "action": "Unplugged clothes iron", "type": "safety"},
-      {"time": "08:16", "action": "Locked front door", "type": "safety"},
+    "summary": {
+      "planned_completed": 2,
+      "planned_pending": 1,
+      "spontaneous_actions": 2
+    },
+    "planned_routines": [
+      {
+        "id": "pt-8a12b3c4",
+        "title": "Unplug clothes iron",
+        "scheduled_time": "08:30",
+        "status": "completed",
+        "completed_at": "08:14",
+        "verified_by_audio": true
+      },
+      {
+        "id": "pt-9c44d1e2",
+        "title": "Lock front door",
+        "scheduled_time": "08:30",
+        "status": "completed",
+        "completed_at": "08:16",
+        "verified_by_audio": true
+      },
+      {
+        "id": "pt-3f88a9b0",
+        "title": "Evening blood pressure medication",
+        "scheduled_time": "21:00",
+        "status": "pending",
+        "completed_at": null,
+        "verified_by_audio": false
+      }
+    ],
+    "spontaneous_actions": [
       {"time": "11:30", "action": "Merged PR #42 on backend repo", "type": "work_task"},
       {"time": "14:15", "action": "Sent proposal email to client", "type": "work_task"}
     ]
   }
   ```
+* **Alexa Spoken Response:** *"Today you completed 2 scheduled routines: unplugging the iron at 08:14 and locking the front door at 08:16. You still have 1 pending routine: evening medication at 21:00. You also recorded 2 work tasks."*
 
 ---
 
@@ -142,15 +197,19 @@ Alexa+ supports the **`ext-apps`** extension, enabling the MCP server to project
 ┌────────────────────────────────────────────────────────────────────────┐
 │ 🐝 EXAMEN Ambient OS                           📅 Monday, Sep 28       │
 ├───────────────────┬────────────────────────────────────────────────────┤
-│ 🔒 Peace of Mind  │ 🟢 VERIFIED: Clothes Iron                          │
-│ 🧠 Social Rolodex │ Time: 08:14:22 CEST (3 hours ago)                  │
-│ 📚 Deep Briefings │ Verified statement:                                │
-│                   │ "I'm unplugging the clothes iron before leaving"   │
-│                   │ Confidence: 96%  |  Sensor: Bee Wearable Lapel     │
+│ 🔒 Peace of Mind  │ 🟢 LATEST VERIFIED: Clothes Iron                   │
+│ 📋 Daily Routines │ Time: 08:14:22 CEST (3 hours ago)                  │
+│ 🧠 Social Rolodex │ Statement: "I'm unplugging the iron before leaving"│
+│ 📚 Deep Briefings │ Auto-Resolved Task: [pt-8a12b3c4] Unplug iron      │
 ├───────────────────┴────────────────────────────────────────────────────┤
-│ 📋 RECENT VERIFIED ACTIONS:                                            │
-│ [✓] 08:16 - Front door locked                                          │
-│ [✓] 11:30 - Deployed staging build (PR #42)                             │
+│ 📋 SCHEDULED ROUTINES & DOMESTIC SAFETY CHECKLIST:                     │
+│ [✓] 08:14 - Unplug clothes iron (Scheduled: 08:30) [Verified by audio] │
+│ [✓] 08:16 - Lock front door (Scheduled: 08:30)     [Verified by audio] │
+│ [⏳] 21:00 - Evening blood pressure medication     [PENDING]           │
+├────────────────────────────────────────────────────────────────────────┤
+│ ⚡ SPONTANEOUS AMBIENT ACTIONS DISCOVERED:                              │
+│ [✓] 11:30 - Deployed staging build (PR #42)                            │
+│ [✓] 14:15 - Sent proposal email to client                              │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 

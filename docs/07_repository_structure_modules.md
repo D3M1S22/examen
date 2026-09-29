@@ -53,7 +53,6 @@ amazon_challenge/
 │   │   ├── graph.py                      # LangGraph StateGraph & conditional routing
 │   │   ├── nodes/                        # Specialized agent graph nodes
 │   │   │   ├── __init__.py
-│   │   │   ├── gatekeeper.py             # Stage 1: Screening (Claude 3.5 Haiku / Nova Micro)
 │   │   │   ├── social.py                 # Stage 3A: Social Recall Extractor
 │   │   │   ├── action_state.py           # Stage 3B: Action-State Verifier (Peace of Mind)
 │   │   │   └── topic_research.py         # Stage 3C: Deep Topic & Briefing Synthesizer
@@ -64,14 +63,15 @@ amazon_challenge/
 │   ├── serving/                          # 🎙️ [TARGET: Alexa+ Serving / MCP Server]
 │   │   ├── __init__.py
 │   │   ├── mcp_server.py                 # FastMCP server (port 8000 /mcp, streamable-http)
-│   │   └── tools/                        # 4 MCP tools exposed to Alexa+
+│   │   └── tools/                        # Exposed MCP tools for Alexa+
 │   │       ├── __init__.py
-│   │       ├── action_tools.py           # verify_action_status, get_daily_actions_recap
+│   │       ├── action_tools.py           # create_planned_task, verify_action_status, get_daily_actions_recap
 │   │       ├── social_tools.py           # query_social_contact
 │   │       └── topic_tools.py            # get_topic_briefing
 │   │
-│   ├── ingestion/                        # 🐝 [TARGET: Edge / Companion Bridge]
+│   ├── ingestion/                        # 🐝 [TARGET: Edge / Companion Ingestion Layer]
 │   │   ├── __init__.py
+│   │   ├── gatekeeper.py                 # Stage 1: Screening Gatekeeper (Fast Haiku + dynamic tasks injection)
 │   │   ├── bee_stream_bridge.py          # Live SSE client connected to bee-cli ("new-utterance")
 │   │   └── mock_feeder.py                # Offline audio stream simulator for tests & video
 │   │

@@ -2,7 +2,13 @@
 
 import pytest
 from src.core.schemas import ChunkClassification
-from src.ingestion.gatekeeper import classify_chunk, aclassify_chunk, is_noop
+from src.ingestion.gatekeeper import (
+    classify_chunk,
+    aclassify_chunk,
+    is_noop,
+    build_gatekeeper_prompt,
+    GATEKEEPER_SYSTEM_PROMPT,
+)
 
 
 def test_gatekeeper_empty_transcript():
@@ -104,3 +110,39 @@ async def test_gatekeeper_async():
     assert isinstance(res, ChunkClassification)
     assert "action" in res.categories
     assert is_noop(res) is False
+
+
+def test_gatekeeper_prompt_builder():
+    """System prompt builder should cleanly inject active pending tasks."""
+    default_prompt = build_gatekeeper_prompt()
+    assert default_prompt == GATEKEEPER_SYSTEM_PROMPT
+    assert "ACTIVE PENDING TASKS" not in default_prompt
+
+    empty_prompt = build_gatekeeper_prompt([])
+    assert empty_prompt == GATEKEEPER_SYSTEM_PROMPT
+
+    tasks = ["unplug clothes iron", "evening blood pressure medication"]
+    injected_prompt = build_gatekeeper_prompt(tasks)
+    assert "ACTIVE PENDING TASKS / ROUTINES TO WATCH FOR:" in injected_prompt
+    assert "- unplug clothes iron" in injected_prompt
+    assert "- evening blood pressure medication" in injected_prompt
+    assert "PRIORITY INSTRUCTION FOR ACTIVE TASKS:" in injected_prompt
+
+
+def test_gatekeeper_active_tasks_detection():
+    """Pending tasks passed to Gatekeeper should be detected even if phrased conversationally."""
+    active_tasks = ["evening medication", "front door lock"]
+
+    # Utterance referencing the active task with completion phrase
+    sample = "The evening medication is done and all taken care of."
+    res = classify_chunk(sample, active_tasks=active_tasks, force_mock=True)
+    assert "action" in res.categories
+    assert is_noop(res) is False
+    assert res.confidence >= 0.80
+
+    # Utterance referencing another active task
+    sample_door = "The front door is locked and checked."
+    res_door = classify_chunk(sample_door, active_tasks=active_tasks, force_mock=True)
+    assert "action" in res_door.categories
+    assert is_noop(res_door) is False
+

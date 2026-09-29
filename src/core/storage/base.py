@@ -2,13 +2,44 @@
 
 from abc import ABC, abstractmethod
 from typing import List, Optional
-from src.core.schemas import VerifiedAction, SocialEntity, BriefingReport
+from src.core.schemas import VerifiedAction, SocialEntity, BriefingReport, PlannedTask
 
 
 class AbstractContextStore(ABC):
     """Abstract Base Class for context and memory persistence."""
 
+    # --- Planned Tasks ---
+    @abstractmethod
+    def save_planned_task(self, task: PlannedTask) -> str:
+        """Create or update a planned routine task. Returns record ID."""
+        pass
+
+    @abstractmethod
+    def get_planned_task(self, task_id: str) -> Optional[PlannedTask]:
+        """Retrieve a planned task by ID."""
+        pass
+
+    @abstractmethod
+    def list_planned_tasks(
+        self, status: Optional[str] = None, domain: Optional[str] = None
+    ) -> List[PlannedTask]:
+        """List planned tasks, optionally filtered by status or domain."""
+        pass
+
+    @abstractmethod
+    def complete_planned_task(
+        self, task_id: str, verified_action_id: str, completed_at: Optional[str] = None
+    ) -> bool:
+        """Mark a planned task as completed and link the verifying action."""
+        pass
+
+    @abstractmethod
+    def match_and_resolve_task(self, action: VerifiedAction) -> Optional[PlannedTask]:
+        """Match an incoming verified action against pending tasks and resolve the match."""
+        pass
+
     # --- Action State ---
+
     @abstractmethod
     def save_action(self, action: VerifiedAction) -> str:
         """Save or update a verified action. Returns record ID."""

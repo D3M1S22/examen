@@ -3,7 +3,7 @@
 import os
 import tempfile
 import pytest
-from src.core.schemas import VerifiedAction, SocialEntity, BriefingReport
+from src.core.schemas import VerifiedAction, SocialEntity, BriefingReport, PlannedTask
 from src.core.storage.sqlite_store import SQLiteContextStore
 
 
@@ -82,3 +82,48 @@ def test_topic_briefing_lifecycle(temp_store):
     assert report is not None
     assert report.topic_title == "AWS AgentCore Architecture"
     assert len(report.executive_summary) == 2
+
+
+def test_planned_task_lifecycle(temp_store):
+    # 1. Create a planned task
+    task = PlannedTask(
+        title="unplug clothes iron",
+        domain="safety",
+        recurrence="daily",
+        scheduled_time="08:30"
+    )
+    task_id = temp_store.save_planned_task(task)
+    assert task_id is not None
+
+    # Verify task is pending
+    pending = temp_store.list_planned_tasks(status="pending")
+    assert len(pending) == 1
+    assert pending[0].id == task_id
+    assert pending[0].title == "unplug clothes iron"
+    assert pending[0].status == "pending"
+
+    # 2. Save a matching VerifiedAction
+    action = VerifiedAction(
+        action_type="iron_unplugged",
+        domain="safety",
+        raw_statement="I just unplugged the clothes iron before leaving the house",
+        confidence=0.98,
+        timestamp="2026-09-29T08:25:00+02:00"
+    )
+    action_id = temp_store.save_action(action)
+    assert action_id is not None
+    assert action.matched_task_id == task_id
+
+    # 3. Verify task auto-resolved to completed
+    updated_task = temp_store.get_planned_task(task_id)
+    assert updated_task is not None
+    assert updated_task.status == "completed"
+    assert updated_task.verified_action_id == action_id
+    assert updated_task.completed_at == "2026-09-29T08:25:00+02:00"
+
+    # Pending list should now be empty, completed list has 1
+    assert len(temp_store.list_planned_tasks(status="pending")) == 0
+    completed = temp_store.list_planned_tasks(status="completed")
+    assert len(completed) == 1
+    assert completed[0].id == task_id
+

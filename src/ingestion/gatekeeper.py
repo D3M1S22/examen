@@ -2,7 +2,7 @@
 
 import logging
 import re
-from typing import List
+from typing import List, Optional
 
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_aws import ChatBedrockConverse
@@ -38,6 +38,27 @@ STRICT RULES:
 """
 
 
+def build_gatekeeper_prompt(active_tasks: Optional[List[str]] = None) -> str:
+    """Builds the Gatekeeper system prompt, dynamically appending active pending tasks if any."""
+    if not active_tasks:
+        return GATEKEEPER_SYSTEM_PROMPT
+
+    task_bullets = "\n".join(f"- {task.strip()}" for task in active_tasks if task and task.strip())
+    if not task_bullets:
+        return GATEKEEPER_SYSTEM_PROMPT
+
+    extra_section = f"""
+
+ACTIVE PENDING TASKS / ROUTINES TO WATCH FOR:
+The user has scheduled or is expecting completion of the following specific tasks:
+{task_bullets}
+
+PRIORITY INSTRUCTION FOR ACTIVE TASKS:
+If the transcript indicates that the speaker has completed, verified, or executed ANY of the active pending tasks above, IMMEDIATELY classify as "action" with high confidence (>= 0.90), even if phrased informally or conversationally.
+"""
+    return GATEKEEPER_SYSTEM_PROMPT + extra_section
+
+
 def _get_bedrock_classifier():
     """Initializes Bedrock Converse LLM with structured output."""
     llm = ChatBedrockConverse(
@@ -51,7 +72,9 @@ def _get_bedrock_classifier():
     return llm.with_structured_output(ChunkClassification)
 
 
-def _heuristic_classify(transcript: str) -> ChunkClassification:
+def _heuristic_classify(
+    transcript: str, active_tasks: Optional[List[str]] = None
+) -> ChunkClassification:
     """Deterministic English-only heuristic classifier for offline testing, CI/CD, or fallback."""
     text = transcript.lower().strip()
     if not text:
@@ -73,11 +96,27 @@ def _heuristic_classify(transcript: str) -> ChunkClassification:
 
     # 1. Action completed check: focus strictly on English first-person completed action verbs
     action_patterns = [
-        r"\b(i|we)\s+(just\s+)?(turned off|switched off|unplugged|locked|shut|closed|verified|checked|completed|finished|merged|deployed|sent|confirmed)\b",
-        r"\bi('ve| have)\s+(just\s+)?(turned off|switched off|unplugged|locked|shut|closed|verified|checked|completed|finished|merged|deployed|sent|confirmed)\b"
+        r"\b(i|we)\s+(just\s+)?(turned off|switched off|unplugged|locked|shut|closed|verified|checked|completed|finished|merged|deployed|sent|confirmed|took|taken)\b",
+        r"\bi('ve| have)\s+(just\s+)?(turned off|switched off|unplugged|locked|shut|closed|verified|checked|completed|finished|merged|deployed|sent|confirmed|took|taken)\b"
     ]
     if any(re.search(pat, text) for pat in action_patterns):
         categories.append("action")
+
+    # 1b. Active pending tasks check: if active tasks are provided, check if completion signal + task keywords match
+    if "action" not in categories and active_tasks:
+        completion_signals = [
+            r"\b(done|finished|completed|checked|verified|unplugged|turned off|locked|closed|took|taken|switched off|shut)\b",
+            r"\b(i did|we did|it's done|all done|taken care of|is done|are done)\b"
+        ]
+        has_completion_signal = any(re.search(pat, text) for pat in completion_signals)
+
+        stop_words = {"the", "and", "for", "with", "this", "that", "from", "into", "over", "take", "make", "turn", "out", "my", "your"}
+        for task in active_tasks:
+            task_words = [w for w in re.findall(r"\b[a-zA-Z]{3,}\b", task.lower()) if w not in stop_words]
+            if task_words and any(w in text for w in task_words):
+                if has_completion_signal:
+                    categories.append("action")
+                    break
 
     # 2. Social interaction check: strictly explicit introductions, professional roles, or follow-up commitments
     social_patterns = [
@@ -131,11 +170,16 @@ def _heuristic_classify(transcript: str) -> ChunkClassification:
     )
 
 
-def classify_chunk(transcript: str, force_mock: bool = False) -> ChunkClassification:
+def classify_chunk(
+    transcript: str,
+    active_tasks: Optional[List[str]] = None,
+    force_mock: bool = False
+) -> ChunkClassification:
     """Classifies an ambient speech transcript chunk synchronously.
 
     Args:
         transcript: The aggregated text from the audio sliding window buffer.
+        active_tasks: Optional list of pending planned task titles to watch for.
         force_mock: If True, forces heuristic evaluation without calling Bedrock.
 
     Returns:
@@ -148,27 +192,33 @@ def classify_chunk(transcript: str, force_mock: bool = False) -> ChunkClassifica
     # Offline or mock mode
     if force_mock or settings.mock_ai or not settings.has_aws_credentials:
         logger.debug("Gatekeeper using heuristic/mock classifier")
-        return _heuristic_classify(clean_text)
+        return _heuristic_classify(clean_text, active_tasks=active_tasks)
 
     # Real Bedrock call
     try:
         classifier = _get_bedrock_classifier()
+        system_prompt = build_gatekeeper_prompt(active_tasks)
         messages = [
-            SystemMessage(content=GATEKEEPER_SYSTEM_PROMPT),
+            SystemMessage(content=system_prompt),
             HumanMessage(content=f'Transcript: "{clean_text}"')
         ]
         result: ChunkClassification = classifier.invoke(messages)
         return result
     except Exception as e:
         logger.warning(f"Bedrock Gatekeeper invocation failed ({e}), falling back to heuristic: {e}")
-        return _heuristic_classify(clean_text)
+        return _heuristic_classify(clean_text, active_tasks=active_tasks)
 
 
-async def aclassify_chunk(transcript: str, force_mock: bool = False) -> ChunkClassification:
+async def aclassify_chunk(
+    transcript: str,
+    active_tasks: Optional[List[str]] = None,
+    force_mock: bool = False
+) -> ChunkClassification:
     """Classifies an ambient speech transcript chunk asynchronously.
 
     Args:
         transcript: The aggregated text from the audio sliding window buffer.
+        active_tasks: Optional list of pending planned task titles to watch for.
         force_mock: If True, forces heuristic evaluation without calling Bedrock.
 
     Returns:
@@ -179,19 +229,20 @@ async def aclassify_chunk(transcript: str, force_mock: bool = False) -> ChunkCla
         return ChunkClassification(categories=["noop"], confidence=1.0, summary_hint="Empty audio chunk")
 
     if force_mock or settings.mock_ai or not settings.has_aws_credentials:
-        return _heuristic_classify(clean_text)
+        return _heuristic_classify(clean_text, active_tasks=active_tasks)
 
     try:
         classifier = _get_bedrock_classifier()
+        system_prompt = build_gatekeeper_prompt(active_tasks)
         messages = [
-            SystemMessage(content=GATEKEEPER_SYSTEM_PROMPT),
+            SystemMessage(content=system_prompt),
             HumanMessage(content=f'Transcript: "{clean_text}"')
         ]
         result: ChunkClassification = await classifier.ainvoke(messages)
         return result
     except Exception as e:
         logger.warning(f"Async Bedrock Gatekeeper invocation failed ({e}), falling back to heuristic")
-        return _heuristic_classify(clean_text)
+        return _heuristic_classify(clean_text, active_tasks=active_tasks)
 
 
 def is_noop(classification: ChunkClassification) -> bool:

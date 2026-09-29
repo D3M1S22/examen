@@ -1,11 +1,11 @@
-"""SQLite implementation of AbstractContextStore with Full-Text Search (FTS5)."""
-
+from datetime import datetime
 import json
+import re
 import sqlite3
 import uuid
 from typing import List, Optional
 
-from src.core.schemas import BriefingReport, SocialEntity, VerifiedAction
+from src.core.schemas import BriefingReport, SocialEntity, VerifiedAction, PlannedTask
 from src.core.storage.base import AbstractContextStore
 
 
@@ -25,6 +25,23 @@ class SQLiteContextStore(AbstractContextStore):
         with self._get_connection() as conn:
             cursor = conn.cursor()
 
+            # 0. Planned Tasks Table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS planned_tasks (
+                    id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    domain TEXT NOT NULL,
+                    scheduled_time TEXT,
+                    recurrence TEXT NOT NULL DEFAULT 'none',
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    completed_at TEXT,
+                    verified_action_id TEXT,
+                    created_at TEXT NOT NULL
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_planned_status ON planned_tasks (status);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_planned_time ON planned_tasks (scheduled_time);")
+
             # 1. Verified Actions Table
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS verified_actions (
@@ -34,7 +51,8 @@ class SQLiteContextStore(AbstractContextStore):
                     raw_statement TEXT NOT NULL,
                     confidence REAL NOT NULL,
                     timestamp TEXT NOT NULL,
-                    is_revoked INTEGER DEFAULT 0
+                    is_revoked INTEGER DEFAULT 0,
+                    matched_task_id TEXT
                 )
             """)
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_actions_type ON verified_actions (action_type);")
@@ -94,18 +112,138 @@ class SQLiteContextStore(AbstractContextStore):
             conn.commit()
 
     # =========================================================================
+    # Planned Tasks
+    # =========================================================================
+    def save_planned_task(self, task: PlannedTask) -> str:
+        rec_id = task.id or str(uuid.uuid4())
+        task.id = rec_id
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT OR REPLACE INTO planned_tasks
+                (id, title, domain, scheduled_time, recurrence, status, completed_at, verified_action_id, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                rec_id,
+                task.title.strip(),
+                task.domain,
+                task.scheduled_time,
+                task.recurrence,
+                task.status,
+                task.completed_at,
+                task.verified_action_id,
+                task.created_at,
+            ))
+            conn.commit()
+        return rec_id
+
+    def get_planned_task(self, task_id: str) -> Optional[PlannedTask]:
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            row = cursor.execute("SELECT * FROM planned_tasks WHERE id = ?", (task_id,)).fetchone()
+            if row:
+                return PlannedTask(
+                    id=row["id"],
+                    title=row["title"],
+                    domain=row["domain"],
+                    scheduled_time=row["scheduled_time"],
+                    recurrence=row["recurrence"],
+                    status=row["status"],
+                    completed_at=row["completed_at"],
+                    verified_action_id=row["verified_action_id"],
+                    created_at=row["created_at"],
+                )
+        return None
+
+    def list_planned_tasks(
+        self, status: Optional[str] = None, domain: Optional[str] = None
+    ) -> List[PlannedTask]:
+        sql = "SELECT * FROM planned_tasks WHERE 1=1"
+        params = []
+        if status:
+            sql += " AND status = ?"
+            params.append(status)
+        if domain:
+            sql += " AND domain = ?"
+            params.append(domain)
+        sql += " ORDER BY scheduled_time ASC, created_at ASC"
+
+        results = []
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            rows = cursor.execute(sql, params).fetchall()
+            for r in rows:
+                results.append(PlannedTask(
+                    id=r["id"],
+                    title=r["title"],
+                    domain=r["domain"],
+                    scheduled_time=r["scheduled_time"],
+                    recurrence=r["recurrence"],
+                    status=r["status"],
+                    completed_at=r["completed_at"],
+                    verified_action_id=r["verified_action_id"],
+                    created_at=r["created_at"],
+                ))
+        return results
+
+    def complete_planned_task(
+        self, task_id: str, verified_action_id: str, completed_at: Optional[str] = None
+    ) -> bool:
+        comp_time = completed_at or datetime.now().isoformat()
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE planned_tasks
+                SET status = 'completed', completed_at = ?, verified_action_id = ?
+                WHERE id = ?
+            """, (comp_time, verified_action_id, task_id))
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def match_and_resolve_task(self, action: VerifiedAction) -> Optional[PlannedTask]:
+        pending_tasks = self.list_planned_tasks(status="pending")
+        if not pending_tasks:
+            return None
+
+        action_text = f"{action.action_type} {action.raw_statement}".lower()
+
+        # Check each pending task for keyword overlap
+        for task in pending_tasks:
+            stop_words = {"the", "and", "for", "with", "this", "that", "from", "into", "over", "take", "make", "turn", "out"}
+            words = [w for w in re.findall(r"\b[a-zA-Z]{3,}\b", task.title.lower()) if w not in stop_words]
+            if words and any(w in action_text for w in words):
+                self.complete_planned_task(
+                    task_id=task.id,
+                    verified_action_id=action.id,
+                    completed_at=action.timestamp
+                )
+                task.status = "completed"
+                task.completed_at = action.timestamp
+                task.verified_action_id = action.id
+                return task
+
+        return None
+
+    # =========================================================================
     # Action State
     # =========================================================================
     def save_action(self, action: VerifiedAction) -> str:
         rec_id = action.id or str(uuid.uuid4())
         action.id = rec_id
 
+        # Auto-match with pending planned tasks if not already linked
+        if not action.matched_task_id:
+            resolved_task = self.match_and_resolve_task(action)
+            if resolved_task:
+                action.matched_task_id = resolved_task.id
+
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT OR REPLACE INTO verified_actions 
-                (id, action_type, domain, raw_statement, confidence, timestamp, is_revoked)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                (id, action_type, domain, raw_statement, confidence, timestamp, is_revoked, matched_task_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 rec_id,
                 action.action_type.lower(),
@@ -113,7 +251,8 @@ class SQLiteContextStore(AbstractContextStore):
                 action.raw_statement,
                 action.confidence,
                 action.timestamp,
-                1 if action.is_revoked else 0
+                1 if action.is_revoked else 0,
+                action.matched_task_id
             ))
             if self._has_fts:
                 cursor.execute("""
@@ -122,6 +261,7 @@ class SQLiteContextStore(AbstractContextStore):
                 """, (rec_id,))
             conn.commit()
         return rec_id
+
 
     def get_action_status(
         self, action_query: str, target_date: Optional[str] = None

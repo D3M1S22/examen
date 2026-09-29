@@ -89,7 +89,8 @@ The initial filter uses an ultra-fast, cost-effective model hosted on **AWS Bedr
     "summary_hint": "Introduction between Marco and user with exchange of contact info."
   }
   ```
-* **Early Exit (Drop No-Op):** If categorized as `noop`, execution terminates immediately. Zero downstream compute or storage is consumed.
+* **Dynamic Active Tasks Injection:** If the user has active pending routines or tasks (e.g. *"unplug clothes iron"*, *"take evening medication"*), the ingestion layer injects these titles into the Gatekeeper system prompt. This guarantees that expected tasks are prioritized and flagged as `"action"` with zero latency.
+* **Early Exit (Drop No-Op):** If categorized as `noop`, execution terminates immediately. Over 90% of ambient chatter is filtered out, preserving downstream compute and token budgets.
 
 ---
 
@@ -116,12 +117,22 @@ Chunks passing the gatekeeper are forwarded to the agentic state graph managed v
   - `key_topics`: Salient topics discussed.
 * **Entity Deduplication:** If the contact already exists in the context store, the node updates the existing record with the new interaction rather than creating duplicates.
 
-### Channel 3B: Action-State & Routine Task Ledger (Peace of Mind)
-* **Purpose:** Alleviate everyday cognitive load (*"Did I turn off the gas?", "Did I unplug the iron?", "Did I lock the front door?"*) and record completed work actions (*"Deployed staging build", "Emailed the client"*).
-* **Strict Veracity Filtering:**
-  - Distinguishes between **completed assertions** (*"I just unplugged the iron before heading out"*) and **hypothetical/future intentions** (*"I should remember to unplug the iron"*).
-  - Assigns a confidence score from `0.0` to `1.0`. Only assertions with confidence $\ge 0.80$ are committed as verified actions.
-  - Second-precision timestamps allow exact time verification.
+### Channel 3B: Dual Action Tracking — Planned Routines & Ambient Discovery
+EXAMEN provides a unified ledger for both scheduled routines and spontaneous domestic/work actions:
+
+1. **Planned Tasks & Daily Routines (`PlannedTask`):**
+   - Scheduled explicitly via Alexa voice commands, Echo Show UI, or external calendar/task sync (`create_planned_task`).
+   - Supports recurrence (`none`, `daily`, `weekdays`, `weekly`), scheduled target times, and status tracking (`pending`, `completed`, `overdue`, `skipped`).
+   - Injected dynamically into Stage 1 Gatekeeper prompt to watch for their completion.
+
+2. **Spontaneous Ambient Actions (`VerifiedAction`):**
+   - Discovered autonomously from everyday ambient speech (*"I just turned off the oven"*, *"Merged PR #42"*).
+   - Strict Veracity Filtering distinguishes between **completed assertions** (*"I just unplugged the iron"*) and **hypothetical/future intentions** (*"I should remember to unplug the iron"*).
+   - Confidence threshold $\ge 0.80$ with second-precision timestamps.
+
+3. **Autonomous Auto-Resolution Engine:**
+   - When a `VerifiedAction` is committed, the context store automatically correlates it against active `pending` tasks.
+   - Matching tasks are marked `completed`, linked to `verified_action_id` and timestamped, bridging planned routines and ambient voice proof.
 
 ### Channel 3C: Deep Meeting & Lecture Intelligence
 * **Purpose:** Monitor technical discussions, design reviews, and academic lectures. When salient topics arise, the system proactively performs **autonomous background research**.
@@ -141,22 +152,24 @@ Chunks passing the gatekeeper are forwarded to the agentic state graph managed v
 
 ## 4. Stage 4: Context Knowledge Store
 
-All extracted facts and enriched briefings flow into a unified context database (SQLite with FTS5 locally, or DynamoDB + AgentCore Memory on AWS).
+All extracted facts, planned routines, and enriched briefings flow into a unified context database (SQLite locally, or DynamoDB + AgentCore Memory on AWS).
 
 ```
-   ┌────────────────────────────────────────────────────────┐
-   │                  EXAMEN_CONTEXT_STORE                  │
-   ├───────────────────┬───────────────────┬────────────────┤
-   │  social_contacts  │ verified_actions  │ topic_briefings│
-   ├───────────────────┼───────────────────┼────────────────┤
-   │ id                │ id                │ id             │
-   │ person_name       │ action_type       │ topic_title    │
-   │ company_or_role   │ domain (safety/wrk│ context_type   │
-   │ commitments (JSON)│ raw_statement     │ summary (JSON) │
-   │ key_topics (JSON) │ timestamp         │ web_sources    │
-   │ timestamp         │ confidence_score  │ report_markdown│
-   │                   │ is_revoked        │ action_items   │
-   └───────────────────┴───────────────────┴────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                            EXAMEN_CONTEXT_STORE                             │
+├───────────────────┬───────────────────┬───────────────────┬─────────────────┤
+│   planned_tasks   │ verified_actions  │  social_contacts  │ topic_briefings │
+├───────────────────┼───────────────────┼───────────────────┼─────────────────┤
+│ id                │ id                │ id                │ id              │
+│ title             │ action_type       │ person_name       │ topic_title     │
+│ domain (safety/wrk│ domain            │ company_or_role   │ context_type    │
+│ scheduled_time    │ raw_statement     │ commitments (JSON)│ summary (JSON)  │
+│ recurrence        │ timestamp         │ key_topics (JSON) │ web_sources     │
+│ status            │ confidence_score  │ timestamp         │ report_markdown │
+│ completed_at      │ is_revoked        │                   │ action_items    │
+│ verified_action_id│ matched_task_id   │                   │                 │
+│ created_at        │                   │                   │                 │
+└───────────────────┴───────────────────┴───────────────────┴─────────────────┘
 ```
 
 ---
@@ -170,13 +183,14 @@ The backend runs an MCP server conforming to the streamable-HTTP transport, enab
 
 | MCP Tool | Example User Query | Returned Response |
 | :--- | :--- | :--- |
+| `create_planned_task` | *"Alexa, remind me to unplug the iron every morning at 08:30."* | Creates scheduled `PlannedTask` with daily recurrence and watches for ambient completion. |
 | `verify_action_status` | *"Alexa, did I unplug the clothes iron?"* | *"Yes, at 08:14 you confirmed unplugging the iron with 96% confidence."* + Green badge on screen. |
-| `get_daily_actions_recap` | *"Alexa, what did I get done today?"* | Ordered chronological timeline of completed tasks and safety checks. |
+| `get_daily_actions_recap` | *"Alexa, what did I get done today?"* | Dual report: completed planned routines, pending/overdue checks, and spontaneous actions. |
 | `query_social_contact` | *"Alexa, who was Marco that I met this morning?"* | *"Marco Rossi is Tech Lead at Acme Corp. You agreed to send him the EXAMEN documentation."* |
 | `get_topic_briefing` | *"Alexa, show me the briefing on the new tech discussed today."* | Displays interactive briefing on Echo Show with summaries, web links, and action items. |
 
 ### Visual Dashboard on Echo Show (Ext-Apps)
 On screen-enabled devices (**Echo Show 8, 10, 15**), EXAMEN renders an interactive multimodal UI via the **ext-apps iframe SDK**:
-* **Peace of Mind Card:** Device/routine status with certified timestamp.
+* **Peace of Mind & Checklist Card:** Dual list showing scheduled routines ([✓] completed with verified timestamp, [!] pending/overdue) alongside spontaneous actions.
 * **Social Profile Card:** Profile badges with mutual commitments and open tasks.
 * **Deep Research Viewer:** Scrollable cards reviewing technical dossiers and web references.
