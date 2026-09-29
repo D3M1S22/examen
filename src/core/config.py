@@ -36,6 +36,10 @@ class Settings(BaseSettings):
     )
     sqlite_db_path: str = Field(default="examen.db", alias="SQLITE_DB_PATH")
 
+    # Development & Testing
+    mock_ai: bool = Field(default=False, alias="MOCK_AI")
+    agentcore_runtime_arn: str | None = Field(default=None, alias="AGENTCORE_RUNTIME_ARN")
+
     # Serving & MCP
     mcp_host: str = Field(default="0.0.0.0", alias="MCP_HOST")
     mcp_port: int = Field(default=8000, alias="MCP_PORT")
@@ -44,5 +48,22 @@ class Settings(BaseSettings):
     # Optional Search API
     tavily_api_key: str | None = Field(default=None, alias="TAVILY_API_KEY")
 
+    @property
+    def has_aws_credentials(self) -> bool:
+        if self.aws_access_key_id and self.aws_secret_access_key:
+            return True
+        try:
+            import boto3
+            session = boto3.Session(
+                aws_access_key_id=self.aws_access_key_id,
+                aws_secret_access_key=self.aws_secret_access_key,
+                aws_session_token=self.aws_session_token,
+                region_name=self.aws_region
+            )
+            return session.get_credentials() is not None
+        except Exception:
+            return False
+
 
 settings = Settings()
+
