@@ -25,3 +25,9 @@ htmlcov/
 
 # Mac / Linux temp
 .DS_Store
+
+# Nix
+.direnv/
+
+#bee
+bee-sync/

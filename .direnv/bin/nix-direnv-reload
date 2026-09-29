@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -e
+if [[ ! -d "/Users/demis/github-repos/amazon_challenge" ]]; then
+  echo "Cannot find source directory; Did you move it?"
+  echo "(Looking for "/Users/demis/github-repos/amazon_challenge")"
+  echo 'Cannot force reload with this script - use "direnv reload" manually and then try again'
+  exit 1
+fi
+
+# rebuild the cache forcefully
+_nix_direnv_force_reload=1 direnv exec "/Users/demis/github-repos/amazon_challenge" true
