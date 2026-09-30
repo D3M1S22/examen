@@ -1,63 +1,59 @@
-import subprocess
+import asyncio
 import json
+from debug import Debug
 
-def log_bee_conversations():
-    # Spawns the CLI stream command from the local submodule
-    cmd = ['bun', 'run', 'resources/bee-cli/bin/bee.js', 'stream']
-    
-    try:
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            text=True,
-            bufsize=1
-        )
+class BeeClient(Debug):
+    def __init__(self, cli_path='resources/bee-cli/bin/bee.js', debug_mode="none"):
+        super().__init__(debug_mode=debug_mode, sector_name="BEE")
+        self.cli_path = cli_path
+        self.process = None
+
+    async def stream_utterances(self):
+        """Spawns the stream and yields only single live utterances."""
+        cmd = ['bun', 'run', self.cli_path, 'stream', '--json']
         
-        print("Listening for Bee device data... (Press Ctrl+C to stop)")
-        print("=" * 60)
-        
-        for line in iter(process.stdout.readline, ''):
-            line = line.strip()
-            if not line:
-                continue
+        try:
+            self.process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                limit=1024 * 1024 * 10,
+                text=False
+            )
             
-            # FAST STRING PARSING (No Regex)
-            # An ISO timestamp always has 'T' at index 10, 'Z' at index 23, and starts with a year.
-            # Example: 2026-09-29T18:09:31.044Z
-            if len(line) >= 24 and line[10] == 'T' and line[23] == 'Z' and line[:4].isdigit():
-                
-                # 1. Isolate the timestamp
-                timestamp = line[:24]
-                
-                # 2. Extract the rest of the line (.strip() removes the leading space)
-                remainder = line[24:].strip()
-                
-                # 3. Split exclusively on the FIRST space to separate the event name from its payload
-                parts = remainder.split(' ', 1)
-                event_type = parts[0]
-                payload = parts[1] if len(parts) > 1 else ""
-                
-                print(f"\n[{event_type.upper()}] - {timestamp}")
-                
-                # 4. JSON Guard: Only attempt to parse if the payload is clearly a JSON object
-                if payload.startswith('{') and payload.endswith('}'):
-                    try:
-                        data = json.loads(payload)
-                        print(json.dumps(data, indent=2))
-                    except json.JSONDecodeError:
-                        print(f"  {payload}")
-                elif payload:
-                    # Print standard string payloads (like the "Prova." string)
-                    print(f"  {payload}")
+            print("Listening for Bee device data... (Press Ctrl+C to stop)")
+            
+            while True:
+                line_bytes = await self.process.stdout.readline()
+                if not line_bytes:
+                    break
                     
-            else:
-                # Catch non-timestamped lines (startup text, summary strings, or errors)
-                print(f"  > {line}")
+                line = line_bytes.decode('utf-8').strip()
+                if not line:
+                    continue
+                    
+                try:
+                    data = json.loads(line)
+                    
+                    # Strictly filter for only new-utterance events
+                    if data.get("type") == "new-utterance":
+                        text = data.get("utterance", {}).get("text", "")
+                        
+                        if text:
+                            self.debug(f"Extracted text: '{text}'")
+                            yield text
+                                
+                except json.JSONDecodeError:
+                    continue
+                    
+        except asyncio.CancelledError:
+            self.stop()
+        except Exception as e:
+            print(f"Stream error: {e}")
+            self.stop()
 
-    except KeyboardInterrupt:
-        print("\nStopped listening.")
-    except FileNotFoundError:
-        print("Error: Command not found. Ensure Bun is installed and you are in the correct directory.")
-
-if __name__ == "__main__":
-    log_bee_conversations()
+    def stop(self):
+        """Cleanly terminates the underlying subprocess."""
+        if self.process and self.process.returncode is None:
+            self.process.terminate()
+            self.debug("Subprocess terminated.")
