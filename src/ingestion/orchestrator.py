@@ -1,6 +1,7 @@
 import asyncio
 import time
 import argparse
+import signal
 
 # Import the new BeeClient class
 from stream_convo import BeeClient
@@ -15,41 +16,67 @@ async def analyze_text_model(text: str, chunk_id: int):
 
 
 class BeeStreamOrchestrator(Debug):
+    __slots__ = [
+        'max_chars', 'max_duration', 'text_buffer', 'last_input_time', 
+        'lock', 'response_queue', 'chunk_counter', 'main_task'
+    ]
+    
     def __init__(self, debug_mode="none", max_chars=5000, max_duration=300):
         super().__init__(debug_mode=debug_mode, sector_name="ORCHESTRATOR")
-        self.debug_mode = debug_mode.lower()
         self.max_chars = max_chars
-        self.max_duration = max_duration # 300 seconds = 5 minutes
+        self.max_duration = max_duration 
         
         self.text_buffer = ""
         self.last_input_time = time.time()
-        self.lock = asyncio.Lock()  # Mutex to safely handle the buffer
+        self.lock = asyncio.Lock()  
         
-        # Queue to maintain ordered model responses
         self.response_queue = asyncio.Queue()
         self.chunk_counter = 0
+        self.main_task = None  # Track the main loop
 
-    async def flush_to_model(self, reason: str):
+    async def flush_to_model(self, reason: str, text_to_process: str = None):
         """Extracts the buffer, clears it, and queues the model task."""
         async with self.lock:
-            if not self.text_buffer.strip():
-                return
-            
-            # Save current text and reset state
-            text_to_process = self.text_buffer
-            self.text_buffer = ""
+            # If no specific text chunk was passed, take the whole buffer
+            if text_to_process is None:
+                if not self.text_buffer.strip():
+                    return
+                text_to_process = self.text_buffer
+                self.text_buffer = ""
+                
             self.last_input_time = time.time()
-            
             self.chunk_counter += 1
             current_id = self.chunk_counter
             
         print(f"\n--- Trigger: {reason} (Chunk {current_id}) ---")
         
-        # 1. Start the model task immediately (concurrent execution)
         task = asyncio.create_task(analyze_text_model(text_to_process, current_id))
-        
-        # 2. Put the TASK into the queue to maintain the exact order
         await self.response_queue.put(task)
+
+    async def _evaluate_buffer_limit(self, current_length: int):
+        """Evaluates the buffer limit and applies semantic chunking if necessary."""
+        if current_length < self.max_chars:
+            return
+
+        pass_to_model = None
+        async with self.lock:
+            # Find safe cut point (period or space)
+            cut_index = self.text_buffer.rfind('. ', 0, self.max_chars)
+            if cut_index == -1:
+                cut_index = self.text_buffer.rfind(' ', 0, self.max_chars)
+            
+            if cut_index != -1:
+                # Split the text safely without cutting words in half
+                chunk_to_send = self.text_buffer[:cut_index + 1].strip()
+                self.text_buffer = self.text_buffer[cut_index + 1:].strip()
+                pass_to_model = chunk_to_send
+            else:
+                # Fallback if there are no spaces at all
+                pass_to_model = self.text_buffer
+                self.text_buffer = ""
+                
+        if pass_to_model:
+            await self.flush_to_model("5000 Character Limit Reached", pass_to_model)
 
     async def response_worker(self):
         """Background worker that awaits and prints tasks sequentially."""
@@ -77,18 +104,18 @@ class BeeStreamOrchestrator(Debug):
 
     async def run(self):
         """Main loop that ingests the stream and manages triggers."""
+        self.main_task = asyncio.current_task()
+        
         monitor_task = asyncio.create_task(self.timeout_monitor())
         worker_task = asyncio.create_task(self.response_worker())
         
-        self.debug("[ORCHESTRATOR DEBUG] Starting background tasks...")
+        self.debug("Starting background tasks...")
         
-        # Initialize the Bee stream client
         bee = BeeClient(debug_mode=self.debug_mode)
         
         try:
-            # Asynchronously consume the yielded text from the client
             async for new_text in bee.stream_utterances():
-                self.debug(f"[ORCHESTRATOR DEBUG] ⚡ Received handoff: '{new_text}'")
+                self.debug(f"⚡ Received handoff: '{new_text}'")
                 
                 async with self.lock:
                     if self.text_buffer:
@@ -98,29 +125,44 @@ class BeeStreamOrchestrator(Debug):
                     self.last_input_time = time.time()
                     current_length = len(self.text_buffer)
                     
-                    self.debug(f"[ORCHESTRATOR DEBUG] Buffer updated: {current_length}/{self.max_chars} chars")
+                    self.debug(f"Buffer updated: {current_length}/{self.max_chars} chars")
                 
-                # Check character limit
-                if current_length >= self.max_chars:
-                    await self.flush_to_model("5000 Character Limit Reached")
+                # Check character limit using the extracted method
+                await self._evaluate_buffer_limit(current_length)
                     
         except asyncio.CancelledError:
             pass
         finally:
-            # Safely kill the CLI process and clean up tasks
             bee.stop()
             monitor_task.cancel()
             await self.flush_to_model("Shutdown Flush")
             
-            # Wait for any active model analyses to finish and print sequentially
             if not self.response_queue.empty():
                 print("\nWaiting for remaining model responses to finish...")
                 await self.response_queue.join()
             worker_task.cancel()
 
+    async def shutdown(self):
+        """Safely triggers cancellation of the main run loop only."""
+        if self.main_task and not self.main_task.done():
+            self.main_task.cancel()
+
+
+async def main(orchestrator_instance):
+    """Bootstraps the event loop and attaches OS signal handlers."""
+    loop = asyncio.get_running_loop()
+    
+    # Catch OS signals (e.g. from Docker/Colima) to trigger graceful shutdown
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(
+            sig, 
+            lambda: asyncio.create_task(orchestrator_instance.shutdown())
+        )
+        
+    await orchestrator_instance.run()
+
 
 if __name__ == "__main__":
-    # Setup command line arguments
     parser = argparse.ArgumentParser(description="Bee Stream Ingestion Orchestrator")
     parser.add_argument(
         '--debug', 
@@ -130,10 +172,9 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    # Pass the parsed argument into the orchestrator
     orchestrator = BeeStreamOrchestrator(debug_mode=args.debug, max_chars=5000, max_duration=300)
     
     try:
-        asyncio.run(orchestrator.run())
-    except KeyboardInterrupt:
+        asyncio.run(main(orchestrator))
+    except (KeyboardInterrupt, asyncio.CancelledError):
         print("\nOrchestrator stopped gracefully.")
