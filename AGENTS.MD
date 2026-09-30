@@ -148,7 +148,7 @@ Whenever you encounter a non-obvious bug, dependency incompatibility, or tricky 
 ## 7. Current Project Roadmap & Priorities
 
 1. **Pipeline Core (`src/pipeline/`):**
-   * Implement `src/pipeline/nodes/gatekeeper.py` (Claude 3.5 Haiku / Nova Micro).
+   * Implement `src/pipeline/nodes/gatekeeper.py` (GPT-5.6 Luna / Claude 3.5 Haiku).
    * Implement parallel enrichment nodes: `social.py`, `action_state.py`, and `topic_research.py`.
    * Compile the LangGraph pipeline in `src/pipeline/graph.py`.
 2. **Serving Layer (`src/serving/`):**

@@ -10,12 +10,12 @@ The pipeline implements an intelligent **Multi-Model Tiering** pattern on AWS Be
 
 | Pipeline Stage | Primary AWS Bedrock Model | Fallback AWS Model | Temperature | Target Latency |
 | :--- | :--- | :--- | :--- | :--- |
-| **Stage 1: Gatekeeper / Screening** | `anthropic.claude-3-5-haiku-20241022-v1:0` | `amazon.nova-micro-v1:0` | `0.0` | $< 350\text{ ms}$ |
-| **Stage 3A: Social Recall Extractor** | `anthropic.claude-3-5-haiku-20241022-v1:0` | `amazon.nova-lite-v1:0` | `0.0` | $< 500\text{ ms}$ |
-| **Stage 3B: Action-State Verifier** | `anthropic.claude-3-5-haiku-20241022-v1:0` | `amazon.nova-lite-v1:0` | `0.0` | $< 400\text{ ms}$ |
+| **Stage 1: Gatekeeper / Screening** | `openai.gpt-5.6-luna` (GPT-5.6 Luna) | `anthropic.claude-3-5-haiku-20241022-v1:0` | `0.0` | $< 350\text{ ms}$ |
+| **Stage 3A: Social Recall Extractor** | `openai.gpt-5.6-luna` / Haiku | `amazon.nova-lite-v1:0` | `0.0` | $< 500\text{ ms}$ |
+| **Stage 3B: Action-State Verifier** | `openai.gpt-5.6-luna` / Haiku | `amazon.nova-lite-v1:0` | `0.0` | $< 400\text{ ms}$ |
 | **Stage 3C: Deep Research & Briefing** | `anthropic.claude-3-5-sonnet-20241022-v2:0` | `amazon.nova-pro-v1:0` | `0.2` | $< 2500\text{ ms}$ |
 
-* **Why Haiku / Nova Micro for Screening:** Handles thousands of tokens per hour at minimal cost (~$0.25 per million input tokens), dropping 90%+ of irrelevant background speech.
+* **Why GPT-5.6 Luna for Screening:** Handles thousands of tokens per hour at minimal cost and ultra-low latency, dropping 90%+ of irrelevant background speech.
 * **Why Sonnet / Nova Pro for Stage 3C:** Activated exclusively when technical topics, bugs, architecture questions, or academic lectures are detected to analyze search results and synthesize deep markdown dossiers.
 
 ---
@@ -113,7 +113,7 @@ from src.core.schemas import ExamenState, ChunkClassification, SocialEntity, Ver
 
 # Initializing AWS Bedrock Clients
 llm_gatekeeper = ChatBedrock(
-    model_id="anthropic.claude-3-5-haiku-20241022-v1:0",
+    model_id="openai.gpt-5.6-luna",
     region_name="us-east-1",
     model_kwargs={"temperature": 0.0}
 )

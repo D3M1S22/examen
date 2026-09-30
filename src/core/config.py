@@ -21,7 +21,7 @@ class Settings(BaseSettings):
 
     # Bedrock Foundation Models
     gatekeeper_model_id: str = Field(
-        default="anthropic.claude-3-5-haiku-20241022-v1:0",
+        default="openai.gpt-5.6-luna",
         alias="BEDROCK_GATEKEEPER_MODEL"
     )
     reasoner_model_id: str = Field(

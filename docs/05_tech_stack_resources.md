@@ -100,7 +100,8 @@ To keep the core codebase of **EXAMEN** clean and distinguish application code f
 
 | Model | Model ID | Purpose / Stage | Technical Rationale |
 | :--- | :--- | :--- | :--- |
-| **Claude 3.5 Haiku** | `anthropic.claude-3-5-haiku-20241022-v1:0` | Stage 1 (Gatekeeper) & Stage 3A/3B | Ultra-low latency ($<350\text{ ms}$), minimal cost (~$0.25/M tokens), high accuracy in extraction. |
+| **GPT-5.6 Luna** (Default) | `openai.gpt-5.6-luna` | Stage 1 (Gatekeeper) & Stage 3A/3B | Ultra-low latency ($<350\text{ ms}$), minimal cost, high accuracy in classification and structured output. |
+| **Claude 3.5 Haiku** | `anthropic.claude-3-5-haiku-20241022-v1:0` | Stage 1 Alternative (Gatekeeper) | Low latency, alternative Bedrock model for extraction. |
 | **Amazon Nova Micro** | `amazon.nova-micro-v1:0` | Stage 1 Alternative (Gatekeeper) | Native AWS ultra-light model, optimal for binary `noop` vs `signal` classification. |
 | **Claude 3.5 Sonnet** | `anthropic.claude-3-5-sonnet-20241022-v2:0` | Stage 3C (Deep Research & Briefing) | Advanced reasoning, complex document synthesis, and clean markdown generation. |
 | **Amazon Nova Pro** | `amazon.nova-pro-v1:0` | Stage 3C Alternative | Multimodal enterprise foundation model for deep technical analysis. |

@@ -19,7 +19,7 @@ flowchart TD
     %% Stage 1: Screening
     subgraph S1["1. Screening (Fast Semantic Gatekeeper)"]
         Buffer["Sliding Window Buffer (30-45s)"]
-        BedrockGatekeeper["⚡ AWS Bedrock: Claude 3.5 Haiku / Nova Micro"]
+        BedrockGatekeeper["⚡ AWS Bedrock: GPT-5.6 Luna / Claude 3.5 Haiku"]
         Classifier{"Intent\nClassification"}
         DropIrrelevant["🗑️ Drop No-Op (90%+ Chit-Chat / Silence)"]
         
@@ -78,7 +78,7 @@ A wearable microphone running all day produces hours of continuous speech:
 * Passing every audio chunk to complex reasoning models (like Sonnet or GPT-4) would generate unacceptable latency (5–10s) and prohibitive token consumption.
 
 ### The Solution: Ultra-Light Gatekeeper on AWS Bedrock
-The initial filter uses an ultra-fast, cost-effective model hosted on **AWS Bedrock** (e.g. `anthropic.claude-3-5-haiku-20241022-v1:0` or `amazon.nova-micro-v1:0`).
+The initial filter uses an ultra-fast, cost-effective model hosted on **AWS Bedrock** (default: **GPT-5.6 Luna** `openai.gpt-5.6-luna`, or `anthropic.claude-3-5-haiku-20241022-v1:0`).
 
 * **Ingestion Mechanism:** The client collects utterances from `bee-cli` into a **Sliding Window** (30–45s time slice) with a 5-second overlap to prevent clipping sentences mid-thought.
 * **Minimal Structured Output:** The gatekeeper classifies the chunk into a compact payload:

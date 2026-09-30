@@ -68,7 +68,7 @@ Most voice assistants and wearable applications suffer from two structural bottl
 
 ## 🏗️ 5-Stage System Architecture
 
-1. **Screening (Semantic Gatekeeper):** Ultra-fast, cost-effective evaluation of incoming audio chunks via lightweight Bedrock foundation models (*Claude 3.5 Haiku* or *Amazon Nova Micro*). If text is trivial chit-chat or background silence, it drops immediately at zero downstream computation cost.
+1. **Screening (Semantic Gatekeeper):** Ultra-fast, cost-effective evaluation of incoming audio chunks via lightweight Bedrock foundation models (*GPT-5.6 Luna* or *Claude 3.5 Haiku*). If text is trivial chit-chat or background silence, it drops immediately at zero downstream computation cost.
 2. **Semantic Routing:** Qualified chunks are categorized (`social`, `action`, `deep_topic`) and dynamically dispatched to specialized sub-agents.
 3. **Extraction & Autonomous Enrichment:**
    - **Social:** Structured Pydantic schema for contacts, roles, and commitments.
@@ -83,7 +83,7 @@ Most voice assistants and wearable applications suffer from two structural bottl
 
 - **Wearable Ingestion:** Bee Wearable AI via [`resources/bee-cli/`](resources/bee-cli/) SSE stream (`new-utterance`) and `beemcp` bridge.
 - **LLM Provider:** **AWS Bedrock**
-  - *Claude 3.5 Haiku / Nova Micro:* Low-latency screening and deterministic extraction ($<350\text{ ms}$).
+  - *GPT-5.6 Luna / Claude 3.5 Haiku:* Low-latency screening and deterministic extraction ($<350\text{ ms}$).
   - *Claude 3.5 Sonnet / Nova Pro:* High-reasoning topic research, technical dossier synthesis, and markdown formatting.
 - **Agent Harness:** **AgentCore** / LangGraph for state management, conditional edges, and serverless runtime microVM hosting.
 - **Search Tooling:** DuckDuckGo Search / Tavily API for background technical research.
