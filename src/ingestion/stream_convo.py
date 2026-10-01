@@ -1,6 +1,8 @@
 import asyncio
 import json
-from debug import Debug
+
+from src.ingestion.debug import Debug
+
 
 class BeeClient(Debug):
     def __init__(self, cli_path='resources/bee-cli/bin/bee.js', debug_mode="none"):

@@ -2,17 +2,45 @@ import asyncio
 import time
 import argparse
 import signal
+from typing import Optional, List
 
-# Import the new BeeClient class
-from stream_convo import BeeClient
-from debug import Debug
+from src.ingestion.stream_convo import BeeClient
+from src.ingestion.debug import Debug
+from src.ingestion.gatekeeper import aclassify_chunk, is_noop
+from src.core.storage import get_storage_store
+from src.core.schemas import ChunkClassification
 
-# Placeholder for your async analysis model function
-async def analyze_text_model(text: str, chunk_id: int):
-    print(f"  -> [Task {chunk_id} Started] Analyzing {len(text)} characters...")
-    # await your_actual_model_call(text) here
-    await asyncio.sleep(2) # Simulated processing time
-    return f"Processed output for chunk {chunk_id}"
+
+async def analyze_text_model(text: str, chunk_id: int) -> Optional[ChunkClassification]:
+    """Evaluates an audio chunk with the Semantic Gatekeeper, filtering out noops and qualifying actionable context."""
+    clean_text = text.strip()
+    if not clean_text:
+        return None
+
+    # Retrieve any active pending tasks from context store to prioritize expected routines
+    active_task_titles: List[str] = []
+    try:
+        store = get_storage_store()
+        pending_tasks = store.list_planned_tasks(status="pending")
+        active_task_titles = [t.title for t in pending_tasks if t.title]
+    except Exception:
+        # Storage lookup failure should not block screening
+        pass
+
+    classification: ChunkClassification = await aclassify_chunk(
+        transcript=clean_text,
+        active_tasks=active_task_titles if active_task_titles else None
+    )
+
+    if is_noop(classification):
+        print(f"  -> [Task {chunk_id} Screened] DROPPED (noop: {classification.summary_hint})")
+    else:
+        print(
+            f"  -> [Task {chunk_id} Screened] QUALIFIED for downstream pipeline: "
+            f"{classification.categories} (confidence={classification.confidence:.2f}, "
+            f"hint='{classification.summary_hint}')"
+        )
+    return classification
 
 
 class BeeStreamOrchestrator(Debug):
@@ -84,7 +112,12 @@ class BeeStreamOrchestrator(Debug):
             task = await self.response_queue.get()
             try:
                 result = await task
-                print(f"\n[MODEL RESPONSE IN ORDER] {result}\n")
+                if result:
+                    if hasattr(result, "categories"):
+                        status_str = "DROPPED (noop)" if is_noop(result) else f"QUALIFIED: {result.categories}"
+                        print(f"\n[GATEKEEPER CLASSIFICATION] {status_str} | Hint: {result.summary_hint} | Conf: {result.confidence:.2f}\n")
+                    else:
+                        print(f"\n[MODEL RESPONSE IN ORDER] {result}\n")
             except Exception as e:
                 print(f"\n[MODEL ERROR] {e}\n")
             finally:

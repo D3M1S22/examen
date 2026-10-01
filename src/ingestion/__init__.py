@@ -6,14 +6,16 @@ from src.ingestion.gatekeeper import (
     is_noop,
     build_gatekeeper_prompt,
 )
-
-from src.ingestion.stream_convo import log_bee_conversations
+from src.ingestion.stream_convo import BeeClient
+from src.ingestion.debug import Debug
 
 __all__ = [
     "classify_chunk",
     "aclassify_chunk",
     "is_noop",
     "build_gatekeeper_prompt",
-    "log_bee_conversations",
+    "BeeClient",
+    "Debug",
 ]
+
 
