@@ -92,7 +92,7 @@ To keep the core codebase of **EXAMEN** clean and distinguish application code f
 | **Frontend UI** | **Echo Show Ext-Apps** | HTML5, Vanilla CSS, JS | Multimodal touch UI for Echo Show (Peace of Mind, Rolodex, Briefings). |
 | **Local Store** | **SQLite + FTS5** | Python native (`sqlite3`) | Zero-latency local context store with full-text search indexing. |
 | **Data Validation** | **Pydantic V2** | `pydantic>=2.7` | Typed contracts for structured outputs (social entities, actions, reports). |
-| **Web Research** | **DuckDuckGo / Tavily** | `duckduckgo-search`, `tavily-python` | Autonomous web research tool for technical topics and lectures. |
+| **Web Research** | **DuckDuckGo Search** | `ddgs`, `duckduckgo-search` | Autonomous web research tool for technical topics and lectures. |
 
 ---
 
@@ -115,7 +115,7 @@ To keep the core codebase of **EXAMEN** clean and distinguish application code f
 | **AWS Bedrock Runtime** | Serverless foundation model inference | Requires AWS credentials (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION=us-east-1`). |
 | **Bee Wearable API / WebSocket** | Real-time audio stream and transcription | Ingestion via `bee-cli` SSE stream or local `beemcp` bridge. |
 | **Alexa+ Developer Preview** | MCP tool invocation and Ext-Apps rendering | Configured via `alexa_addon.json` and HTTPS endpoint (Cloudflare Tunnel). |
-| **Web Search API** | Documentation lookups for Stage 3C | DuckDuckGo (zero-key local) or Tavily API (`TAVILY_API_KEY`). |
+| **Web Search API** | Documentation lookups for Stage 3C | DuckDuckGo (`ddgs`) zero-key autonomous search. |
 
 ---
 

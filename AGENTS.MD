@@ -44,17 +44,23 @@ amazon_challenge/
 │   │   ├── schemas.py                      # Pydantic V2 data contracts & LangGraph state
 │   │   └── storage/                        # Storage abstraction layer (SQLite FTS5 / DynamoDB)
 │   ├── pipeline/                           # LangGraph pipeline (Bedrock AgentCore Runtime)
-│   │   ├── graph.py                        # StateGraph definition & edge wiring
-│   │   ├── app.py                          # AgentCore Runtime entrypoint
-│   │   ├── nodes/                          # Gatekeeper, social, action, & topic nodes
-│   │   └── tools/                          # Web search & external enrichment tools
-│   ├── serving/                            # Serving layer (FastMCP Streamable HTTP)
+│   │   ├── graph.py                        # StateGraph definition & conditional routing
+│   │   ├── app.py                          # BedrockAgentCoreApp runtime entrypoint
+│   │   ├── nodes/                          # Action-state, social, topic research & persist nodes
+│   │   └── tools/                          # DuckDuckGo multi-tier web search tool
+│   ├── serving/                            # Serving layer (FastMCP Streamable HTTP for Alexa+)
 │   │   └── mcp_server.py                   # Port 8000 Streamable HTTP MCP server
 │   └── ingestion/                          # Edge ingestion bridge (Local / VPS / Bee Device)
-│       ├── bee_stream_bridge.py            # Bee CLI SSE stream listener & dispatcher
-│       └── mock_feeder.py                  # Synthetic conversational audio/text feeder
-└── tests/                                  # Pytest unit and integration test suite
-    └── test_storage.py                     # SQLite FTS5 storage contract tests
+│       ├── stream_convo.py                 # Bee CLI SSE stream client (BeeClient)
+│       ├── orchestrator.py                 # Sliding window buffer & edge screening orchestrator
+│       └── gatekeeper.py                   # Semantic screening gatekeeper & task injection
+└── tests/                                  # Pytest unit and integration test suite (59 tests)
+    ├── test_storage.py                     # SQLite FTS5 storage contract tests
+    ├── test_gatekeeper.py                  # Gatekeeper screening & active task tests
+    ├── test_ingestion_orchestrator.py      # Buffer & semantic cut tests
+    ├── test_web_search.py                  # Multi-tier web search & SSRF security tests
+    ├── test_pipeline_nodes.py              # Specialized pipeline nodes & scheduled task tests
+    └── test_langgraph_pipeline.py          # End-to-end LangGraph & AgentCore app tests
 ```
 
 ---

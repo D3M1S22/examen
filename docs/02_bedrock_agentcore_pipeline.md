@@ -247,7 +247,7 @@ examen_agent = builder.compile()
 
 ## 🌐 Autonomous Web Search Tooling
 
-When `topic_research` is invoked, the harness executes autonomous web research via DuckDuckGo Search (local dev) or Tavily API / Bedrock Agent Action Groups:
+When `topic_research` is invoked, the harness executes autonomous web research via DuckDuckGo Search (`ddgs`) or Bedrock Agent Action Groups:
 
 ```python
 from duckduckgo_search import DDGS

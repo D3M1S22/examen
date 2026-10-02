@@ -5,9 +5,9 @@ import re
 from typing import List, Optional
 
 from langchain_core.messages import SystemMessage, HumanMessage
-from langchain_aws import ChatBedrockConverse
 
 from src.core.config import settings
+from src.core.models import get_fast_model, has_active_model_credentials
 from src.core.schemas import ChunkClassification
 
 logger = logging.getLogger(__name__)
@@ -60,15 +60,8 @@ If the transcript indicates that the speaker has completed, verified, or execute
 
 
 def _get_bedrock_classifier():
-    """Initializes Bedrock Converse LLM with structured output."""
-    llm = ChatBedrockConverse(
-        model=settings.gatekeeper_model_id,
-        region_name=settings.aws_region,
-        temperature=0.0,
-        aws_access_key_id=settings.aws_access_key_id,
-        aws_secret_access_key=settings.aws_secret_access_key,
-        aws_session_token=settings.aws_session_token,
-    )
+    """Initializes classifier model with structured output via model factory."""
+    llm = get_fast_model()
     return llm.with_structured_output(ChunkClassification)
 
 
@@ -190,11 +183,11 @@ def classify_chunk(
         return ChunkClassification(categories=["noop"], confidence=1.0, summary_hint="Empty audio chunk")
 
     # Offline or mock mode
-    if force_mock or settings.mock_ai or not settings.has_aws_credentials:
+    if force_mock or settings.mock_ai or not has_active_model_credentials(settings.gatekeeper_provider):
         logger.debug("Gatekeeper using heuristic/mock classifier")
         return _heuristic_classify(clean_text, active_tasks=active_tasks)
 
-    # Real Bedrock call
+    # Real Model call
     try:
         classifier = _get_bedrock_classifier()
         system_prompt = build_gatekeeper_prompt(active_tasks)
@@ -205,7 +198,7 @@ def classify_chunk(
         result: ChunkClassification = classifier.invoke(messages)
         return result
     except Exception as e:
-        logger.warning(f"Bedrock Gatekeeper invocation failed ({e}), falling back to heuristic: {e}")
+        logger.warning(f"Gatekeeper invocation failed ({e}), falling back to heuristic: {e}")
         return _heuristic_classify(clean_text, active_tasks=active_tasks)
 
 
@@ -228,7 +221,7 @@ async def aclassify_chunk(
     if not clean_text:
         return ChunkClassification(categories=["noop"], confidence=1.0, summary_hint="Empty audio chunk")
 
-    if force_mock or settings.mock_ai or not settings.has_aws_credentials:
+    if force_mock or settings.mock_ai or not has_active_model_credentials(settings.gatekeeper_provider):
         return _heuristic_classify(clean_text, active_tasks=active_tasks)
 
     try:

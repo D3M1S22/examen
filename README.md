@@ -86,7 +86,7 @@ Most voice assistants and wearable applications suffer from two structural bottl
   - *GPT-5.6 Luna / Claude 3.5 Haiku:* Low-latency screening and deterministic extraction ($<350\text{ ms}$).
   - *Claude 3.5 Sonnet / Nova Pro:* High-reasoning topic research, technical dossier synthesis, and markdown formatting.
 - **Agent Harness:** **AgentCore** / LangGraph for state management, conditional edges, and serverless runtime microVM hosting.
-- **Search Tooling:** DuckDuckGo Search / Tavily API for background technical research.
+- **Search Tooling:** Autonomous DuckDuckGo Search (`ddgs`) for background technical research.
 - **Storage:** SQLite with Full-Text Search (FTS5) for local dev; Amazon DynamoDB, S3, and Bedrock AgentCore Memory for cloud production.
 - **Serving & Voice UI:** Alexa+ (Echo Show) via Model Context Protocol (Streamable HTTP JSON-RPC 2.0).
 - **Frontend UI:** Ext-Apps Iframe SDK for multimodal Echo Show touch displays.

@@ -55,10 +55,11 @@ amazon_challenge/
 │   │   │   ├── __init__.py
 │   │   │   ├── social.py                 # Stage 3A: Social Recall Extractor
 │   │   │   ├── action_state.py           # Stage 3B: Action-State Verifier (Peace of Mind)
-│   │   │   └── topic_research.py         # Stage 3C: Deep Topic & Briefing Synthesizer
+│   │   │   ├── topic_research.py         # Stage 3C: Deep Topic & Briefing Synthesizer
+│   │   │   └── persist.py                # Context persistence node (Actions, Contacts, Briefings)
 │   │   └── tools/                        # Tools invoked by agent nodes
 │   │       ├── __init__.py
-│   │       └── web_search.py             # Web search tool (DuckDuckGo / Tavily)
+│   │       └── web_search.py             # Multi-tier web search tool (DuckDuckGo ddgs)
 │   │
 │   ├── serving/                          # 🎙️ [TARGET: Alexa+ Serving / MCP Server]
 │   │   ├── __init__.py
@@ -71,9 +72,9 @@ amazon_challenge/
 │   │
 │   ├── ingestion/                        # 🐝 [TARGET: Edge / Companion Ingestion Layer]
 │   │   ├── __init__.py
-│   │   ├── gatekeeper.py                 # Stage 1: Screening Gatekeeper (Fast Haiku + dynamic tasks injection)
-│   │   ├── bee_stream_bridge.py          # Live SSE client connected to bee-cli ("new-utterance")
-│   │   └── mock_feeder.py                # Offline audio stream simulator for tests & video
+│   │   ├── gatekeeper.py                 # Stage 1: Screening Gatekeeper (Fast Haiku/Luna + dynamic task injection)
+│   │   ├── stream_convo.py               # Live SSE client connected to bee-cli (BeeClient)
+│   │   └── orchestrator.py               # Sliding window buffer & edge screening orchestrator
 │   │
 │   └── web_ui/                           # 🖥️ [TARGET: S3 + CloudFront / Echo Show Ext-Apps]
 │       ├── index.html                    # Multimodal interactive dashboard

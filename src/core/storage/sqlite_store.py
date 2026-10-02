@@ -237,6 +237,12 @@ class SQLiteContextStore(AbstractContextStore):
             resolved_task = self.match_and_resolve_task(action)
             if resolved_task:
                 action.matched_task_id = resolved_task.id
+        else:
+            self.complete_planned_task(
+                task_id=action.matched_task_id,
+                verified_action_id=rec_id,
+                completed_at=action.timestamp
+            )
 
         with self._get_connection() as conn:
             cursor = conn.cursor()

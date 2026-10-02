@@ -141,7 +141,7 @@ EXAMEN provides a unified ledger for both scheduled routines and spontaneous dom
   - **Academic & Education:** Theoretical concepts, theorems, or methodologies covered in a lecture.
 * **Autonomous Enrichment Workflow:**
   1. The agent extracts core topics and generates focused search queries.
-  2. Invokes a **Web Search** tool (via DuckDuckGo Search / Tavily API / Bedrock Agent Action Group).
+  2. Invokes an autonomous **Web Search** tool (via DuckDuckGo Search / Bedrock Agent Action Group).
   3. Retrieves authoritative definitions, documentation, and code examples.
   4. An analytical model (**AWS Bedrock Claude 3.5 Sonnet**) synthesizes an **Executive Briefing** or **Study Guide**:
      - Concise executive summary.
