@@ -146,7 +146,7 @@ Combines three AWS storage services to address distinct query patterns:
 | :--- | :--- | :--- |
 | **Audio Ingestion** | Mock audio transcripts / local `bee-cli` | Local companion or AWS App Runner container |
 | **LangGraph Harness** | Local Python execution via `langchain-aws` | **AWS Bedrock AgentCore Runtime** (microVM arm64) |
-| **Gatekeeper & Models** | AWS Bedrock (`Claude 3.5 Haiku` & `Sonnet`) | AWS Bedrock (`Claude 3.5 Haiku` & `Sonnet`) |
+| **Gatekeeper & Models** | AWS Bedrock & Bedrock Mantle (`Claude 3.5 Haiku/Sonnet`, `NVIDIA Nemotron 120B`, `Amazon Nova`) | AWS Bedrock & Bedrock Mantle (`Claude 3.5 Haiku/Sonnet`, `NVIDIA Nemotron 120B`, `Amazon Nova`) |
 | **Database & Memory** | Local SQLite (`examen.db`) with FTS5 | **AgentCore Memory** + **DynamoDB** + **S3** |
 | **Alexa+ MCP Server** | FastMCP on port 8000 + Cloudflare Tunnel | **AgentCore Runtime (MCP Protocol)** / Lambda URL |
 | **Echo Show Ext-Apps UI** | Local web server (`localhost:3000`) via Tunnel | **S3 Static Website + Amazon CloudFront CDN** |
@@ -157,7 +157,9 @@ Combines three AWS storage services to address distinct query patterns:
 
 1. **Holistic Bedrock AgentCore Stack Adoption:**
    Leverages both **AgentCore Runtime** (serverless microVM execution) and **AgentCore Memory** (long-term semantic namespaces).
-2. **Cost-Optimized Multi-Model Tiering:**
-   Lightweight models (*Haiku / Nova Micro*) for screening and reasoning models (*Sonnet / Nova Pro*) for deep research.
-3. **Serverless-First Design:**
+2. **Dual-Provider Architecture (Native Bedrock + Bedrock Mantle):**
+   Decoupled model abstraction layer (`src/core/models.py`) supporting both Native AWS Bedrock Converse API (SigV4) and Bedrock Mantle endpoints (`bedrock-mantle.{region}.api.aws/openai/v1` with automated IAM bearer token minting) with zero vendor lock-in.
+3. **Cost-Optimized Multi-Model Tiering:**
+   Lightweight models (*Haiku / Nova Micro / Nemotron*) for screening ($0.95s avg latency, sub-1-cent cost across 25 scenarios) and reasoning models (*Sonnet / Nova Pro*) for deep research.
+4. **Serverless-First Design:**
    Zero idle costs, automatic scaling, and enterprise-grade resilience.

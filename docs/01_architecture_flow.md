@@ -78,7 +78,9 @@ A wearable microphone running all day produces hours of continuous speech:
 * Passing every audio chunk to complex reasoning models (like Sonnet or GPT-4) would generate unacceptable latency (5–10s) and prohibitive token consumption.
 
 ### The Solution: Ultra-Light Gatekeeper on AWS Bedrock
-The initial filter uses an ultra-fast, cost-effective model hosted on **AWS Bedrock** (default: **GPT-5.6 Luna** `openai.gpt-5.6-luna`, or `anthropic.claude-3-5-haiku-20241022-v1:0`).
+The initial filter uses an ultra-fast, cost-effective model hosted on **AWS Bedrock**, powered by the dual-provider engine (`GATEKEEPER_PROVIDER=bedrock|mantle`):
+* **Native Bedrock Converse API:** `amazon.nova-micro-v1:0`, `anthropic.claude-3-5-haiku-20241022-v1:0`, or `nvidia.nemotron-nano-3-30b` / `nvidia.nemotron-super-3-120b`.
+* **Bedrock Mantle (OpenAI-compatible):** `openai.gpt-5.6-luna` or open-weight models via `bedrock-mantle.{region}.api.aws/openai/v1`.
 
 * **Ingestion Mechanism:** The client collects utterances from `bee-cli` into a **Sliding Window** (30–45s time slice) with a 5-second overlap to prevent clipping sentences mid-thought.
 * **Minimal Structured Output:** The gatekeeper classifies the chunk into a compact payload:

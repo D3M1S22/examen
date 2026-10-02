@@ -82,14 +82,26 @@ Most voice assistants and wearable applications suffer from two structural bottl
 ## 💻 Tech Stack & Ecosystem Integrations
 
 - **Wearable Ingestion:** Bee Wearable AI via [`resources/bee-cli/`](resources/bee-cli/) SSE stream (`new-utterance`) and `beemcp` bridge.
-- **LLM Provider:** **AWS Bedrock**
-  - *GPT-5.6 Luna / Claude 3.5 Haiku:* Low-latency screening and deterministic extraction ($<350\text{ ms}$).
-  - *Claude 3.5 Sonnet / Nova Pro:* High-reasoning topic research, technical dossier synthesis, and markdown formatting.
-- **Agent Harness:** **AgentCore** / LangGraph for state management, conditional edges, and serverless runtime microVM hosting.
-- **Search Tooling:** Autonomous DuckDuckGo Search (`ddgs`) for background technical research.
-- **Storage:** SQLite with Full-Text Search (FTS5) for local dev; Amazon DynamoDB, S3, and Bedrock AgentCore Memory for cloud production.
-- **Serving & Voice UI:** Alexa+ (Echo Show) via Model Context Protocol (Streamable HTTP JSON-RPC 2.0).
+- **Dual-Provider LLM Engine:**
+  - **AWS Bedrock Native (Converse API):** `langchain-aws` with IAM SigV4 auth (`amazon.nova-*`, `anthropic.claude-*`, `nvidia.nemotron-*`).
+  - **AWS Bedrock Mantle (OpenAI-compatible):** `langchain-openai` via `bedrock-mantle.{region}.api.aws/openai/v1` with automated short-term token minting (`aws-bedrock-token-generator`).
+  - **Dynamic Tiering:** Independent configuration for Fast Screening (`GATEKEEPER_PROVIDER`) and Deep Reasoning (`REASONER_PROVIDER`).
+- **Agent Harness:** **AWS Bedrock AgentCore Runtime** & **LangGraph** (`StateGraph`) for state management, conditional routing, and serverless hosting.
+- **Search Tooling:** Autonomous DuckDuckGo Search (`ddgs`) with SSRF security validation and query refinement loops.
+- **Storage:** SQLite with Full-Text Search (FTS5) for local zero-latency development; Amazon DynamoDB, S3, and Bedrock AgentCore Memory for cloud scale.
+- **Serving & Voice UI:** Alexa+ (Echo Show) via Model Context Protocol (FastMCP Streamable HTTP JSON-RPC 2.0).
 - **Frontend UI:** Ext-Apps Iframe SDK for multimodal Echo Show touch displays.
+
+---
+
+## 📊 Live Evaluation & Benchmark Highlights
+
+The engine underwent a rigorous 25-scenario live evaluation against **NVIDIA Nemotron 3 Super 120B** on AWS Bedrock (`scripts/run_live_benchmark.py`):
+- **Overall Pass Rate:** **100.0% (25 / 25 Scenarios)** across English and Italian.
+- **Gatekeeper Screening:** Average latency **0.95s** with precise chitchat dropping, prompt injection defense, and multi-label dispatch.
+- **Action Verifier:** Sub-second extraction with automated matching and resolution of pre-scheduled tasks.
+- **Deep Technical Research:** Autonomous synthesis of 16.5 KB technical dossiers with 6 external web citations.
+- **Operational Cost:** Total cost for 25 live scenarios was **$0.0084 USD** (< 1 cent), estimating **~$0.04/day** for continuous wearable ambient listening.
 
 ---
 
@@ -98,7 +110,7 @@ Most voice assistants and wearable applications suffer from two structural bottl
 | Track / Challenge | How EXAMEN Maximizes Score |
 | :--- | :--- |
 | **Track 1: Bee Wearable AI ($12,000)** | Goes beyond passive audio logging by providing real-time ambient understanding, proactive web enrichment, and cross-device intelligence. |
-| **Mini-Challenge: AWS Builder ($5,000 + $5,000 credits)** | Native deep integration with AWS Bedrock multi-model tiering (Haiku for screening, Sonnet for synthesis) and orchestration on Bedrock AgentCore. |
+| **Mini-Challenge: AWS Builder ($5,000 + $5,000 credits)** | Native deep integration with AWS Bedrock multi-model tiering (Bedrock Native & Mantle dual-provider) and orchestration on Bedrock AgentCore. |
 | **Cross-Device Orchestration** | Frictionless synergy: **Bee** captures context in the physical world on the go; **Alexa+ on Echo Show** synthesizes and surfaces it at home or office. |
 
 ---
@@ -108,7 +120,7 @@ Most voice assistants and wearable applications suffer from two structural bottl
 Detailed technical, architectural, and operational documentation is organized across the following dedicated guides:
 
 * 📄 [01_architecture_flow.md](docs/01_architecture_flow.md): In-depth 5-stage architecture, end-to-end dataflow, and Mermaid diagrams.
-* 📄 [02_bedrock_agentcore_pipeline.md](docs/02_bedrock_agentcore_pipeline.md): LangGraph state graph implementation, Pydantic V2 schemas, Bedrock prompts, and search tools.
+* 📄 [02_bedrock_agentcore_pipeline.md](docs/02_bedrock_agentcore_pipeline.md): LangGraph state graph implementation, dual-provider model factory, Pydantic V2 schemas, and search tools.
 * 📄 [03_alexa_mcp_serving.md](docs/03_alexa_mcp_serving.md): MCP Server specifications for Alexa+, JSON-RPC tool schemas, and Echo Show ext-apps wireframes.
 * 📄 [04_hackathon_strategy_demo.md](docs/04_hackathon_strategy_demo.md): 3-minute video demo script, judging criteria alignment, and 4-sprint roadmap.
 * 📄 [05_tech_stack_resources.md](docs/05_tech_stack_resources.md): Comprehensive tech stack, frameworks, APIs, and submodule references (`agentcore-samples`, `bee-cli`).

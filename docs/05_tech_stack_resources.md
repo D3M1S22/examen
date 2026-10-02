@@ -85,26 +85,28 @@ To keep the core codebase of **EXAMEN** clean and distinguish application code f
 | Domain | Technology / Library | Version / Package | Role in EXAMEN |
 | :--- | :--- | :--- | :--- |
 | **Agent Runtime** | **AWS Bedrock AgentCore** | `bedrock-agentcore`, `bedrock-agentcore-starter-toolkit` | Serverless execution harness for complex agents on AWS, state, and lifecycle. |
-| **State Graph** | **LangGraph** | `langgraph` ($\ge 0.2.0$) | State orchestration: Gatekeeper $\to$ Router $\to$ Specialized Sub-Agents. |
-| **LLM Provider** | **LangChain AWS** | `langchain-aws`, `boto3` | Unified interface to AWS Bedrock foundation models. |
+| **State Graph** | **LangGraph** | `langgraph` ($\ge 0.2.0$) | State orchestration: conditional routing from `START` to specialized sub-agents. |
+| **LLM Provider (Native)** | **LangChain AWS** | `langchain-aws`, `boto3` | Interface to native AWS Bedrock Converse API with IAM SigV4 auth. |
+| **LLM Provider (Mantle)** | **LangChain OpenAI & Token Gen** | `langchain-openai`, `aws-bedrock-token-generator` | Interface to Bedrock Mantle OpenAI-compatible endpoints with dynamic IAM token minting. |
 | **Serving Layer** | **Model Context Protocol (MCP)** | `mcp>=1.10.0,<2.0.0` | FastMCP streamable-HTTP server exposing memory tools to Alexa+. |
 | **Wearable Bridge** | **Bee CLI & beemcp** | `@beeai/cli`, `beemcp` | Real-time audio stream and utterance ingestion from Bee wearable. |
 | **Frontend UI** | **Echo Show Ext-Apps** | HTML5, Vanilla CSS, JS | Multimodal touch UI for Echo Show (Peace of Mind, Rolodex, Briefings). |
 | **Local Store** | **SQLite + FTS5** | Python native (`sqlite3`) | Zero-latency local context store with full-text search indexing. |
 | **Data Validation** | **Pydantic V2** | `pydantic>=2.7` | Typed contracts for structured outputs (social entities, actions, reports). |
-| **Web Research** | **DuckDuckGo Search** | `ddgs`, `duckduckgo-search` | Autonomous web research tool for technical topics and lectures. |
+| **Web Research** | **DuckDuckGo Search** | `ddgs`, `duckduckgo-search` | Autonomous multi-tier web research tool with SSRF protection. |
 
 ---
 
-## 🤖 LLM Models (AWS Bedrock)
+## 🤖 LLM Models (AWS Bedrock & Bedrock Mantle Dual-Provider)
 
-| Model | Model ID | Purpose / Stage | Technical Rationale |
-| :--- | :--- | :--- | :--- |
-| **GPT-5.6 Luna** (Default) | `openai.gpt-5.6-luna` | Stage 1 (Gatekeeper) & Stage 3A/3B | Ultra-low latency ($<350\text{ ms}$), minimal cost, high accuracy in classification and structured output. |
-| **Claude 3.5 Haiku** | `anthropic.claude-3-5-haiku-20241022-v1:0` | Stage 1 Alternative (Gatekeeper) | Low latency, alternative Bedrock model for extraction. |
-| **Amazon Nova Micro** | `amazon.nova-micro-v1:0` | Stage 1 Alternative (Gatekeeper) | Native AWS ultra-light model, optimal for binary `noop` vs `signal` classification. |
-| **Claude 3.5 Sonnet** | `anthropic.claude-3-5-sonnet-20241022-v2:0` | Stage 3C (Deep Research & Briefing) | Advanced reasoning, complex document synthesis, and clean markdown generation. |
-| **Amazon Nova Pro** | `amazon.nova-pro-v1:0` | Stage 3C Alternative | Multimodal enterprise foundation model for deep technical analysis. |
+| Model | Model ID | Provider Route | Purpose / Stage | Technical Rationale |
+| :--- | :--- | :--- | :--- | :--- |
+| **NVIDIA Nemotron 3 Super 120B** | `nvidia.nemotron-super-3-120b` | `bedrock` (Native Converse) | All Stages (Evaluated & Verified) | State-of-the-art 120B model on Bedrock; 100% pass rate on live 25-scenario evaluation (0.95s screening, 1.1s action). |
+| **GPT-5.6 Luna** | `openai.gpt-5.6-luna` | `mantle` (OpenAI API) | Stage 1 (Gatekeeper) & Stage 3A/3B | Fast screening and deterministic extraction on Bedrock Mantle endpoint. |
+| **Claude 3.5 Haiku** | `anthropic.claude-3-5-haiku-20241022-v1:0` | `bedrock` (Native Converse) | Stage 1 Alternative (Gatekeeper) | Low latency, alternative Bedrock model for extraction. |
+| **Amazon Nova Micro** | `amazon.nova-micro-v1:0` | `bedrock` (Native Converse) | Stage 1 Alternative (Gatekeeper) | Native AWS ultra-light model, optimal for binary `noop` vs `signal` classification. |
+| **Claude 3.5 Sonnet** | `anthropic.claude-3-5-sonnet-20241022-v2:0` | `bedrock` (Native Converse) | Stage 3C (Deep Research & Briefing) | Advanced reasoning, complex document synthesis, and clean markdown generation. |
+| **Amazon Nova Pro** | `amazon.nova-pro-v1:0` | `bedrock` (Native Converse) | Stage 3C Alternative | Multimodal enterprise foundation model for deep technical analysis. |
 
 ---
 

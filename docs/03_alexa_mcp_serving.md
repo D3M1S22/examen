@@ -131,7 +131,7 @@ Returns a dual report of scheduled routines (completed vs pending vs overdue) an
 
 ---
 
-### 3. `query_social_contact` (Social Recall)
+### 4. `query_social_contact` (Social Recall)
 Recalls information on people met, corporate affiliations, and promises made.
 * **Tool Description:** *"Search the social interactions registry for contacts by name, company, or discussed topics."*
 * **Input Parameters:**
@@ -157,7 +157,7 @@ Recalls information on people met, corporate affiliations, and promises made.
 
 ---
 
-### 4. `get_topic_briefing` (Deep Meeting & Lecture Intelligence)
+### 5. `get_topic_briefing` (Deep Meeting & Lecture Intelligence)
 Fetches the autonomous briefing report generated following a meeting or academic lecture.
 * **Tool Description:** *"Retrieve executive technical briefing reports enriched with autonomous web research on discussed technologies, bugs, or study topics."*
 * **Input Parameters:**

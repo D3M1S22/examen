@@ -13,7 +13,7 @@ Judges for the **Bee Wearable AI** track and the **AWS Builder** mini-challenge 
 | **Cross-Device Orchestration** | Basic notification forwarded from smartwatch to phone. | **Bee Wearable + Echo Show (Alexa+):** Ambient passive capture on the go (Bee); multimodal voice and touch retrieval at home/office (Echo Show). |
 | **Ambient Context Capture** | Awkward wake-words required (*"Hey Bee, remember this..."*). | **Zero-shot ambient processing:** User speaks naturally. The semantic gatekeeper on Bedrock isolates signal without any forced activation phrase. |
 | **Advanced Facts & Insights** | Chronological list of raw audio transcripts. | **Autonomous Enrichment:** When complex topics or technical discussions arise, EXAMEN executes background web research and synthesizes an executive briefing. |
-| **AWS Builder Challenge ($5,000 + $5,000 credits)** | Generic API calls to a single third-party model. | Deep, structured utilization of **AWS Bedrock** with multi-model tiering (Haiku for screening, Sonnet for synthesis) and **AgentCore Runtime**. |
+| **AWS Builder Challenge ($5,000 + $5,000 credits)** | Generic API calls to a single third-party model. | Deep, structured utilization of **AWS Bedrock** and **Bedrock Mantle** with dual-provider switching, multi-model tiering (Haiku / Nova / Nemotron for screening, Sonnet for synthesis), and **AgentCore Runtime**. |
 
 ---
 
@@ -44,9 +44,9 @@ Judges for the **Bee Wearable AI** track and the **AWS Builder** mini-challenge 
 ### [0:35 - 1:15] Behind the Scenes: Bee, Bedrock & AgentCore
 * **Visual:** Close-up of the Bee wearable lapel microphone. Developer screen showing real-time `bee-cli` SSE stream.
 * On-screen pipeline telemetry:
-  1. *Gatekeeper (Claude 3.5 Haiku):* Filters out 95% of background chatter at zero cost.
+  1. *Gatekeeper (Claude 3.5 Haiku / Nemotron / Nova):* Filters out 95% of background chatter at zero cost.
   2. *Routing:* Dispatches qualified speech across Social, Action-State, and Deep Topic channels.
-* **Voiceover:** *"Powered by Bee's continuous audio stream, EXAMEN (Latin for 'swarm of bees' and 'careful examination') leverages AWS Bedrock with an ultra-efficient semantic gatekeeper. It identifies genuine signal, triggers the AgentCore state graph, and enriches data autonomously."*
+* **Voiceover:** *"Powered by Bee's continuous audio stream, EXAMEN (Latin for 'swarm of bees' and 'careful examination') leverages AWS Bedrock and Bedrock Mantle with an ultra-efficient semantic gatekeeper. It identifies genuine signal, triggers the AgentCore state graph, and enriches data autonomously."*
 
 ### [1:15 - 1:50] Scene 1: Social Recall (Relational Memory)
 * **Visual:** User runs into Dario 40 minutes later by the coffee machine. Glances at smartwatch/phone for 2 seconds.
@@ -69,8 +69,8 @@ Judges for the **Bee Wearable AI** track and the **AWS Builder** mini-challenge 
 * **Voiceover:** *"Zero anxiety, zero lost time. Certified actions with exact timestamps."*
 
 ### [2:50 - 3:00] Conclusion & Stack Recap
-* **Visual:** Summary slide with partner logos: **Bee Wearable AI + AWS Bedrock + AgentCore + Alexa+ MCP**.
-* **Voiceover:** *"EXAMEN transforms ambient listening into your augmented second brain. Built for AWS Bedrock and Alexa+."*
+* **Visual:** Summary slide with partner logos: **Bee Wearable AI + AWS Bedrock + Bedrock Mantle + AgentCore + Alexa+ MCP**.
+* **Voiceover:** *"EXAMEN transforms ambient listening into your augmented second brain. Built for AWS Bedrock, Bedrock Mantle, and Alexa+."*
 
 ---
 
@@ -79,20 +79,23 @@ Judges for the **Bee Wearable AI** track and the **AWS Builder** mini-challenge 
 ```
 Sprint 1 (Ingestion & Gatekeeper)
 ├── Configure Bee CLI environment & test SSE live stream with bee-cli
-├── Request AWS credits & configure Bedrock models (Haiku & Sonnet)
-└── Calibrate Gatekeeper prompt for >90% drop rate on irrelevant chit-chat
+├── Implement Dual-Provider Bedrock & Mantle model factory (SigV4 + Bearer)
+├── Calibrate Gatekeeper prompt for >90% drop rate on irrelevant chit-chat
+└── Inject dynamic scheduled tasks into gatekeeper screening context
 
 Sprint 2 (AgentCore Harness & Deep Research)
-├── Build LangGraph / AgentCore state graph with 3 specialized nodes
-├── Integrate autonomous Web Search tooling for Deep Topic channel
+├── Build LangGraph state graph with 3 specialized sub-agent nodes
+├── Implement Action-State verifier with automatic scheduled task resolution
+├── Integrate autonomous Web Search tooling for Deep Topic synthesis
 └── Implement local SQLite context store with full-text search (FTS5)
 
 Sprint 3 (Alexa+ MCP Server & Ext-Apps UI)
-├── Implement FastMCP streamable-HTTP server exposing 4 core tools
+├── Implement FastMCP streamable-HTTP server exposing 5 core tools
 ├── Test local voice interaction via Alexa+ CLI and Cloudflare Tunnel
 └── Develop interactive touch UI for Echo Show via ext-apps iframe SDK
 
 Sprint 4 (Polishing, Video Demo & Submission)
+├── Execute 25-scenario live evaluation benchmark (100% pass, sub-1-cent cost)
 ├── Conduct end-to-end integration test of video demo scenario
 ├── Record and produce 3-minute 1080p demo video (clean audio & subtitles)
 ├── Finalize GitHub documentation and Devpost submission narrative

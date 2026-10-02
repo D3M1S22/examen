@@ -4,19 +4,21 @@
 
 ---
 
-## 🧠 AWS Bedrock Model Tiering & Latency/Cost Strategy
+## 🧠 Dual-Provider Model Tiering & Latency/Cost Strategy
 
-The pipeline implements an intelligent **Multi-Model Tiering** pattern on AWS Bedrock to ensure sub-second responsiveness and cost-effective continuous operation:
+The pipeline implements an intelligent, provider-agnostic **Dual-Provider Model Tiering** pattern on AWS Bedrock via `src/core/models.py`:
+* **AWS Bedrock Native (Converse API):** High performance via SigV4 auth (`amazon.nova-*`, `anthropic.claude-*`, `nvidia.nemotron-*`).
+* **AWS Bedrock Mantle (OpenAI-compatible):** Seamless OpenAI SDK compatibility (`openai.gpt-5.6-luna`, `openai.gpt-5.6-terra`, etc.) via `https://bedrock-mantle.{region}.api.aws/openai/v1` with dynamic IAM token minting.
 
-| Pipeline Stage | Primary AWS Bedrock Model | Fallback AWS Model | Temperature | Target Latency |
-| :--- | :--- | :--- | :--- | :--- |
-| **Stage 1: Gatekeeper / Screening** | `openai.gpt-5.6-luna` (GPT-5.6 Luna) | `anthropic.claude-3-5-haiku-20241022-v1:0` | `0.0` | $< 350\text{ ms}$ |
-| **Stage 3A: Social Recall Extractor** | `openai.gpt-5.6-luna` / Haiku | `amazon.nova-lite-v1:0` | `0.0` | $< 500\text{ ms}$ |
-| **Stage 3B: Action-State Verifier** | `openai.gpt-5.6-luna` / Haiku | `amazon.nova-lite-v1:0` | `0.0` | $< 400\text{ ms}$ |
-| **Stage 3C: Deep Research & Briefing** | `anthropic.claude-3-5-sonnet-20241022-v2:0` | `amazon.nova-pro-v1:0` | `0.2` | $< 2500\text{ ms}$ |
+| Pipeline Stage | Provider Selection | Primary Foundation Model | Fallback AWS Model | Temperature | Measured Avg Latency |
+| :--- | :--- | :--- | :--- | :---: | :---: |
+| **Stage 1: Gatekeeper / Screening** | `GATEKEEPER_PROVIDER=bedrock\|mantle` | `nvidia.nemotron-super-3-120b` / `nova-micro` | `claude-3-5-haiku` / `gpt-5.6-luna` | `0.0` | **0.95s** |
+| **Stage 3A: Social Recall Extractor** | Inherits `GATEKEEPER_PROVIDER` | `nvidia.nemotron-super-3-120b` / `nova-lite` | `claude-3-5-haiku` / `gpt-5.6-luna` | `0.0` | **0.81s** |
+| **Stage 3B: Action-State Verifier** | Inherits `GATEKEEPER_PROVIDER` | `nvidia.nemotron-super-3-120b` / `nova-lite` | `claude-3-5-haiku` / `gpt-5.6-luna` | `0.0` | **1.13s** |
+| **Stage 3C: Deep Research & Briefing** | `REASONER_PROVIDER=bedrock\|mantle` | `nvidia.nemotron-super-3-120b` / `claude-3-5-sonnet` | `amazon.nova-pro-v1:0` | `0.2` | **23-39s** *(incl. web search)* |
 
-* **Why GPT-5.6 Luna for Screening:** Handles thousands of tokens per hour at minimal cost and ultra-low latency, dropping 90%+ of irrelevant background speech.
-* **Why Sonnet / Nova Pro for Stage 3C:** Activated exclusively when technical topics, bugs, architecture questions, or academic lectures are detected to analyze search results and synthesize deep markdown dossiers.
+* **Why Fast Tier for Screening & Extraction:** Sub-second response ($0.8\text{--}1.1\text{s}$) at ultra-low cost ($0.018\text{ cents per call}$), dropping 90%+ of irrelevant ambient chit-chat.
+* **Why Deep Reasoner for Stage 3C:** Activated exclusively when technical topics, bugs, architecture questions, or academic lectures are detected to analyze multi-source search results and synthesize deep markdown dossiers.
 
 ---
 
@@ -107,22 +109,13 @@ class BriefingReport(BaseModel):
 
 ```python
 from typing import TypedDict, Optional, List
-from langchain_aws import ChatBedrock
-from langgraph.graph import StateGraph, END
+from langgraph.graph import StateGraph, START, END
+from src.core.models import get_fast_model, get_reasoner_model
 from src.core.schemas import ExamenState, ChunkClassification, SocialEntity, VerifiedAction, TopicExtraction, BriefingReport
 
-# Initializing AWS Bedrock Clients
-llm_gatekeeper = ChatBedrock(
-    model_id="openai.gpt-5.6-luna",
-    region_name="us-east-1",
-    model_kwargs={"temperature": 0.0}
-)
-
-llm_reasoner = ChatBedrock(
-    model_id="anthropic.claude-3-5-sonnet-20241022-v2:0",
-    region_name="us-east-1",
-    model_kwargs={"temperature": 0.2}
-)
+# Initializing Dynamic Dual-Provider Bedrock & Mantle Models
+llm_fast = get_fast_model()       # Uses GATEKEEPER_PROVIDER (Bedrock Converse or Mantle OpenAI)
+llm_reasoner = get_reasoner_model() # Uses REASONER_PROVIDER (Bedrock Converse or Mantle OpenAI)
 ```
 
 ### Node Implementation Details
@@ -202,45 +195,70 @@ def node_persist(state: ExamenState) -> dict:
     return {}
 ```
 
-### Conditional State Graph Construction
+### Conditional State Graph Construction (`src/pipeline/graph.py`)
+
+The pipeline receives pre-screened, qualified chunks from Ingestion and uses conditional edges from `START` to dispatch to specialized nodes in parallel:
 
 ```python
-def router_dispatch(state: ExamenState):
-    cats = state.get("categories", ["noop"])
-    routes = []
-    if "social" in cats:
-        routes.append("extract_social")
-    if "action" in cats:
-        routes.append("extract_action")
-    if "deep_topic" in cats:
-        routes.append("topic_research")
-    return routes if routes else ["end"]
+def route_categories(state: ExamenState) -> List[str]:
+    """Conditional router: maps categorized signal to specialized nodes."""
+    categories = state.get("categories", [])
+    if not categories or "noop" in categories:
+        return [END]
+
+    targets = []
+    if "action" in categories:
+        targets.append("action_node")
+    if "social" in categories:
+        targets.append("social_node")
+    if "deep_topic" in categories:
+        targets.append("topic_node")
+
+    return targets if targets else [END]
 
 builder = StateGraph(ExamenState)
-builder.add_node("gatekeeper", node_gatekeeper)
-builder.add_node("extract_social", node_extract_social)
-builder.add_node("extract_action", node_extract_action)
-builder.add_node("topic_research", node_topic_research)
-builder.add_node("persist", node_persist)
+builder.add_node("action_node", node_extract_action)
+builder.add_node("social_node", node_extract_social)
+builder.add_node("topic_node", node_topic_research)
+builder.add_node("persist_node", node_persist)
 
-builder.set_entry_point("gatekeeper")
+# Route conditionally from START
 builder.add_conditional_edges(
-    "gatekeeper",
-    router_dispatch,
+    START,
+    route_categories,
     {
-        "extract_social": "extract_social",
-        "extract_action": "extract_action",
-        "topic_research": "topic_research",
-        "end": END
-    }
+        "action_node": "action_node",
+        "social_node": "social_node",
+        "topic_node": "topic_node",
+        END: END,
+    },
 )
 
-builder.add_edge("extract_social", "persist")
-builder.add_edge("extract_action", "persist")
-builder.add_edge("topic_research", "persist")
-builder.add_edge("persist", END)
+# All specialized branches converge at the persistence layer
+builder.add_edge("action_node", "persist_node")
+builder.add_edge("social_node", "persist_node")
+builder.add_edge("topic_node", "persist_node")
+builder.add_edge("persist_node", END)
 
-examen_agent = builder.compile()
+pipeline_graph = builder.compile()
+```
+
+### AWS Bedrock AgentCore Runtime Entrypoint (`src/pipeline/app.py`)
+
+```python
+from bedrock_agentcore.runtime import BedrockAgentCoreApp
+from src.pipeline.graph import pipeline_graph
+
+app = BedrockAgentCoreApp()
+
+@app.entrypoint
+def agent_invocation(payload: dict, context: Any = None) -> dict:
+    # Handles raw prompt fallback or pre-categorized ingestion chunks
+    ...
+    return pipeline_graph.invoke(state)
+
+if __name__ == "__main__":
+    app.run()
 ```
 
 ---

@@ -40,6 +40,7 @@ amazon_challenge/
 │   │   ├── __init__.py                   # Core entity exports
 │   │   ├── config.py                     # Centralized settings (Pydantic Settings & .env)
 │   │   ├── schemas.py                    # Typed Pydantic V2 contracts & ExamenState
+│   │   ├── models.py                     # Dual-provider LLM factory (Bedrock Converse & Mantle)
 │   │   └── storage/                      # Persistence abstraction layer (Repository Pattern)
 │   │       ├── __init__.py               # Factory get_storage_store()
 │   │       ├── base.py                   # AbstractContextStore interface
@@ -72,7 +73,7 @@ amazon_challenge/
 │   │
 │   ├── ingestion/                        # 🐝 [TARGET: Edge / Companion Ingestion Layer]
 │   │   ├── __init__.py
-│   │   ├── gatekeeper.py                 # Stage 1: Screening Gatekeeper (Fast Haiku/Luna + dynamic task injection)
+│   │   ├── gatekeeper.py                 # Stage 1: Screening Gatekeeper (Fast Haiku/Luna/Nemotron + dynamic task injection)
 │   │   ├── stream_convo.py               # Live SSE client connected to bee-cli (BeeClient)
 │   │   └── orchestrator.py               # Sliding window buffer & edge screening orchestrator
 │   │
@@ -82,18 +83,23 @@ amazon_challenge/
 │       ├── app.js                        # Frontend rendering logic and cards
 │       └── assets/                       # SVG icons and visual assets
 │
+├── scripts/                              # 📊 Benchmarking & Telemetry Tools
+│   └── run_live_benchmark.py             # 25-scenario evaluation runner with latency/token tracking
+│
 ├── deploy/                               # 🚀 Cloud Deployment & Automation Scripts
 │   ├── build_agentcore_bundle.sh         # Download arm64 wheels via uv and package code.zip
 │   ├── deploy_agentcore_runtime.py       # Register runtime on AWS via boto3 control-plane
 │   ├── deploy_ext_apps_s3.sh             # Sync web_ui to S3 + invalidate CloudFront CDN
 │   └── alexa_addon.json                  # Manifest registration for Alexa+ Developer Console
 │
-├── tests/                                # 🧪 Test Suite & Validation
+├── tests/                                # 🧪 Test Suite & Validation (66 tests, 100% pass)
 │   ├── fixtures/                         # Mock audio transcript datasets
-│   ├── test_storage.py                   # Unit tests on persistence layer (100% pass)
-│   ├── test_gatekeeper.py                # Screening drop-rate test (>90% drop)
-│   ├── test_langgraph_pipeline.py        # End-to-end graph test with Bedrock
-│   └── test_mcp_server.py                # JSON-RPC tests for Alexa+ tools
+│   ├── test_storage.py                   # Unit tests on persistence layer (SQLite & FTS5)
+│   ├── test_gatekeeper.py                # Screening drop-rate (>90% drop) & task matching
+│   ├── test_langgraph_pipeline.py        # End-to-end graph test with Bedrock & state persistence
+│   ├── test_mcp_server.py                # JSON-RPC tests for 5 Alexa+ tools
+│   ├── test_model_factory.py             # Dual-provider Bedrock vs Mantle model unit tests
+│   └── test_scheduled_tasks.py           # Scheduled task matching & creation tests
 │
 ├── pyproject.toml                        # Python build config & pytest setup
 ├── requirements.txt                      # Unified Python dependencies
@@ -108,50 +114,56 @@ amazon_challenge/
 ## 🔍 Detailed Module Responsibilities
 
 ### 1. `src/core/` (Shared Core)
-* **`config.py`:** Uses `pydantic-settings` to parse environment variables with safe defaults (default: region `us-east-1`, Claude 3.5 Haiku/Sonnet models, SQLite `examen.db`, MCP port 8000).
+* **`config.py`:** Uses `pydantic-settings` to parse environment variables with safe defaults (provider selection `bedrock` vs `mantle`, region `us-east-1`, Claude/Nova/Nemotron models, SQLite `examen.db`, MCP port 8000).
 * **`schemas.py`:** Strictly defines Pydantic V2 models:
-  - `ChunkClassification`: Gatekeeper compact evaluation (`categories`, `confidence`, `summary_hint`).
+  - `ChunkClassification`: Gatekeeper compact evaluation (`categories`, `confidence`, `summary_hint`, `matched_scheduled_task_id`).
+  - `PlannedTask`: Scheduled routine and domestic safety tasks with recurrence and tracking status.
   - `SocialEntity`: Contacts, corporate roles, commitments, and topic tags.
-  - `VerifiedAction`: Domestic safety and routine tasks with ISO timestamps and confidence scores $\ge 0.80$.
+  - `VerifiedAction`: Domestic safety and routine tasks with ISO timestamps, confidence scores $\ge 0.80$, and task resolution links.
   - `TopicExtraction` & `BriefingReport`: Technical subjects and synthesized markdown briefings with web sources.
   - `ExamenState`: `TypedDict` for the mutable LangGraph state.
+* **`models.py`:** Dual-provider LLM factory (`get_chat_model`) providing runtime model switching between:
+  - **Native Bedrock Converse API (`provider="bedrock"`):** Uses `ChatBedrockConverse` with IAM SigV4 authentication.
+  - **Bedrock Mantle Endpoint (`provider="mantle"`):** Uses `ChatOpenAI` routed to `bedrock-mantle.{region}.api.aws/openai/v1` with automatic bearer token generation from IAM credentials.
 * **`storage/`:**
   - `base.py`: Abstract class `AbstractContextStore` enforcing data contract operations.
-  - `sqlite_store.py`: Native Python implementation with virtual FTS5 tables for sub-5ms full-text lookups.
+  - `sqlite_store.py`: Native Python implementation with virtual FTS5 tables for sub-5ms full-text lookups and thread safety.
 
 ---
 
 ### 2. `src/pipeline/` (AWS Bedrock AgentCore Runtime)
 * **`app.py`:** Instantiates `BedrockAgentCoreApp` and defines the `@app.entrypoint`. Receives audio chunks via `invoke_agent_runtime` and triggers the state graph.
-* **`graph.py`:** Builds the LangGraph `StateGraph`, setting Gatekeeper as the entry point and orchestrating conditional edges to specialized sub-agents.
+* **`graph.py`:** Builds the pure LangGraph `StateGraph`, setting Gatekeeper as the entry point and orchestrating conditional edges to specialized sub-agents.
 * **`nodes/`:**
-  - `gatekeeper.py`: Evaluates utterances via Claude 3.5 Haiku / Nova Micro. Drops irrelevant talk as `noop`.
   - `social.py`: Extracts contacts and bilateral promises, deduplicating known individuals.
-  - `action_state.py`: Verifies completed actions, filtering out doubts or future intents.
-  - `topic_research.py`: Identifies tech topics, queries `web_search.py`, and synthesizes reports with Claude 3.5 Sonnet.
+  - `action_state.py`: Verifies completed actions, resolving planned tasks and filtering out doubts.
+  - `topic_research.py`: Identifies tech topics, queries `web_search.py`, and synthesizes reports with reasoning models.
+  - `persist.py`: Persists extracted actions, social contacts, and topic dossiers into storage.
 
 ---
 
 ### 3. `src/serving/` (Alexa+ Serving Layer)
 * **`mcp_server.py`:** Implements an MCP server via `FastMCP` over `streamable-http` (compatible with local hosting and AgentCore native MCP runtime).
-* **`tools/`:** Exposes the 4 tools callable by Alexa+:
+* **`tools/`:** Exposes the 5 tools callable by Alexa+:
+  - `create_planned_task`: Registers a planned domestic safety check or daily routine to watch for in ambient speech.
   - `verify_action_status`: Inquires whether an action was completed (*"Did I unplug the clothes iron?"*).
-  - `get_daily_actions_recap`: Returns the chronological timeline of actions performed today.
+  - `get_daily_actions_recap`: Returns the chronological checklist of planned routines and spontaneous actions.
   - `query_social_contact`: Recalls professional roles and commitments made with someone.
   - `get_topic_briefing`: Fetches the executive technical briefing on recent meetings or lectures.
 
 ---
 
 ### 4. `src/ingestion/` (Edge / Companion Bridge)
-* **`bee_stream_bridge.py`:** Subscribes to the `bee-cli` Server-Sent Events stream (`new-utterance`), aggregating transcribed chunks in a 30–45s sliding window with a 5s overlap.
-* **`mock_feeder.py`:** Simulates realistic spoken dialogue during offline development and demo recording.
+* **`gatekeeper.py`:** Fast screening gatekeeper with dynamic planned task injection, capable of dropping >90% of ambient banter at sub-second latency.
+* **`stream_convo.py`:** Subscribes to the `bee-cli` Server-Sent Events stream (`new-utterance`), aggregating transcribed chunks in a sliding window.
+* **`orchestrator.py`:** Orchestrates edge audio buffer sliding windows and feeds the pipeline.
 
 ---
 
 ### 5. `src/web_ui/` (Echo Show Ext-Apps)
 * Responsive web application designed for touch displays on **Echo Show (8, 10, 15)**.
 * Embedded in the sandboxed Alexa Ext-Apps iframe over HTTPS via CloudFront.
-* Displays verified peace-of-mind badges, social rolodex cards, and scrollable research dossiers.
+* Displays verified peace-of-mind badges, daily routine checklists, social rolodex cards, and scrollable research dossiers.
 
 ---
 
@@ -163,12 +175,12 @@ uv venv
 source .venv/bin/activate
 uv pip install -r requirements.txt
 
-# 2. Run test suite
+# 2. Run test suite (66 unit & integration tests)
 pytest
 
-# 3. Start Alexa+ MCP Server (port 8000)
-python -m src.serving.mcp_server
+# 3. Run live evaluation benchmark (25 real-world scenarios)
+python scripts/run_live_benchmark.py
 
-# 4. Ingest mock audio stream
-python -m src.ingestion.mock_feeder --scenario morning_routine
+# 4. Start Alexa+ MCP Server (port 8000)
+python -m src.serving.mcp_server
 ```
