@@ -55,6 +55,7 @@ def get_chat_model(
             aws_access_key_id=settings.aws_access_key_id,
             aws_secret_access_key=settings.aws_secret_access_key,
             aws_session_token=settings.aws_session_token,
+            disable_streaming=True,
         )
     else:
         raise ValueError(f"Unsupported provider '{provider}'. Must be 'bedrock' or 'mantle'.")
