@@ -75,6 +75,7 @@ class BeeClient(Debug):
                     
                     try:
                         data = json.loads(line)
+                        self.debug(f"Received data: {data}")
                         if data.get("type") == "new-utterance":
                             text = data.get("utterance", {}).get("text", "")
                             if text:

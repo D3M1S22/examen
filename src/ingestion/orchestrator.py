@@ -4,6 +4,12 @@ import argparse
 import signal
 from typing import Optional, List
 
+import sys
+from pathlib import Path
+
+# Add project root (two levels up from src/ingestion/) to sys.path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+
 from src.ingestion.stream_convo import BeeClient
 from src.ingestion.debug import Debug
 from src.ingestion.gatekeeper import aclassify_chunk, is_noop
