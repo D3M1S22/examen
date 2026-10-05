@@ -92,14 +92,16 @@ amazon_challenge/
 │   ├── deploy_ext_apps_s3.sh             # Sync web_ui to S3 + invalidate CloudFront CDN
 │   └── alexa_addon.json                  # Manifest registration for Alexa+ Developer Console
 │
-├── tests/                                # 🧪 Test Suite & Validation (66 tests, 100% pass)
+├── tests/                                # 🧪 Test Suite & Validation (85 tests, 100% pass)
 │   ├── fixtures/                         # Mock audio transcript datasets
 │   ├── test_storage.py                   # Unit tests on persistence layer (SQLite & FTS5)
 │   ├── test_gatekeeper.py                # Screening drop-rate (>90% drop) & task matching
 │   ├── test_langgraph_pipeline.py        # End-to-end graph test with Bedrock & state persistence
-│   ├── test_mcp_server.py                # JSON-RPC tests for 5 Alexa+ tools
+│   ├── test_mcp_server.py                # 19 tests: 5 MCP tools, REST APIs & static UI
 │   ├── test_model_factory.py             # Dual-provider Bedrock vs Mantle model unit tests
-│   └── test_scheduled_tasks.py           # Scheduled task matching & creation tests
+│   ├── test_pipeline_nodes.py            # Unit tests for social, action, and topic sub-agents
+│   ├── test_ingestion_orchestrator.py    # Sliding window audio buffer tests
+│   └── test_web_search.py                # Autonomous DDGS search tool tests
 │
 ├── pyproject.toml                        # Python build config & pytest setup
 ├── requirements.txt                      # Unified Python dependencies
@@ -175,12 +177,12 @@ uv venv
 source .venv/bin/activate
 uv pip install -r requirements.txt
 
-# 2. Run test suite (66 unit & integration tests)
+# 2. Run test suite (85 unit & integration tests)
 pytest
 
 # 3. Run live evaluation benchmark (25 real-world scenarios)
 python scripts/run_live_benchmark.py
 
-# 4. Start Alexa+ MCP Server (port 8000)
+# 4. Start Unified FastMCP Server & Web Dashboard (port 8000)
 python -m src.serving.mcp_server
 ```

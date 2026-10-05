@@ -34,6 +34,16 @@ class AbstractContextStore(ABC):
         pass
 
     @abstractmethod
+    def update_planned_task(self, task: PlannedTask) -> bool:
+        """Update an existing planned routine task. Returns True if updated."""
+        pass
+
+    @abstractmethod
+    def delete_planned_task(self, task_id: str) -> bool:
+        """Delete a planned routine task by ID. Returns True if deleted."""
+        pass
+
+    @abstractmethod
     def match_and_resolve_task(self, action: VerifiedAction) -> Optional[PlannedTask]:
         """Match an incoming verified action against pending tasks and resolve the match."""
         pass
@@ -79,6 +89,11 @@ class AbstractContextStore(ABC):
     @abstractmethod
     def get_topic_briefing(self, query: Optional[str] = None) -> Optional[BriefingReport]:
         """Get the latest or matching briefing report."""
+        pass
+
+    @abstractmethod
+    def list_topic_briefings(self, limit: int = 10) -> List[BriefingReport]:
+        """List recently generated briefing reports ordered by created_at descending."""
         pass
 
     @abstractmethod

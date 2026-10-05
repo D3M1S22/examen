@@ -1,0 +1,352 @@
+"""Comprehensive unit and integration tests for the EXAMEN Serving & MCP layer.
+
+Tests:
+1. All 5 MCP tools (create_planned_task, verify_action_status, get_daily_actions_recap,
+   query_social_contact, get_topic_briefing).
+2. Starlette REST API endpoints (/api/status, /api/actions, /api/routines, /api/contacts, /api/topics).
+3. Web UI static files serving (/ and /ext-app).
+"""
+
+import os
+import tempfile
+import pytest
+from datetime import datetime
+from starlette.testclient import TestClient
+
+from src.core.schemas import BriefingReport, PlannedTask, SocialEntity, VerifiedAction
+from src.core.storage.sqlite_store import SQLiteContextStore
+from src.serving.mcp_server import create_app
+from src.serving.tools.action_tools import (
+    execute_create_planned_task,
+    execute_get_daily_actions_recap,
+    execute_verify_action_status,
+    _format_elapsed_time,
+)
+from src.serving.tools.social_tools import execute_query_social_contact
+from src.serving.tools.topic_tools import execute_get_topic_briefing
+
+
+@pytest.fixture
+def temp_store():
+    """Provides a fresh isolated SQLiteContextStore for serving tests."""
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    store = SQLiteContextStore(db_path=db_path)
+    yield store
+    store.close()
+    if os.path.exists(db_path):
+        os.remove(db_path)
+
+
+class TestActionServingTools:
+    """Tests for domestic safety, action verifications, and routine tools."""
+
+    def test_create_planned_task(self, temp_store):
+        res = execute_create_planned_task(
+            title="Unplug clothes iron",
+            domain="safety",
+            scheduled_time="08:30",
+            recurrence="daily",
+            store=temp_store,
+        )
+        assert res["status"] == "scheduled"
+        assert res["title"] == "Unplug clothes iron"
+        assert res["domain"] == "safety"
+        assert res["scheduled_time"] == "08:30"
+        assert res["tracking_status"] == "watching_ambient_stream"
+
+        # Verify persisted in store
+        task = temp_store.get_planned_task(res["task_id"])
+        assert task is not None
+        assert task.status == "pending"
+
+    def test_verify_action_status_found(self, temp_store):
+        now_iso = datetime.now().isoformat()
+        action = VerifiedAction(
+            action_type="iron_unplugged",
+            domain="safety",
+            confidence=0.96,
+            raw_statement="I unplugged the clothes iron before leaving",
+            timestamp=now_iso,
+        )
+        temp_store.save_action(action)
+
+        res = execute_verify_action_status(action_query="iron", store=temp_store)
+        assert res["status"] == "verified"
+        assert res["action_type"] == "iron_unplugged"
+        assert res["confidence"] == 0.96
+        assert res["ui_card_type"] == "ACTION_VERIFIED_BADGE"
+        assert "just now" in res["elapsed_time_human"].lower() or "ago" in res["elapsed_time_human"].lower()
+        assert "spoken_summary" in res
+
+    def test_verify_action_status_not_found(self, temp_store):
+        res = execute_verify_action_status(action_query="spacecraft_launched", store=temp_store)
+        assert res["status"] == "unverified"
+        assert res["ui_card_type"] == "ACTION_UNVERIFIED_BADGE"
+        assert "No verified completion" in res["message"]
+
+    def test_get_daily_actions_recap(self, temp_store):
+        # 1. Add planned task
+        task = PlannedTask(title="Lock front door", domain="safety", status="pending")
+        task_id = temp_store.save_planned_task(task)
+
+        # 2. Add spontaneous action
+        action = VerifiedAction(
+            action_type="merged_pr",
+            domain="work_task",
+            confidence=0.92,
+            raw_statement="Merged pull request #42",
+            timestamp=datetime.now().isoformat(),
+        )
+        temp_store.save_action(action)
+
+        recap = execute_get_daily_actions_recap(store=temp_store)
+        assert recap["summary"]["planned_total"] == 1
+        assert recap["summary"]["planned_pending"] == 1
+        assert recap["summary"]["planned_completed"] == 0
+        assert recap["summary"]["spontaneous_actions"] == 1
+        assert len(recap["planned_routines"]) == 1
+        assert len(recap["spontaneous_actions"]) == 1
+
+        # Now complete the planned task
+        temp_store.complete_planned_task(task_id=task_id, verified_action_id="act-123")
+        recap_updated = execute_get_daily_actions_recap(store=temp_store)
+        assert recap_updated["summary"]["planned_completed"] == 1
+        assert recap_updated["summary"]["planned_pending"] == 0
+
+    def test_format_elapsed_time(self):
+        now_iso = datetime.now().isoformat()
+        assert _format_elapsed_time(now_iso) == "just now"
+        # Test malformed
+        assert _format_elapsed_time("not-a-date") == "not-a-date"
+
+
+class TestSocialServingTools:
+    """Tests for relational memory and social contact tools."""
+
+    def test_query_social_contact_found(self, temp_store):
+        contact = SocialEntity(
+            person_name="Marco Rossi",
+            company_or_role="Tech Lead @ Acme Corp",
+            contact_info="marco@acme.com",
+            commitments=["Send architecture link", "Schedule call for Friday"],
+            key_topics=["Bedrock", "AgentCore", "AI"],
+            timestamp="2026-10-01T10:30:00",
+        )
+        temp_store.save_social_contact(contact)
+
+        res = execute_query_social_contact(name_or_query="Marco", store=temp_store)
+        assert res["found"] is True
+        assert res["contact"]["name"] == "Marco Rossi"
+        assert res["contact"]["company_or_role"] == "Tech Lead @ Acme Corp"
+        assert len(res["contact"]["commitments"]) == 2
+        assert res["ui_card_type"] == "SOCIAL_PROFILE_CARD"
+        assert "Marco Rossi" in res["spoken_summary"]
+
+    def test_query_social_contact_not_found(self, temp_store):
+        res = execute_query_social_contact(name_or_query="NonExistentPerson", store=temp_store)
+        assert res["found"] is False
+        assert res["ui_card_type"] == "SOCIAL_NOT_FOUND"
+        assert "No social contact found" in res["message"]
+
+
+class TestTopicServingTools:
+    """Tests for synthesized technical briefing tools."""
+
+    def test_get_topic_briefing_found(self, temp_store):
+        briefing = BriefingReport(
+            topic_title="AWS Bedrock AgentCore Orchestration",
+            context_type="tech_stack",
+            executive_summary=[
+                "AgentCore hosts serverless microVM runtimes on Graviton.",
+                "Supports state persistence and native MCP protocol.",
+            ],
+            web_sources=["https://docs.aws.amazon.com/bedrock", "https://github.com/awslabs/bedrock-agentcore"],
+            action_items=["Setup IAM execution role", "Test gatekeeper screening latency"],
+            deep_dive_markdown="# Deep Dive on AgentCore\n\nFull architecture analysis...",
+            created_at=datetime.now().isoformat(),
+        )
+        temp_store.save_topic_briefing(briefing)
+
+        res = execute_get_topic_briefing(topic_query="AgentCore", store=temp_store)
+        assert res["found"] is True
+        assert res["topic_title"] == "AWS Bedrock AgentCore Orchestration"
+        assert len(res["executive_summary"]) == 2
+        assert len(res["web_sources"]) == 2
+        assert res["ui_card_type"] == "DEEP_BRIEFING_VIEWER"
+        assert "spoken_summary" in res
+
+    def test_get_topic_briefing_latest(self, temp_store):
+        b1 = BriefingReport(
+            topic_title="Early Topic",
+            context_type="tech_stack",
+            executive_summary=["First"],
+            created_at="2026-10-01T08:00:00",
+        )
+        b2 = BriefingReport(
+            topic_title="Latest Topic",
+            context_type="tech_stack",
+            executive_summary=["Second"],
+            created_at="2026-10-02T10:00:00",
+        )
+        temp_store.save_topic_briefing(b1)
+        temp_store.save_topic_briefing(b2)
+
+        res = execute_get_topic_briefing(topic_query=None, store=temp_store)
+        assert res["found"] is True
+        assert res["topic_title"] == "Latest Topic"
+
+    def test_get_topic_briefing_not_found(self, temp_store):
+        res = execute_get_topic_briefing(topic_query="QuantumAntigravityTheory", store=temp_store)
+        assert res["found"] is False
+        assert res["ui_card_type"] == "BRIEFING_NOT_FOUND"
+
+
+class TestServerRestApiAndWebUi:
+    """Tests for the Starlette app endpoints and static web UI."""
+
+    @pytest.fixture
+    def client(self):
+        app = create_app()
+        return TestClient(app)
+
+    def test_api_status(self, client):
+        res = client.get("/api/status")
+        assert res.status_code == 200
+        data = res.json()
+        assert data["status"] == "online"
+        assert "config" in data
+        assert "stats" in data
+        assert "gatekeeper_provider" in data["config"]
+
+    def test_api_actions(self, client):
+        res = client.get("/api/actions")
+        assert res.status_code == 200
+        data = res.json()
+        assert "actions" in data
+        assert isinstance(data["actions"], list)
+
+    def test_api_routines_lifecycle(self, client):
+        # Create a planned routine
+        post_res = client.post("/api/routines", json={
+            "title": "Evening blood pressure medication",
+            "domain": "routine",
+            "scheduled_time": "21:00",
+            "recurrence": "daily",
+        })
+        assert post_res.status_code == 201
+        created = post_res.json()
+        assert created["success"] is True
+        assert created["title"] == "Evening blood pressure medication"
+
+        # List planned routines
+        get_res = client.get("/api/routines")
+        assert get_res.status_code == 200
+        tasks = get_res.json()["tasks"]
+        assert any(t["title"] == "Evening blood pressure medication" for t in tasks)
+
+    def test_api_routines_invalid(self, client):
+        res = client.post("/api/routines", json={"domain": "safety"})
+        assert res.status_code == 400
+
+    def test_api_contacts(self, client):
+        res = client.get("/api/contacts")
+        assert res.status_code == 200
+        data = res.json()
+        assert "contacts" in data
+
+    def test_api_topics(self, client):
+        res = client.get("/api/topics")
+        assert res.status_code == 200
+        data = res.json()
+        assert "topics" in data
+
+    def test_web_ui_root(self, client):
+        res = client.get("/")
+        assert res.status_code == 200
+        assert "EXAMEN" in res.text
+        assert "Ambient Intelligence" in res.text
+        assert "actions-timeline" in res.text
+        assert "btn-view-timeline" in res.text
+        assert "edit-task-drawer" in res.text
+
+    def test_web_ui_ext_app(self, client):
+        res = client.get("/ext-app/")
+        assert res.status_code == 200
+        assert "EXAMEN" in res.text
+        assert "actions-timeline" in res.text
+
+    def test_web_ui_css_and_js(self, client):
+        css_res = client.get("/styles.css")
+        assert css_res.status_code == 200
+        assert "app-layout" in css_res.text
+        assert "actions-timeline" in css_res.text
+        assert "timeline-pin" in css_res.text
+
+        js_res = client.get("/app.js")
+        assert js_res.status_code == 200
+        assert "fetchStatus" in js_res.text
+        assert "initSSE" in js_res.text
+        assert "renderTimeline" in js_res.text
+
+    def test_api_routines_update_and_delete(self, client):
+        # 1. Create a task
+        create_res = client.post("/api/routines", json={
+            "title": "Initial Task",
+            "domain": "routine",
+            "scheduled_time": "08:00",
+            "recurrence": "daily",
+        })
+        assert create_res.status_code == 201
+        task_id = create_res.json()["task_id"]
+
+        # 2. Update task
+        update_res = client.put(f"/api/routines/{task_id}", json={
+            "title": "Renamed Task",
+            "domain": "safety",
+            "scheduled_time": "08:45",
+            "recurrence": "weekdays",
+            "status": "pending",
+        })
+        assert update_res.status_code == 200
+        updated = update_res.json()["task"]
+        assert updated["title"] == "Renamed Task"
+        assert updated["domain"] == "safety"
+        assert updated["scheduled_time"] == "08:45"
+
+        # 3. Delete task
+        delete_res = client.delete(f"/api/routines/{task_id}")
+        assert delete_res.status_code == 200
+        assert delete_res.json()["deleted_id"] == task_id
+
+        # 4. Updating deleted task returns 404
+        assert client.put(f"/api/routines/{task_id}", json={"title": "Test"}).status_code == 404
+
+    def test_api_routines_toggle(self, client):
+        # Create a task
+        create_res = client.post("/api/routines", json={
+            "title": "Toggle Me",
+            "domain": "safety",
+        })
+        task_id = create_res.json()["task_id"]
+
+        # Toggle to completed
+        t1 = client.post(f"/api/routines/{task_id}/toggle")
+        assert t1.status_code == 200
+        assert t1.json()["task"]["status"] == "completed"
+        assert t1.json()["task"]["completed_at"] is not None
+
+        # Toggle back to pending
+        t2 = client.post(f"/api/routines/{task_id}/toggle")
+        assert t2.status_code == 200
+        assert t2.json()["task"]["status"] == "pending"
+        assert t2.json()["task"]["completed_at"] is None
+
+        # Cleanup
+        client.delete(f"/api/routines/{task_id}")
+
+    def test_api_events_sse(self, client):
+        res = client.get("/api/events?limit=1")
+        assert res.status_code == 200
+        assert "text/event-stream" in res.headers["content-type"]
+        assert "connected" in res.text

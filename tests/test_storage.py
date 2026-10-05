@@ -127,3 +127,35 @@ def test_planned_task_lifecycle(temp_store):
     assert len(completed) == 1
     assert completed[0].id == task_id
 
+
+def test_planned_task_update_and_delete(temp_store):
+    task = PlannedTask(
+        title="Original Title",
+        domain="routine",
+        scheduled_time="09:00",
+        recurrence="none",
+        status="pending",
+    )
+    task_id = temp_store.save_planned_task(task)
+    assert task_id is not None
+
+    # Update task
+    task.title = "Updated Title"
+    task.scheduled_time = "10:30"
+    task.domain = "safety"
+    updated = temp_store.update_planned_task(task)
+    assert updated is True
+
+    fetched = temp_store.get_planned_task(task_id)
+    assert fetched.title == "Updated Title"
+    assert fetched.scheduled_time == "10:30"
+    assert fetched.domain == "safety"
+
+    # Delete task
+    deleted = temp_store.delete_planned_task(task_id)
+    assert deleted is True
+    assert temp_store.get_planned_task(task_id) is None
+
+    # Deleting non-existent task returns False
+    assert temp_store.delete_planned_task("non-existent-id") is False
+

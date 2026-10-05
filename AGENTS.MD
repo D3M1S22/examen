@@ -164,16 +164,19 @@ Whenever you encounter a non-obvious bug, dependency incompatibility, or tricky 
    * ✅ Integrated Bedrock AgentCore Runtime entrypoint in `src/pipeline/app.py` (`@app.entrypoint`).
    * ✅ Dual-Provider Engine: Native Bedrock Converse API + Bedrock Mantle OpenAI-compatible API (`src/core/models.py`).
    * ✅ Comprehensive Live Evaluation Benchmark (`scripts/run_live_benchmark.py`): 25/25 scenarios passed (100%), average 3.5s latency, sub-1-cent cost on `nvidia.nemotron-super-3-120b`.
-2. **Serving Layer (`src/serving/`) — [NEXT PRIORITY]:**
-   * Implement FastMCP server in `src/serving/mcp_server.py` exposing:
+2. **Serving Layer (`src/serving/`) — [COMPLETED & VERIFIED]:**
+   * ✅ Implemented FastMCP server in `src/serving/mcp_server.py` with Starlette ASGI support.
+   * ✅ Implemented 5 exposed MCP tools in `src/serving/tools/`:
      * `create_planned_task` (for scheduling domestic/routine checks)
      * `verify_action_status` (for peace of mind queries like "did I unplug the iron?")
      * `get_daily_actions_recap`
      * `query_social_contact`
      * `get_topic_briefing`
-3. **Frontend UI & Alexa+ Add-On (`src/web_ui/` & `deploy/`):**
-   * Build modern multimodal touch cards for Echo Show (ext-apps).
-   * Register `alexa_addon.json` and configure streamable-HTTP endpoints.
+   * ✅ Exposes REST telemetry endpoints (`/api/status`, `/api/actions`, `/api/routines`, `/api/contacts`, `/api/topics`, `/api/simulate`).
+3. **Frontend UI & Alexa+ Add-On (`src/web_ui/` & `deploy/`) — [COMPLETED & VERIFIED]:**
+   * ✅ Built modern multimodal touch dashboard for Echo Show (ext-apps) and desktop/mobile in `src/web_ui/` (`index.html`, `styles.css`, `app.js`).
+   * ✅ Implemented Peace of Mind Hero banner, Daily Routines Checklist with live scheduling, Social Rolodex cards, Topic Dossiers viewer, and Ambient Audio Stream Simulator.
+   * ✅ 85 unit & integration tests passing (100% test suite).
 4. **Ingestion & Demo Bridge (`src/ingestion/`):**
    * Build `mock_feeder.py` simulating hackathon demo scenarios.
    * Live Bee Wearable hardware integration via `stream_convo.py`.

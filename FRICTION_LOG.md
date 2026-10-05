@@ -47,3 +47,9 @@ Whenever a friction point or roadblock is encountered during development, docume
 * **Friction Encountered:** Pydantic emitted deprecation warnings: `PydanticDeprecatedSince20: Support for class-based 'config' is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. in bedrock_agentcore/runtime/context.py:17`.
 * **Workaround / Resolution:** Documented warning in test runner; internal schemas in EXAMEN strictly use Pydantic V2 `model_config = ConfigDict(...)`.
 * **Platform Feedback:** Update `bedrock-agentcore` to use modern Pydantic V2 `ConfigDict` across all runtime context classes.
+
+### [2026-10-05] - FastMCP Tool Schema Inspection on Python Dependency Injection Types
+* **Context:** Exposing MCP tools using `@mcp.tool()` in FastMCP.
+* **Friction Encountered:** FastMCP inspects Python type hints on decorated tool functions to automatically generate JSON schema definitions for LLMs via Pydantic. When optional internal dependency objects (such as `store: Optional[AbstractContextStore] = None`) were present in the function signature, Pydantic raised `PydanticInvalidForJsonSchema: Cannot generate a JsonSchema for core_schema.IsInstanceSchema (<class 'AbstractContextStore'>)`, crashing tool registration.
+* **Workaround / Resolution:** Decoupled internal logic functions (`execute_create_planned_task`, `execute_verify_action_status`) from public tool signatures (`create_planned_task`, `verify_action_status`). Public signatures only expose client parameters (strings, ints, optional scalars) suitable for Alexa+ and LLM function calling, resolving internal services via singleton factories.
+* **Platform Feedback:** `FastMCP` should provide an option or parameter marker (e.g. `Depends()` or `exclude_from_schema=True`) to allow internal dependency injection without exposing internal service classes in the generated MCP JSON schema.

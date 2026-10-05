@@ -105,6 +105,24 @@ The engine underwent a rigorous 25-scenario live evaluation against **NVIDIA Nem
 
 ---
 
+## 🚀 Quickstart: Running Serving & Live Dashboard
+
+```bash
+# 1. Setup virtual environment
+source .venv/bin/activate
+
+# 2. Run complete test suite (85 unit & integration tests, 100% pass)
+pytest
+
+# 3. Launch Unified FastMCP Server & Echo Show Web Dashboard (port 8000)
+python -m src.serving.mcp_server
+```
+
+- **Web Dashboard & Echo Show Ext-App:** Open [http://localhost:8000/](http://localhost:8000/) or [http://localhost:8000/ext-app/](http://localhost:8000/ext-app/) to monitor verified Peace of Mind actions, daily routine checklists, social rolodex cards, and run ambient audio simulations.
+- **Alexa+ MCP Endpoint:** Connect any MCP-compliant assistant to `http://localhost:8000/mcp`.
+
+---
+
 ## 🏆 Hackathon Alignment & Target Awards
 
 | Track / Challenge | How EXAMEN Maximizes Score |

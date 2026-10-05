@@ -201,6 +201,36 @@ class SQLiteContextStore(AbstractContextStore):
             conn.commit()
             return cursor.rowcount > 0
 
+    def update_planned_task(self, task: PlannedTask) -> bool:
+        if not task.id:
+            return False
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE planned_tasks
+                SET title = ?, domain = ?, scheduled_time = ?, recurrence = ?,
+                    status = ?, completed_at = ?, verified_action_id = ?
+                WHERE id = ?
+            """, (
+                task.title.strip(),
+                task.domain,
+                task.scheduled_time,
+                task.recurrence,
+                task.status,
+                task.completed_at,
+                task.verified_action_id,
+                task.id,
+            ))
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def delete_planned_task(self, task_id: str) -> bool:
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM planned_tasks WHERE id = ?", (task_id,))
+            conn.commit()
+            return cursor.rowcount > 0
+
     def match_and_resolve_task(self, action: VerifiedAction) -> Optional[PlannedTask]:
         pending_tasks = self.list_planned_tasks(status="pending")
         if not pending_tasks:
@@ -457,6 +487,31 @@ class SQLiteContextStore(AbstractContextStore):
                     created_at=row["created_at"],
                 )
         return None
+
+    def list_topic_briefings(self, limit: int = 10) -> List[BriefingReport]:
+        results = []
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            rows = cursor.execute(
+                "SELECT * FROM topic_briefings ORDER BY created_at DESC LIMIT ?", (limit,)
+            ).fetchall()
+            for row in rows:
+                exec_summary = json.loads(row["executive_summary_json"]) if row["executive_summary_json"] else []
+                sources = json.loads(row["web_sources_json"]) if row["web_sources_json"] else []
+                items = json.loads(row["action_items_json"]) if row["action_items_json"] else []
+                results.append(
+                    BriefingReport(
+                        id=row["id"],
+                        topic_title=row["topic_title"],
+                        context_type=row["context_type"],
+                        executive_summary=exec_summary,
+                        deep_dive_markdown=row["deep_dive_markdown"] or "",
+                        web_sources=sources,
+                        action_items=items,
+                        created_at=row["created_at"],
+                    )
+                )
+        return results
 
     def close(self) -> None:
         """Close connection pools or resources if applicable."""
