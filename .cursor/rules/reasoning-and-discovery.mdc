@@ -1,0 +1,25 @@
+---
+description: Mandatory Context Discovery & Strategic Reasoning
+globs: "*"
+alwaysApply: true
+---
+
+# Rule: Mandatory Context Discovery & Strategic Reasoning
+
+## 1. Context Discovery Protocol (Check Before Acting)
+Before generating code, planning architectures, or modifying files, the agent MUST perform a comprehensive contextual sweep:
+- **Project Directives**: Read root `AGENTS.MD`, `README.md`, and any files under `docs/`.
+- **Active Rules**: Inspect all rules under `.agents/rules/` and framework-specific guidelines (e.g., `react-web`, `global`).
+- **Domain Data Schemas**: Check core data models (e.g., `src/core/schemas.py`) to prevent inventing incompatible types or mock shapes.
+- **Serving Contracts**: Inspect existing API/tool routes before creating endpoints or UI call signatures.
+
+## 2. Structured Reasoning Lifecycle (Think Before Coding)
+Every execution step must follow this mental model:
+1. **Analyze Constraints**: Identify strict boundaries (e.g., non-blocking async requirements, type contracts, UX latency targets).
+2. **Draft Decision Options**: If a mockup or task can be implemented in multiple ways, evaluate trade-offs based on repo consistency and runtime performance.
+3. **Validate Integration Points**: Verify that new components or functions plug directly into downstream consumers without orphaned logic.
+4. **Execute Incrementally**: Write clean, typed, and production-grade code that satisfies the identified rules without unnecessary boilerplate.
+
+## 3. Ambiguity Resolution
+- If design mockups omit edge-case states (e.g., loading, disconnected, empty feed, rate-limit rejection), design them using the design system's established tokens rather than leaving unhandled runtime errors.
+- Never write placeholder mocks when real schemas and storage methods exist in the codebase.

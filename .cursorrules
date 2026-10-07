@@ -1,0 +1,9 @@
+---
+description: Global fallback constraints for the entire monorepo workspace
+globs: "*"
+alwaysApply: true
+---
+# Workspace Core Directives
+- **System Automation**: The project relies on Nix Flakes and Docker. Do not suggest global OS-level mutations.
+- **Scripting**: Shell scripts must specify `#!/usr/bin/env bash`, fail fast (`set -e`), and be fully POSIX compliant.
+- **Formatting**: Rely on Biome/Prettier. Do not manually format code in responses unless requested.

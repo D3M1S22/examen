@@ -1,0 +1,13 @@
+---
+description: Infrastructure as Code, Docker, and Nix environment standards
+globs: "docker/**, *.nix, .github/**, infra/**"
+alwaysApply: true
+---
+# DevOps & Infrastructure Standards
+
+- **Nix Flakes**: Treat `flake.nix` as the ultimate source of truth for local development dependencies. When adding a new system-level tool (e.g., a database CLI or compiler), instruct the user to add it to the Nix flake rather than installing it via OS package managers.
+- **Docker**: 
+  - Use multi-stage builds to minimize production image size.
+  - Use `node:18-alpine` (or current LTS) as the base image for backend services.
+  - Run containers as a non-root user for security compliance.
+- **Web Servers**: When configuring Nginx or Caddy reverse proxies, enforce TLS/SSL settings and HTTP/2+ by default.

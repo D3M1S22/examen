@@ -1,0 +1,14 @@
+---
+description: Enterprise UI/UX standards, Tailwind CSS conventions, and Accessibility (a11y)
+globs: "**/*.{tsx,ts,jsx,js}"
+alwaysApply: false
+---
+# UI/UX & Design System Standards
+
+- **Component Library**: Prefer composition over configuration. Use Radix UI primitives or Shadcn UI patterns.
+- **Styling**: Use Tailwind CSS exclusively. Group classes logically: Layout -> Spacing -> Typography -> Visuals (e.g., `flex flex-col items-center p-4 text-lg font-bold bg-white`).
+- **Accessibility (a11y)**: 
+  - All interactive elements must have `aria-label` or visible text.
+  - Ensure keyboard navigability (`tabIndex`, `onKeyDown`).
+  - Maintain a minimum WCAG AA contrast ratio for text and backgrounds.
+- **Design Tokens**: Never hardcode hex colors or arbitrary pixel values. Use Tailwind theme variables (e.g., `text-primary`, `gap-md`).

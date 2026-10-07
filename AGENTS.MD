@@ -69,7 +69,34 @@ amazon_challenge/
 
 ---
 
-## 3. Strict Operating Rules for AI Agents
+## 3. Operating Mindset: Discovery, Reason, Then Act
+Before proposing plans or generating code, you MUST operate as a senior software architect and frontend engineer:
+1. **Discover Context**: Read and respect all architecture rules under `docs/` (`01` through `07`), active guidelines in `.agents/rules/`, and the data contracts in `src/core/schemas.py`.
+2. **Reason Deeply**: Explicitly evaluate how any requested edit fits into:
+   - The non-blocking ingestion stream (`BeeClient` -> `BeeStreamOrchestrator`).
+   - The LangGraph pipeline and semantic screening (`Gatekeeper`).
+   - The MCP serving tools and UI reactive state.
+3. **Execute Cleanly**: Never make speculative changes. Build code that directly satisfies the user's design mockups and backend data models.
+
+---
+
+## 4. Architecture & Rule Locations
+- **Project Architecture & Strategy**: Located in `docs/` (`01_architecture_flow.md` to `07_repository_structure_modules.md`).
+- **Operational Rules**: Located in `.agents/rules/` (UI integration, reasoning protocols, and web standards).
+- **Core Domain Models**: Located in `src/core/schemas.py`.
+
+---
+
+---
+
+## 5. Web UI Redesign Protocol (For Antigravity)
+- Treat the UI mockups as authoritative for layout, visual hierarchy, spacing, and component structure.
+- Adhere strictly to `.agents/rules/ui-realtime-integration.md`.
+- Ensure all interactive elements map 1-to-1 to endpoints in `src/serving/mcp_server.py` and tools in `src/serving/tools/`.
+
+---
+
+## 6. Strict Operating Rules for AI Agents
 
 Whenever you inspect, modify, or extend this codebase, you **must adhere strictly** to the following principles:
 
@@ -98,7 +125,7 @@ Whenever you inspect, modify, or extend this codebase, you **must adhere strictl
 
 ---
 
-## 4. Key Reference Locations in Submodules
+## 6. Key Reference Locations in Submodules
 
 When implementing or debugging specific features, refer to these canonical implementations in `resources/`:
 
@@ -115,7 +142,7 @@ When implementing or debugging specific features, refer to these canonical imple
 
 ---
 
-## 5. Development Workflows & Commands
+## 7. Development Workflows & Commands
 
 ### Virtual Environment Setup
 The project uses `uv` for fast, deterministic Python environment management:
@@ -146,7 +173,7 @@ Always verify that test suites pass before concluding any task:
 
 ---
 
-## 6. Friction Log Protocol
+## 8. Friction Log Protocol
 
 Whenever you encounter a non-obvious bug, dependency incompatibility, or tricky API quirk (such as SDK breaking changes, Bedrock prompt formatting issues, or FastMCP quirks), **record it immediately** in `FRICTION_LOG.md`:
 * **Problem:** What failed or caused unexpected friction.
@@ -155,7 +182,7 @@ Whenever you encounter a non-obvious bug, dependency incompatibility, or tricky 
 
 ---
 
-## 7. Current Project Roadmap & Priorities
+## 9. Current Project Roadmap & Priorities
 
 1. **Pipeline Core (`src/pipeline/`) — [COMPLETED & VERIFIED]:**
    * ✅ Implemented `src/ingestion/gatekeeper.py` with dynamic active task injection.
