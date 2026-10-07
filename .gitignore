@@ -31,3 +31,5 @@ htmlcov/
 
 #bee
 bee-sync/
+
+.agents/
