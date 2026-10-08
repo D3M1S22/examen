@@ -75,7 +75,9 @@ def _get_action_extractor():
 
 
 def _heuristic_extract_action(
-    transcript: str, pending_tasks: Optional[List[PlannedTask]] = None
+    transcript: str,
+    pending_tasks: Optional[List[PlannedTask]] = None,
+    historical_context: Optional[str] = None,
 ) -> Optional[VerifiedAction]:
     """Deterministic heuristic extractor for offline dev, testing, or API fallbacks."""
     text = transcript.lower().strip()
@@ -115,6 +117,19 @@ def _heuristic_extract_action(
                         is_revoked=False,
                         matched_task_id=task.id,
                     )
+
+    # 1b. Anaphora resolution using historical context (Milestone 3.1)
+    if historical_context:
+        ctx_lower = historical_context.lower()
+        if re.search(r"\b(turned it off|switched it off|shut it off)\b", text):
+            if any(w in ctx_lower for w in ["stove", "oven", "gas", "burner"]):
+                return VerifiedAction(action_type="stove_off", domain="safety", raw_statement=transcript.strip(), confidence=0.95, timestamp=datetime.now().isoformat(), is_revoked=False)
+        if re.search(r"\b(unplugged it|disconnected it)\b", text):
+            if any(w in ctx_lower for w in ["iron", "clothes iron"]):
+                return VerifiedAction(action_type="iron_unplugged", domain="safety", raw_statement=transcript.strip(), confidence=0.95, timestamp=datetime.now().isoformat(), is_revoked=False)
+        if re.search(r"\b(locked it|closed it|bolted it)\b", text):
+            if any(w in ctx_lower for w in ["door", "front door", "gate"]):
+                return VerifiedAction(action_type="door_locked", domain="safety", raw_statement=transcript.strip(), confidence=0.95, timestamp=datetime.now().isoformat(), is_revoked=False)
 
     # 2. Standard completed action rules (unplanned)
     action_rules: List[tuple[str, str, str]] = [
@@ -159,12 +174,15 @@ def _heuristic_extract_action(
 def node_extract_action(state: ExamenState) -> Dict[str, Any]:
     """LangGraph node: Stage 3B Action-State Verifier.
 
-    Extracts confirmed actions, drops doubts/intentions, and outputs action_data.
-    Dynamically injects pending planned tasks into the verification prompt.
+    Extracts confirmed actions, drops doubts/intentions, grounds location telemetry,
+    and outputs action_data. Dynamically injects pending planned tasks into the verification prompt.
     """
     transcript = state.get("raw_transcript", "").strip()
     if not transcript:
         return {"action_data": None}
+
+    historical_context = state.get("historical_context")
+    location = state.get("location")
 
     # Fetch pending planned tasks from context store
     store = get_storage_store()
@@ -177,15 +195,20 @@ def node_extract_action(state: ExamenState) -> Dict[str, Any]:
     # Use heuristic fallback if mock_ai or missing provider credentials
     if settings.mock_ai or not has_active_model_credentials(settings.gatekeeper_provider):
         logger.debug("Extracting action via heuristic fallback (mock_ai or no credentials).")
-        action = _heuristic_extract_action(transcript, pending_tasks=pending_tasks)
+        action = _heuristic_extract_action(
+            transcript, pending_tasks=pending_tasks, historical_context=historical_context
+        )
+        if action and location and not action.location:
+            action.location = location
         return {"action_data": action}
 
     try:
         extractor = _get_action_extractor()
         system_prompt = build_action_prompt(pending_tasks)
+        context_prefix = f"Recent Dialogue Context:\n{historical_context}\n\n" if historical_context else ""
         prompt = (
             f"Analyze the following transcript. If an action was explicitly completed, "
-            f"extract it. Otherwise reject it.\n\nTranscript: \"{transcript}\""
+            f"extract it. Otherwise reject it.\n\n{context_prefix}Transcript: \"{transcript}\""
         )
         messages = [
             SystemMessage(content=system_prompt),
@@ -208,6 +231,9 @@ def node_extract_action(state: ExamenState) -> Dict[str, Any]:
                         result.domain = task.domain
                         break
 
+            if location and not result.location:
+                result.location = location
+
             return {"action_data": result}
         else:
             logger.info(f"Action candidate rejected (confidence too low or empty): {result}")
@@ -215,5 +241,10 @@ def node_extract_action(state: ExamenState) -> Dict[str, Any]:
 
     except Exception as e:
         logger.warning(f"Action extraction model failed: {e}. Falling back to heuristic.")
-        action = _heuristic_extract_action(transcript, pending_tasks=pending_tasks)
+        action = _heuristic_extract_action(
+            transcript, pending_tasks=pending_tasks, historical_context=historical_context
+        )
+        if action and location and not action.location:
+            action.location = location
         return {"action_data": action}
+

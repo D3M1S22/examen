@@ -41,16 +41,28 @@ STRICT RULES:
 """
 
 
-def build_gatekeeper_prompt(active_tasks: Optional[List[str]] = None) -> str:
-    """Builds the Gatekeeper system prompt, dynamically appending active pending tasks if any."""
-    if not active_tasks:
-        return GATEKEEPER_SYSTEM_PROMPT
+def build_gatekeeper_prompt(
+    active_tasks: Optional[List[str]] = None,
+    prior_context: Optional[str] = None,
+) -> str:
+    """Builds the Gatekeeper system prompt, dynamically appending prior dialogue context and active tasks."""
+    prompt = GATEKEEPER_SYSTEM_PROMPT
 
-    task_bullets = "\n".join(f"- {task.strip()}" for task in active_tasks if task and task.strip())
-    if not task_bullets:
-        return GATEKEEPER_SYSTEM_PROMPT
+    if prior_context and prior_context.strip():
+        extra_ctx = f"""
 
-    extra_section = f"""
+PRIOR CONVERSATION CONTEXT (FOR PRONOUN & ANAPHORA RESOLUTION):
+The following recent dialogue context preceded this audio chunk:
+{prior_context.strip()}
+
+If the current transcript refers to an action, commitment, or topic introduced in the prior context (e.g. "Sure, consider it done. I'll email it first thing in the morning", "I will do that", "Yes, locked and turned off"), resolve the reference using the prior context!
+"""
+        prompt += extra_ctx
+
+    if active_tasks:
+        task_bullets = "\n".join(f"- {task.strip()}" for task in active_tasks if task and task.strip())
+        if task_bullets:
+            extra_section = f"""
 
 ACTIVE PENDING TASKS / ROUTINES TO WATCH FOR:
 The user has scheduled or is expecting completion of the following specific tasks:
@@ -59,7 +71,8 @@ The user has scheduled or is expecting completion of the following specific task
 PRIORITY INSTRUCTION FOR ACTIVE TASKS:
 If the transcript indicates that the speaker has completed, verified, or executed ANY of the active pending tasks above, IMMEDIATELY classify as "action" with high confidence (>= 0.90), even if phrased informally or conversationally.
 """
-    return GATEKEEPER_SYSTEM_PROMPT + extra_section
+            prompt += extra_section
+    return prompt
 
 
 def _get_bedrock_classifier():
@@ -69,7 +82,9 @@ def _get_bedrock_classifier():
 
 
 def _heuristic_classify(
-    transcript: str, active_tasks: Optional[List[str]] = None
+    transcript: str,
+    active_tasks: Optional[List[str]] = None,
+    prior_context: Optional[str] = None,
 ) -> ChunkClassification:
     """Deterministic English-only heuristic classifier for offline testing, CI/CD, or fallback."""
     text = transcript.lower().strip()
@@ -88,6 +103,30 @@ def _heuristic_classify(
         )
 
     categories: List[str] = []
+
+    # 0b. Anaphora & Context Window check (Milestone 3.1)
+    if prior_context and prior_context.strip():
+        ctx_lower = prior_context.lower()
+        # Follow-up agreement/promise, e.g. "Sure, consider it done. I'll email it first thing in the morning."
+        anaphoric_scheduled = [
+            r"\b(consider it done|i'll email it|i will email it|i'll send it|i will send it|i'll do that|i will do that)\b",
+            r"\b(sure,?\s*(consider it done|i'll|i will|let me|we will))\b",
+            r"\b(i'll make sure to|i'll take care of it|i will take care of it)\b",
+        ]
+        if any(re.search(pat, text) for pat in anaphoric_scheduled):
+            categories.append("scheduled_task")
+            if any(w in ctx_lower for w in ["send", "email", "report", "review", "contract", "can you", "could you", "please"]):
+                categories.append("social")
+
+        # Follow-up confirmation, e.g. "I just did", "It's done", "Locked it and turned it off"
+        anaphoric_action = [
+            r"\b(i just did|it's done|all done|locked it|turned it off|switched it off|unplugged it)\b",
+            r"\b(done and verified|taken care of)\b",
+        ]
+        if any(re.search(pat, text) for pat in anaphoric_action):
+            if any(w in ctx_lower for w in ["stove", "iron", "door", "lock", "medication", "pill", "window", "car", "pr", "deploy"]):
+                categories.append("action")
+
 
     # 1. Action completed check: focus strictly on English first-person completed action verbs
     action_patterns = [
@@ -177,7 +216,8 @@ def _heuristic_classify(
 def classify_chunk(
     transcript: str,
     active_tasks: Optional[List[str]] = None,
-    force_mock: bool = False
+    force_mock: bool = False,
+    prior_context: Optional[str] = None,
 ) -> ChunkClassification:
     """Classifies an ambient speech transcript chunk synchronously.
 
@@ -185,6 +225,7 @@ def classify_chunk(
         transcript: The aggregated text from the audio sliding window buffer.
         active_tasks: Optional list of pending planned task titles to watch for.
         force_mock: If True, forces heuristic evaluation without calling Bedrock.
+        prior_context: Optional concatenated recent dialogue context for anaphora resolution.
 
     Returns:
         ChunkClassification with categories, confidence, and summary_hint.
@@ -196,12 +237,12 @@ def classify_chunk(
     # Offline or mock mode
     if force_mock or settings.mock_ai or not has_active_model_credentials(settings.gatekeeper_provider):
         logger.debug("Gatekeeper using heuristic/mock classifier")
-        return _heuristic_classify(clean_text, active_tasks=active_tasks)
+        return _heuristic_classify(clean_text, active_tasks=active_tasks, prior_context=prior_context)
 
     # Real Model call
     try:
         classifier = _get_bedrock_classifier()
-        system_prompt = build_gatekeeper_prompt(active_tasks)
+        system_prompt = build_gatekeeper_prompt(active_tasks=active_tasks, prior_context=prior_context)
         messages = [
             SystemMessage(content=system_prompt),
             HumanMessage(content=f'Transcript: "{clean_text}"')
@@ -210,13 +251,14 @@ def classify_chunk(
         return result
     except Exception as e:
         logger.warning(f"Gatekeeper invocation failed ({e}), falling back to heuristic: {e}")
-        return _heuristic_classify(clean_text, active_tasks=active_tasks)
+        return _heuristic_classify(clean_text, active_tasks=active_tasks, prior_context=prior_context)
 
 
 async def aclassify_chunk(
     transcript: str,
     active_tasks: Optional[List[str]] = None,
-    force_mock: bool = False
+    force_mock: bool = False,
+    prior_context: Optional[str] = None,
 ) -> ChunkClassification:
     """Classifies an ambient speech transcript chunk asynchronously.
 
@@ -224,6 +266,7 @@ async def aclassify_chunk(
         transcript: The aggregated text from the audio sliding window buffer.
         active_tasks: Optional list of pending planned task titles to watch for.
         force_mock: If True, forces heuristic evaluation without calling Bedrock.
+        prior_context: Optional concatenated recent dialogue context for anaphora resolution.
 
     Returns:
         ChunkClassification with categories, confidence, and summary_hint.
@@ -233,11 +276,11 @@ async def aclassify_chunk(
         return ChunkClassification(categories=["noop"], confidence=1.0, summary_hint="Empty audio chunk")
 
     if force_mock or settings.mock_ai or not has_active_model_credentials(settings.gatekeeper_provider):
-        return _heuristic_classify(clean_text, active_tasks=active_tasks)
+        return _heuristic_classify(clean_text, active_tasks=active_tasks, prior_context=prior_context)
 
     try:
         classifier = _get_bedrock_classifier()
-        system_prompt = build_gatekeeper_prompt(active_tasks)
+        system_prompt = build_gatekeeper_prompt(active_tasks=active_tasks, prior_context=prior_context)
         messages = [
             SystemMessage(content=system_prompt),
             HumanMessage(content=f'Transcript: "{clean_text}"')
@@ -246,7 +289,8 @@ async def aclassify_chunk(
         return result
     except Exception as e:
         logger.warning(f"Async Bedrock Gatekeeper invocation failed ({e}), falling back to heuristic")
-        return _heuristic_classify(clean_text, active_tasks=active_tasks)
+        return _heuristic_classify(clean_text, active_tasks=active_tasks, prior_context=prior_context)
+
 
 
 def is_noop(classification: ChunkClassification) -> bool:

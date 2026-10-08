@@ -1,13 +1,15 @@
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 import re
 import sqlite3
 import uuid
-from typing import List, Optional
+from typing import Any, List, Optional, Union
 
 from src.core.schemas import (
     BriefingReport,
+    MicroEventRef,
     PlannedTask,
+    SessionDossier,
     SocialCommitment,
     SocialEntity,
     SocialWebProfile,
@@ -59,6 +61,7 @@ class SQLiteContextStore(AbstractContextStore):
                 ("confidence", "REAL NOT NULL DEFAULT 1.0"),
                 ("relative_time_anchor", "TEXT"),
                 ("session_id", "TEXT"),
+                ("location_json", "TEXT"),
             ]:
                 try:
                     cursor.execute(f"ALTER TABLE planned_tasks ADD COLUMN {col_name} {col_type};")
@@ -76,11 +79,21 @@ class SQLiteContextStore(AbstractContextStore):
                     confidence REAL NOT NULL,
                     timestamp TEXT NOT NULL,
                     is_revoked INTEGER DEFAULT 0,
-                    matched_task_id TEXT
+                    matched_task_id TEXT,
+                    location_json TEXT,
+                    session_id TEXT
                 )
             """)
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_actions_type ON verified_actions (action_type);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_actions_time ON verified_actions (timestamp DESC);")
+            try:
+                cursor.execute("ALTER TABLE verified_actions ADD COLUMN location_json TEXT;")
+            except Exception:
+                pass
+            try:
+                cursor.execute("ALTER TABLE verified_actions ADD COLUMN session_id TEXT;")
+            except Exception:
+                pass
 
             # 2. Social Contacts Table
             cursor.execute("""
@@ -92,12 +105,22 @@ class SQLiteContextStore(AbstractContextStore):
                     commitments_json TEXT,
                     key_topics_json TEXT,
                     timestamp TEXT NOT NULL,
-                    web_profile_json TEXT
+                    web_profile_json TEXT,
+                    location_encountered TEXT,
+                    session_id TEXT
                 )
             """)
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_social_name ON social_contacts (person_name);")
             try:
                 cursor.execute("ALTER TABLE social_contacts ADD COLUMN web_profile_json TEXT;")
+            except Exception:
+                pass
+            try:
+                cursor.execute("ALTER TABLE social_contacts ADD COLUMN location_encountered TEXT;")
+            except Exception:
+                pass
+            try:
+                cursor.execute("ALTER TABLE social_contacts ADD COLUMN session_id TEXT;")
             except Exception:
                 pass
 
@@ -139,6 +162,46 @@ class SQLiteContextStore(AbstractContextStore):
             except Exception:
                 pass
 
+            # 3b. Utterance Diarization Cache (Milestone 3.1)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS utterance_diarization (
+                    chunk_id TEXT PRIMARY KEY,
+                    speaker_id TEXT NOT NULL,
+                    speaker_role TEXT,
+                    updated_at TEXT NOT NULL
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_diarization_speaker ON utterance_diarization (speaker_id);")
+
+            # 3c. Macro Session Dossiers Table (Milestone 3.2)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS session_dossiers (
+                    session_id TEXT PRIMARY KEY,
+                    title TEXT,
+                    domain TEXT NOT NULL DEFAULT 'meeting',
+                    start_time TEXT NOT NULL,
+                    last_updated_at TEXT NOT NULL,
+                    concluded_at TEXT,
+                    status TEXT NOT NULL DEFAULT 'active',
+                    location_json TEXT,
+                    transcript_chunks_json TEXT,
+                    key_discussion_points_json TEXT,
+                    linked_micro_events_json TEXT,
+                    final_briefing_id TEXT,
+                    created_at TEXT NOT NULL
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_sessions_status ON session_dossiers (status);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_sessions_time ON session_dossiers (start_time DESC);")
+            try:
+                cursor.execute("ALTER TABLE verified_actions ADD COLUMN session_id TEXT;")
+            except Exception:
+                pass
+            try:
+                cursor.execute("ALTER TABLE social_contacts ADD COLUMN session_id TEXT;")
+            except Exception:
+                pass
+
             # 4. FTS5 Virtual Tables (if supported by SQLite runtime)
             try:
                 cursor.execute("""
@@ -169,14 +232,15 @@ class SQLiteContextStore(AbstractContextStore):
     def save_planned_task(self, task: PlannedTask) -> str:
         rec_id = task.id or str(uuid.uuid4())
         task.id = rec_id
+        loc_str = json.dumps(task.location) if task.location else None
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT OR REPLACE INTO planned_tasks
                 (id, title, domain, scheduled_time, recurrence, status, completed_at, verified_action_id, created_at,
-                 origin, raw_statement, confidence, relative_time_anchor, session_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 origin, raw_statement, confidence, relative_time_anchor, session_id, location_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 rec_id,
                 task.title.strip(),
@@ -192,6 +256,7 @@ class SQLiteContextStore(AbstractContextStore):
                 task.confidence,
                 task.relative_time_anchor,
                 task.session_id,
+                loc_str,
             ))
             conn.commit()
         return rec_id
@@ -201,6 +266,7 @@ class SQLiteContextStore(AbstractContextStore):
             cursor = conn.cursor()
             row = cursor.execute("SELECT * FROM planned_tasks WHERE id = ?", (task_id,)).fetchone()
             if row:
+                loc = json.loads(row["location_json"]) if ("location_json" in row.keys() and row["location_json"]) else None
                 return PlannedTask(
                     id=row["id"],
                     title=row["title"],
@@ -216,6 +282,7 @@ class SQLiteContextStore(AbstractContextStore):
                     confidence=row["confidence"] if ("confidence" in row.keys() and row["confidence"] is not None) else 1.0,
                     relative_time_anchor=row["relative_time_anchor"] if "relative_time_anchor" in row.keys() else None,
                     session_id=row["session_id"] if "session_id" in row.keys() else None,
+                    location=loc,
                 )
         return None
 
@@ -240,6 +307,7 @@ class SQLiteContextStore(AbstractContextStore):
             cursor = conn.cursor()
             rows = cursor.execute(sql, params).fetchall()
             for r in rows:
+                loc = json.loads(r["location_json"]) if ("location_json" in r.keys() and r["location_json"]) else None
                 results.append(PlannedTask(
                     id=r["id"],
                     title=r["title"],
@@ -255,6 +323,7 @@ class SQLiteContextStore(AbstractContextStore):
                     confidence=r["confidence"] if ("confidence" in r.keys() and r["confidence"] is not None) else 1.0,
                     relative_time_anchor=r["relative_time_anchor"] if "relative_time_anchor" in r.keys() else None,
                     session_id=r["session_id"] if "session_id" in r.keys() else None,
+                    location=loc,
                 ))
         return results
 
@@ -275,6 +344,7 @@ class SQLiteContextStore(AbstractContextStore):
     def update_planned_task(self, task: PlannedTask) -> bool:
         if not task.id:
             return False
+        loc_str = json.dumps(task.location) if task.location else None
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
@@ -282,7 +352,7 @@ class SQLiteContextStore(AbstractContextStore):
                 SET title = ?, domain = ?, scheduled_time = ?, recurrence = ?,
                     status = ?, completed_at = ?, verified_action_id = ?,
                     origin = ?, raw_statement = ?, confidence = ?,
-                    relative_time_anchor = ?, session_id = ?
+                    relative_time_anchor = ?, session_id = ?, location_json = ?
                 WHERE id = ?
             """, (
                 task.title.strip(),
@@ -297,6 +367,7 @@ class SQLiteContextStore(AbstractContextStore):
                 task.confidence,
                 task.relative_time_anchor,
                 task.session_id,
+                loc_str,
                 task.id,
             ))
             conn.commit()
@@ -372,12 +443,14 @@ class SQLiteContextStore(AbstractContextStore):
                 completed_at=action.timestamp
             )
 
+        loc_str = json.dumps(action.location) if action.location else None
+
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT OR REPLACE INTO verified_actions 
-                (id, action_type, domain, raw_statement, confidence, timestamp, is_revoked, matched_task_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                (id, action_type, domain, raw_statement, confidence, timestamp, is_revoked, matched_task_id, location_json, session_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 rec_id,
                 action.action_type.lower(),
@@ -386,7 +459,9 @@ class SQLiteContextStore(AbstractContextStore):
                 action.confidence,
                 action.timestamp,
                 1 if action.is_revoked else 0,
-                action.matched_task_id
+                action.matched_task_id,
+                loc_str,
+                action.session_id,
             ))
             if self._has_fts:
                 cursor.execute("""
@@ -403,10 +478,10 @@ class SQLiteContextStore(AbstractContextStore):
         clean_query = f"%{action_query.strip().lower()}%"
         sql = """
             SELECT * FROM verified_actions 
-            WHERE (action_type LIKE ? OR raw_statement LIKE ?)
+            WHERE (id = ? OR action_type LIKE ? OR raw_statement LIKE ?)
               AND is_revoked = 0
         """
-        params = [clean_query, clean_query]
+        params = [action_query.strip(), clean_query, clean_query]
 
         if target_date:
             sql += " AND timestamp LIKE ?"
@@ -418,6 +493,7 @@ class SQLiteContextStore(AbstractContextStore):
             cursor = conn.cursor()
             row = cursor.execute(sql, params).fetchone()
             if row:
+                loc = json.loads(row["location_json"]) if ("location_json" in row.keys() and row["location_json"]) else None
                 return VerifiedAction(
                     id=row["id"],
                     action_type=row["action_type"],
@@ -426,6 +502,9 @@ class SQLiteContextStore(AbstractContextStore):
                     confidence=row["confidence"],
                     timestamp=row["timestamp"],
                     is_revoked=bool(row["is_revoked"]),
+                    matched_task_id=row["matched_task_id"] if "matched_task_id" in row.keys() else None,
+                    session_id=row["session_id"] if "session_id" in row.keys() else None,
+                    location=loc,
                 )
         return None
 
@@ -445,6 +524,7 @@ class SQLiteContextStore(AbstractContextStore):
             cursor = conn.cursor()
             rows = cursor.execute(sql, params).fetchall()
             for row in rows:
+                loc = json.loads(row["location_json"]) if ("location_json" in row.keys() and row["location_json"]) else None
                 results.append(
                     VerifiedAction(
                         id=row["id"],
@@ -454,6 +534,9 @@ class SQLiteContextStore(AbstractContextStore):
                         confidence=row["confidence"],
                         timestamp=row["timestamp"],
                         is_revoked=bool(row["is_revoked"]),
+                        matched_task_id=row["matched_task_id"] if "matched_task_id" in row.keys() else None,
+                        session_id=row["session_id"] if "session_id" in row.keys() else None,
+                        location=loc,
                     )
                 )
         return results
@@ -498,8 +581,8 @@ class SQLiteContextStore(AbstractContextStore):
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT OR REPLACE INTO social_contacts
-                (id, person_name, company_or_role, contact_info, commitments_json, key_topics_json, timestamp, web_profile_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                (id, person_name, company_or_role, contact_info, commitments_json, key_topics_json, timestamp, web_profile_json, location_encountered, session_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 rec_id,
                 contact.person_name,
@@ -509,6 +592,8 @@ class SQLiteContextStore(AbstractContextStore):
                 topics_str,
                 contact.timestamp,
                 web_profile_str,
+                contact.location_encountered,
+                contact.session_id,
             ))
             if self._has_fts:
                 cursor.execute("""
@@ -544,6 +629,8 @@ class SQLiteContextStore(AbstractContextStore):
                     web_profile = SocialWebProfile.model_validate_json(row["web_profile_json"])
                 except Exception:
                     pass
+            loc_enc = row["location_encountered"] if ("location_encountered" in row.keys() and row["location_encountered"]) else None
+            session_id = row["session_id"] if ("session_id" in row.keys() and row["session_id"]) else None
             return SocialEntity(
                 id=row["id"],
                 person_name=row["person_name"],
@@ -552,6 +639,8 @@ class SQLiteContextStore(AbstractContextStore):
                 commitments=commitments,
                 key_topics=topics,
                 web_profile=web_profile,
+                location_encountered=loc_enc,
+                session_id=session_id,
                 timestamp=row["timestamp"],
             )
 
@@ -578,8 +667,8 @@ class SQLiteContextStore(AbstractContextStore):
         sql = """
             SELECT * FROM social_contacts
             WHERE LOWER(person_name) LIKE ? 
-               OR LOWER(company_or_role) LIKE ?
-               OR LOWER(key_topics_json) LIKE ?
+                OR LOWER(company_or_role) LIKE ?
+                OR LOWER(key_topics_json) LIKE ?
             ORDER BY timestamp DESC
         """
         results = []
@@ -602,6 +691,8 @@ class SQLiteContextStore(AbstractContextStore):
                         web_profile = SocialWebProfile.model_validate_json(row["web_profile_json"])
                     except Exception:
                         pass
+                loc_enc = row["location_encountered"] if ("location_encountered" in row.keys() and row["location_encountered"]) else None
+                session_id = row["session_id"] if ("session_id" in row.keys() and row["session_id"]) else None
                 results.append(
                     SocialEntity(
                         id=row["id"],
@@ -611,6 +702,8 @@ class SQLiteContextStore(AbstractContextStore):
                         commitments=commitments,
                         key_topics=topics,
                         web_profile=web_profile,
+                        location_encountered=loc_enc,
+                        session_id=session_id,
                         timestamp=row["timestamp"],
                     )
                 )
@@ -806,13 +899,14 @@ class SQLiteContextStore(AbstractContextStore):
         with self._get_connection() as conn:
             cursor = conn.cursor()
             if query and query.strip():
-                clean_query = f"%{query.strip().lower()}%"
+                clean_target = query.strip()
+                clean_query = f"%{clean_target.lower()}%"
                 sql = """
                     SELECT * FROM topic_briefings
-                    WHERE LOWER(topic_title) LIKE ? OR LOWER(deep_dive_markdown) LIKE ? OR LOWER(COALESCE(explanatory_synthesis, '')) LIKE ?
+                    WHERE id = ? OR LOWER(topic_title) LIKE ? OR LOWER(deep_dive_markdown) LIKE ? OR LOWER(COALESCE(explanatory_synthesis, '')) LIKE ?
                     ORDER BY created_at DESC LIMIT 1
                 """
-                row = cursor.execute(sql, (clean_query, clean_query, clean_query)).fetchone()
+                row = cursor.execute(sql, (clean_target, clean_query, clean_query, clean_query)).fetchone()
             else:
                 sql = "SELECT * FROM topic_briefings ORDER BY created_at DESC LIMIT 1"
                 row = cursor.execute(sql).fetchone()
@@ -862,6 +956,245 @@ class SQLiteContextStore(AbstractContextStore):
                 )
         return results
 
+    def patch_utterance_speaker(
+        self, chunk_id: str, speaker_id: str, speaker_role: Optional[str] = None
+    ) -> bool:
+        """Retrospectively patches speaker metadata on stored actions/tasks and records diarization."""
+        patched = False
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT OR REPLACE INTO utterance_diarization (chunk_id, speaker_id, speaker_role, updated_at) VALUES (?, ?, ?, ?)",
+                (chunk_id, speaker_id, speaker_role or "unknown", datetime.now(timezone.utc).isoformat())
+            )
+            cursor.execute(
+                "UPDATE planned_tasks SET session_id = ? WHERE id = ? OR session_id = ?",
+                (speaker_id, chunk_id, chunk_id),
+            )
+            if cursor.rowcount > 0:
+                patched = True
+            cursor.execute(
+                "UPDATE verified_actions SET matched_task_id = ? WHERE id = ?",
+                (speaker_id, chunk_id),
+            )
+            if cursor.rowcount > 0:
+                patched = True
+            conn.commit()
+        return True
+
+    # =========================================================================
+    # Macro Session & Micro-Event Decoupling (Milestone 3.2)
+    # =========================================================================
+    def save_session_dossier(self, dossier: SessionDossier) -> str:
+        loc_str = json.dumps(dossier.location, ensure_ascii=False) if dossier.location else None
+        chunks_str = json.dumps(dossier.transcript_chunks, ensure_ascii=False)
+        points_str = json.dumps(dossier.key_discussion_points, ensure_ascii=False)
+        events_payload = [
+            e.model_dump() if hasattr(e, "model_dump") else e
+            for e in dossier.linked_micro_events
+        ]
+        events_str = json.dumps(events_payload, ensure_ascii=False)
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT OR REPLACE INTO session_dossiers
+                (session_id, title, domain, start_time, last_updated_at, concluded_at,
+                 status, location_json, transcript_chunks_json, key_discussion_points_json,
+                 linked_micro_events_json, final_briefing_id, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                dossier.session_id,
+                dossier.title,
+                dossier.domain,
+                dossier.start_time,
+                dossier.last_updated_at,
+                dossier.concluded_at,
+                dossier.status,
+                loc_str,
+                chunks_str,
+                points_str,
+                events_str,
+                dossier.final_briefing_id,
+                dossier.start_time,
+            ))
+            conn.commit()
+        return dossier.session_id
+
+    def get_session_dossier(self, session_id: Optional[str] = None) -> Optional[SessionDossier]:
+        sql = "SELECT * FROM session_dossiers "
+        params = []
+        if session_id:
+            sql += "WHERE session_id = ? LIMIT 1"
+            params.append(session_id)
+        else:
+            sql += "ORDER BY last_updated_at DESC LIMIT 1"
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            row = cursor.execute(sql, params).fetchone()
+            if not row:
+                return None
+
+            loc = json.loads(row["location_json"]) if row["location_json"] else None
+            chunks = json.loads(row["transcript_chunks_json"]) if row["transcript_chunks_json"] else []
+            points = json.loads(row["key_discussion_points_json"]) if row["key_discussion_points_json"] else []
+            
+            raw_events = json.loads(row["linked_micro_events_json"]) if row["linked_micro_events_json"] else []
+            linked_events: List[MicroEventRef] = []
+            for item in raw_events:
+                try:
+                    linked_events.append(MicroEventRef(**item) if isinstance(item, dict) else item)
+                except Exception:
+                    pass
+
+            briefing_report = None
+            if row["final_briefing_id"]:
+                briefing_report = self.get_topic_briefing(row["final_briefing_id"])
+
+            return SessionDossier(
+                session_id=row["session_id"],
+                title=row["title"],
+                domain=row["domain"],
+                start_time=row["start_time"],
+                last_updated_at=row["last_updated_at"],
+                concluded_at=row["concluded_at"],
+                status=row["status"],
+                location=loc,
+                transcript_chunks=chunks,
+                key_discussion_points=points,
+                linked_micro_events=linked_events,
+                final_briefing_id=row["final_briefing_id"],
+                briefing_report=briefing_report,
+            )
+
+    def list_session_dossiers(
+        self, status: Optional[str] = None, limit: int = 10
+    ) -> List[SessionDossier]:
+        sql = "SELECT * FROM session_dossiers "
+        params = []
+        if status:
+            sql += "WHERE status = ? "
+            params.append(status)
+        sql += "ORDER BY start_time DESC LIMIT ?"
+        params.append(limit)
+
+        results = []
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            rows = cursor.execute(sql, params).fetchall()
+            for row in rows:
+                loc = json.loads(row["location_json"]) if row["location_json"] else None
+                chunks = json.loads(row["transcript_chunks_json"]) if row["transcript_chunks_json"] else []
+                points = json.loads(row["key_discussion_points_json"]) if row["key_discussion_points_json"] else []
+                raw_events = json.loads(row["linked_micro_events_json"]) if row["linked_micro_events_json"] else []
+                linked_events: List[MicroEventRef] = []
+                for item in raw_events:
+                    try:
+                        linked_events.append(MicroEventRef(**item) if isinstance(item, dict) else item)
+                    except Exception:
+                        pass
+
+                briefing_report = None
+                if row["final_briefing_id"]:
+                    briefing_report = self.get_topic_briefing(row["final_briefing_id"])
+
+                results.append(
+                    SessionDossier(
+                        session_id=row["session_id"],
+                        title=row["title"],
+                        domain=row["domain"],
+                        start_time=row["start_time"],
+                        last_updated_at=row["last_updated_at"],
+                        concluded_at=row["concluded_at"],
+                        status=row["status"],
+                        location=loc,
+                        transcript_chunks=chunks,
+                        key_discussion_points=points,
+                        linked_micro_events=linked_events,
+                        final_briefing_id=row["final_briefing_id"],
+                        briefing_report=briefing_report,
+                    )
+                )
+        return results
+
+    def append_chunk_to_session(
+        self, session_id: str, chunk_text: str, location: Optional[dict] = None
+    ) -> SessionDossier:
+        dossier = self.get_session_dossier(session_id)
+        now_iso = datetime.now().isoformat()
+        if not dossier:
+            dossier = SessionDossier(
+                session_id=session_id,
+                title=f"Session {session_id[:8]}",
+                domain="meeting",
+                start_time=now_iso,
+                last_updated_at=now_iso,
+                status="active",
+                location=location,
+                transcript_chunks=[chunk_text] if chunk_text and chunk_text.strip() else [],
+            )
+        else:
+            if chunk_text and chunk_text.strip():
+                dossier.transcript_chunks.append(chunk_text.strip())
+            dossier.last_updated_at = now_iso
+            if location:
+                dossier.location = location
+
+        self.save_session_dossier(dossier)
+        return dossier
+
+    def link_micro_event_to_session(
+        self, session_id: str, event_ref: Any
+    ) -> bool:
+        if isinstance(event_ref, dict):
+            event_ref = MicroEventRef(**event_ref)
+        elif not isinstance(event_ref, MicroEventRef):
+            return False
+
+        dossier = self.get_session_dossier(session_id)
+        now_iso = datetime.now().isoformat()
+        if not dossier:
+            dossier = SessionDossier(
+                session_id=session_id,
+                title=f"Session {session_id[:8]}",
+                domain="meeting",
+                start_time=now_iso,
+                last_updated_at=now_iso,
+                status="active",
+                linked_micro_events=[event_ref],
+            )
+        else:
+            exists = any(
+                e.record_id == event_ref.record_id and e.event_type == event_ref.event_type
+                for e in dossier.linked_micro_events
+            )
+            if not exists:
+                dossier.linked_micro_events.append(event_ref)
+            dossier.last_updated_at = now_iso
+
+        self.save_session_dossier(dossier)
+        return True
+
+    def conclude_session_dossier(
+        self, session_id: str, briefing_report_id: Optional[str] = None
+    ) -> Optional[SessionDossier]:
+        dossier = self.get_session_dossier(session_id)
+        if not dossier:
+            return None
+
+        now_iso = datetime.now().isoformat()
+        dossier.status = "concluded"
+        dossier.concluded_at = now_iso
+        dossier.last_updated_at = now_iso
+        if briefing_report_id:
+            dossier.final_briefing_id = briefing_report_id
+            dossier.briefing_report = self.get_topic_briefing(briefing_report_id)
+
+        self.save_session_dossier(dossier)
+        return dossier
+
     def close(self) -> None:
         """Close connection pools or resources if applicable."""
         pass
+

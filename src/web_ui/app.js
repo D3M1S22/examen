@@ -1660,6 +1660,78 @@ document.addEventListener("DOMContentLoaded", () => {
               </ul>
             </div>
           `;
+        case "SESSION_DOSSIER_VIEWER": {
+          const actions = (p.actions || []).map((a) => `
+            <div style="font-size:0.82rem; color:#34d399; margin-bottom:0.25rem;">
+              ✅ ${escapeHtml(a.headline || a.action_type || 'Action verified')}
+            </div>
+          `).join("");
+
+          const tasks = (p.tasks || []).map((t) => `
+            <div style="font-size:0.82rem; color:#60a5fa; margin-bottom:0.25rem;">
+              📌 ${escapeHtml(t.headline || t.title || 'Task scheduled')}
+            </div>
+          `).join("");
+
+          const contacts = (p.contacts || []).map((c) => `
+            <div style="font-size:0.82rem; color:#a78bfa; margin-bottom:0.25rem;">
+              👤 ${escapeHtml(c.headline || c.person_name || 'Contact')}
+            </div>
+          `).join("");
+
+          const discussion = (p.key_discussion_points || []).map((pt) => `
+            <li>${escapeHtml(pt)}</li>
+          `).join("");
+
+          echoCardCanvas.innerHTML = `
+            <div class="echo-card-inner">
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem;">
+                <div class="echo-card-category" style="color:#f59e0b; margin:0;">
+                  🏛️ MACRO SESSION DOSSIER • ${(p.domain || 'meeting').toUpperCase()}
+                </div>
+                <span class="badge-verified" style="font-size:0.75rem;">
+                  ${escapeHtml(p.status ? p.status.toUpperCase() : 'ACTIVE')}
+                </span>
+              </div>
+              <h2 class="echo-card-headline" style="font-size:1.25rem; margin-bottom:0.2rem;">
+                ${escapeHtml(p.title || 'Continuous Conversation Session')}
+              </h2>
+              <div style="font-size:0.78rem; color:#94a3b8; margin-bottom:0.6rem;">
+                📍 ${escapeHtml(p.location_name || 'Ambient Room')} • 🕒 ${escapeHtml(p.start_time ? new Date(p.start_time).toLocaleTimeString() : 'Recent')} • 🎙️ ${p.transcript_chunks_count || 0} Chunks
+              </div>
+
+              ${p.explanatory_synthesis ? `
+                <div class="briefing-explanatory-box" style="margin-bottom:0.6rem; padding:0.5rem; font-size:0.82rem;">
+                  <div style="font-weight:700; color:#38bdf8; margin-bottom:0.2rem;">💡 Holistic Meeting Synthesis:</div>
+                  <div>${escapeHtml(p.explanatory_synthesis)}</div>
+                </div>
+              ` : ''}
+
+              ${discussion ? `
+                <div style="margin-bottom:0.6rem;">
+                  <div style="font-size:0.75rem; font-weight:700; color:#cbd5e1; text-transform:uppercase;">Key Points:</div>
+                  <ul class="echo-bullet-list" style="margin:0.2rem 0; font-size:0.8rem;">${discussion}</ul>
+                </div>
+              ` : ''}
+
+              <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.6rem; margin-top:0.4rem; padding-top:0.4rem; border-top:1px solid rgba(255,255,255,0.1);">
+                <div>
+                  <div style="font-size:0.72rem; font-weight:700; color:#34d399; text-transform:uppercase; margin-bottom:0.2rem;">
+                    Verified Actions (${(p.actions || []).length})
+                  </div>
+                  ${actions || '<div style="font-size:0.75rem; color:#64748b;">None recorded during session.</div>'}
+                </div>
+                <div>
+                  <div style="font-size:0.72rem; font-weight:700; color:#60a5fa; text-transform:uppercase; margin-bottom:0.2rem;">
+                    Decoupled Tasks & Contacts
+                  </div>
+                  ${tasks || ''}
+                  ${contacts || ''}
+                  ${!tasks && !contacts ? '<div style="font-size:0.75rem; color:#64748b;">None decoupled.</div>' : ''}
+                </div>
+              </div>
+            </div>
+          `;
           break;
         }
 

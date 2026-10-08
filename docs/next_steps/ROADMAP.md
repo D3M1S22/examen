@@ -176,25 +176,70 @@
 
 ---
 
-### Phase 3: Ingestion Stream & Macro Session Engine (PLANNED ⏳)
+### Phase 3: Ingestion Stream & Macro Session Engine (COMPLETED ✅)
 > **Goal:** Handle long continuous meetings and streaming wearable nuances (pronouns, GPS, speaker diarization).
 
 #### 🎯 Milestone 3.1: Context Ring Buffer & Multimodal Telemetry
 * **Reference Spec:** [`02_gatekeeper_context_and_multimodal_telemetry.md`](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/docs/next_steps/02_gatekeeper_context_and_multimodal_telemetry.md)
-* **Status:** ⏳ **PLANNED**
+* **Status:** ✅ **COMPLETED**
+* **Rationale:** Spoken ambient dialogue from wearable microphones often splits critical context across conversational turns (e.g. "Did you lock the door?" followed by "Yes, I just did"). Implemented a low-overhead FIFO Context Ring Buffer ($N=4$ chunks) with hybrid anaphora gatekeeper evaluation, multimodal GPS telemetry ingestion with semantic zone inference, and retrospective speaker diarization patching.
 * **Work Breakdown:**
-  1. **Ingestion Ring Buffer**: Implement FIFO `ContextRingBuffer` (N=3-4 chunks) in `src/ingestion/orchestrator.py` to forward conversational context on positive triggers (solving anaphora/pronoun dependencies).
-  2. **GPS Telemetry Integration**: Ingest Bee `update-location` SSE events, compute `LocationTelemetry` with semantic zones (`home`, `work`, `transit`), and bind spatial metadata to actions.
-  3. **Asynchronous Diarization**: 750ms debounce window + retrospective metadata patching for late-arriving `update-utterance` speaker tags.
+  1. [x] **Schema & Telemetry Contracts (`src/core/schemas.py`, `src/core/__init__.py`)**:
+     * Added `LocationTelemetry` model with coordinates, place name, accuracy, and auto-inference of `semantic_zone` (`home`, `work_office`, `transit`, `public_venue`, `unknown`).
+     * Added `UtteranceChunk` model with `chunk_id`, `speaker_id`, `speaker_role` (`user`, `contact`, `unknown`), and `location`.
+     * Extended `VerifiedAction.location`, `PlannedTask.location`, and `SocialEntity.location_encountered`.
+     * Added `historical_context`, `location`, `speaker`, `speaker_role`, and `utterance_id` to `ExamenState`.
+  2. [x] **Context Ring Buffer Engine (`src/ingestion/ring_buffer.py`, `src/ingestion/__init__.py`)**:
+     * Implemented `ContextRingBuffer` with FIFO capacity $N=4$ rolling deque per active conversation session.
+     * Provided `get_historical_context`, `get_concatenated_context_text` (with speaker/role labels), and `get_rolling_summary_hint` for lightweight Gatekeeper prompt injection.
+     * Added `patch_speaker` for retroactive diarization reconciliation and `get_last_chunk`.
+  3. [x] **Semantic Gatekeeper Anaphora Optimization (`src/ingestion/gatekeeper.py`)**:
+     * Integrated `prior_context` into `classify_chunk`, `aclassify_chunk`, and prompt construction.
+     * Enhanced heuristic classification to detect split anaphora patterns ("Sure, consider it done", "I just did", "Locked it") without inflating input token costs on 90% dropped ambient audio.
+  4. [x] **Storage & Database Non-Blocking Migrations (`src/core/storage/sqlite_store.py`, `src/core/storage/base.py`)**:
+     * Added automatic column migrations for `location_json` on `verified_actions` and `planned_tasks`, and `location_encountered` on `social_contacts`.
+     * Created `utterance_diarization` relational table with indexed speaker mappings.
+     * Implemented `patch_utterance_speaker(chunk_id, speaker_id, speaker_role)` for retrospective diarization updates on tasks, actions, and cache.
+  5. [x] **Pipeline Grounding & Role Calibration (`src/pipeline/nodes/action_state.py`, `src/pipeline/nodes/social.py`, `src/pipeline/app.py`)**:
+     * `node_extract_action`: Resolves split anaphora dialogue and grounds physical action location from current telemetry.
+     * `node_extract_social`: Resolves entity introductions across turns, captures `location_encountered`, and aligns commitment debtor to `"contact"` when spoken by an interlocutor (`speaker_role == "contact"`).
+  6. [x] **Streaming Orchestrator SSE Integration (`src/ingestion/orchestrator.py`, `src/ingestion/stream_convo.py`)**:
+     * Ingests Bee `update-location` SSE events, updates `latest_telemetry`, and binds spatial metadata to subsequent chunks.
+     * Ingests `update-utterance` events, patching late-arriving speaker tags in ring buffer and SQLite store.
+     * Forwards rolling dialogue history to downstream LangGraph nodes upon Gatekeeper qualification.
+  7. [x] **Testing & Verification**:
+     * Created comprehensive test suite `tests/test_ring_buffer.py` (17/17 tests passing).
+     * 100% green verification: 134/134 tests passing across the repository.
 
 #### 🎯 Milestone 3.2: Session Merging & Micro-Event Decoupling
 * **Reference Spec:** [`03_session_merging_and_micro_event_splitting.md`](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/docs/next_steps/03_session_merging_and_micro_event_splitting.md)
-* **Status:** ⏳ **PLANNED**
+* **Status:** ✅ **COMPLETED**
+* **Rationale:** Decouples macro conversation continuity (30-60 min meetings/lectures) from instantaneous micro-incidents (verifying actions, meeting contacts, scheduling tasks). Prevents redundant external search API hammer on every 15-30s audio chunk while ensuring micro-records are immediately extracted, foreign-key linked, and integrated into a holistic session dossier upon boundary detection.
 * **Work Breakdown:**
-  1. **Session Lifecycle State Machine**: Track active `conversation_uuid` sessions, buffer transcripts, and detect session boundaries (inactivity timeout, location shift, closing phrases).
-  2. **Macro Dossier Synthesis**: Compile aggregate `SessionDossier` upon boundary trigger without redundant per-chunk web queries.
-  3. **Micro-Event Forking**: Simultaneously split nested actions, contacts, and tasks out of macro sessions and link them via `session_id` foreign keys.
-  4. **Serving**: Add `get_session_dossier` MCP tool for unified meeting recaps.
+  1. [x] **Schema & Relational Contracts (`src/core/schemas.py`, `src/core/__init__.py`)**:
+     * Added `MicroEventRef` model (`event_type`, `record_id`, `headline`, `timestamp`).
+     * Added `SessionDossier` model (`session_id`, `title`, `domain`, `start_time`, `last_updated_at`, `concluded_at`, `status`, `location`, `transcript_chunks`, `key_discussion_points`, `linked_micro_events`, `final_briefing_id`, `briefing_report`).
+     * Added `session_id: Optional[str]` to `VerifiedAction`, `SocialEntity`, `PlannedTask`, and `ExamenState`.
+  2. [x] **Storage & Database Persistence (`src/core/storage/base.py`, `src/core/storage/sqlite_store.py`)**:
+     * Created `session_dossiers` relational table with indexed columns (`status`, `start_time DESC`).
+     * Added non-blocking migrations for `session_id TEXT` on `verified_actions` and `social_contacts`.
+     * Implemented `save_session_dossier`, `get_session_dossier`, `list_session_dossiers`, `append_chunk_to_session`, `link_micro_event_to_session`, and `conclude_session_dossier`.
+  3. [x] **Session Manager Engine (`src/ingestion/session_manager.py`, `src/ingestion/__init__.py`)**:
+     * Built `SessionManager` tracking active wearable `conversation_uuid` streams.
+     * Boundary detection: regex closing phrase detector (English & Italian), inactivity timeout detector ($\Delta t \ge 180$s), and Haversine GPS displacement detector ($d \ge 500$m).
+     * Integrated into `BeeStreamOrchestrator` in `src/ingestion/orchestrator.py`.
+  4. [x] **Micro-Event Decoupling in LangGraph (`src/pipeline/nodes/persist.py`)**:
+     * In `node_persist`: automatically tags and links micro-event references (`action`, `social_contact`, `task_scheduled`) to `SessionDossier.linked_micro_events` using `session_id`.
+     * Automatically concludes session and links briefing ID when a holistic `briefing_report` is persisted.
+  5. [x] **FastMCP Serving & REST APIs (`src/serving/tools/session_tools.py`, `src/serving/mcp_server.py`)**:
+     * Added FastMCP tools: `get_session_dossier(session_id)` and `list_session_dossiers(status, limit)`.
+     * Implemented `SESSION_DOSSIER_VIEWER` template payload with spoken summary and key metrics.
+     * Added REST endpoints: `GET /api/sessions`, `GET /api/sessions/{id}`, `POST /api/sessions/{id}/conclude`.
+     * Added Echo Show hardware preview modal tab for `SESSION_DOSSIER_VIEWER` in `src/web_ui/`.
+  6. [x] **Testing & Verification**:
+     * Created comprehensive test suite `tests/test_session_manager.py` (18/18 tests passing).
+     * Extended `tests/test_mcp_server.py` with session endpoints tests (32/32 tests passing).
+     * 100% green verification: 154/154 tests passing across the repository.
 
 ---
 
@@ -215,24 +260,24 @@ graph TD
 
     B0["✅ Baseline v1.0<br/>(Gatekeeper + Store + MCP + Web UI)"]:::done
 
-    subgraph Phase_1 ["Phase 1: Core Intelligence (Next)"]
-        M11["M1.1: Contextual Deep Topic Synthesis<br/>(Explanatory Synthesis in BriefingReport)"]:::ready
-        M12["M1.2: Ambient Scheduled Tasks<br/>(Gatekeeper scheduled_task + Stage 3D)"]:::ready
-        M13["M1.3: Bilateral Social Commitments<br/>(Debtor Roles + Auto-Spawning Tasks)"]:::ready
+    subgraph Phase_1 ["Phase 1: Core Intelligence"]
+        M11["✅ M1.1: Contextual Deep Topic Synthesis<br/>(Explanatory Synthesis in BriefingReport)"]:::done
+        M12["✅ M1.2: Ambient Scheduled Tasks<br/>(Gatekeeper scheduled_task + Stage 3D)"]:::done
+        M13["✅ M1.3: Bilateral Social Commitments<br/>(Debtor Roles + Auto-Spawning Tasks)"]:::done
     end
 
     subgraph Phase_2 ["Phase 2: Relational Enrichment"]
-        M21["M2.1: Social Web Profiler<br/>(Autonomous LinkedIn/Bio Scraping)"]:::planned
-        M22["M2.2: Echo Show & Web UI Card Upgrades"]:::planned
+        M21["✅ M2.1: Social Web Profiler<br/>(Autonomous LinkedIn/Bio Scraping)"]:::done
+        M22["✅ M2.2: Echo Show & Web UI Card Upgrades"]:::done
     end
 
     subgraph Phase_3 ["Phase 3: Stream & Session Continuity"]
-        M31["M3.1: Context Ring Buffer & GPS Telemetry"]:::planned
-        M32["M3.2: Session Merging & Micro-Event Splitting"]:::planned
+        M31["✅ M3.1: Context Ring Buffer & GPS Telemetry"]:::done
+        M32["✅ M3.2: Session Merging & Micro-Event Splitting"]:::done
     end
 
     subgraph Phase_4 ["Phase 4: Cloud Delivery"]
-        M4["M4: Benchmark & CloudFormation"]:::planned
+        M4["M4: Benchmark & CloudFormation"]:::ready
     end
 
     B0 --> M11

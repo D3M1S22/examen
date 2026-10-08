@@ -17,6 +17,8 @@ from src.core.schemas import (
     BriefingReport,
     PlannedTask,
     SocialCommitment,
+    MicroEventRef,
+    SessionDossier,
     SocialEntity,
     SocialWebProfile,
     VerifiedAction,
@@ -37,6 +39,10 @@ from src.serving.tools.social_tools import (
     get_contact_profile,
 )
 from src.serving.tools.topic_tools import execute_get_topic_briefing
+from src.serving.tools.session_tools import (
+    execute_get_session_dossier,
+    execute_list_session_dossiers,
+)
 from src.core.storage import get_storage_store
 
 
@@ -737,5 +743,49 @@ class TestServerRestApiAndWebUi:
         assert tasks_res["display_template"] == "UPCOMING_TASKS_VIEWER"
         assert "card_payload" in tasks_res
         assert "tasks" in tasks_res["card_payload"]
+
+        # 7. Session dossier tool (Milestone 3.2)
+        sess_res = execute_get_session_dossier(store=store)
+        assert sess_res["display_template"] in ("SESSION_DOSSIER_VIEWER", "SESSION_NOT_FOUND")
+
+    def test_api_sessions_endpoints(self, client):
+        store = get_storage_store()
+        sess = SessionDossier(
+            session_id="sess-api-test-01",
+            title="API Test Meeting",
+            domain="meeting",
+            status="active",
+        )
+        store.save_session_dossier(sess)
+
+        # GET /api/sessions
+        res = client.get("/api/sessions")
+        assert res.status_code == 200
+        data = res.json()
+        assert data["count"] >= 1
+        assert any(s["session_id"] == "sess-api-test-01" for s in data["sessions"])
+
+        # GET /api/sessions/{session_id}
+        res_detail = client.get("/api/sessions/sess-api-test-01")
+        assert res_detail.status_code == 200
+        detail_data = res_detail.json()
+        assert detail_data["found"] is True
+        assert detail_data["title"] == "API Test Meeting"
+
+        # POST /api/sessions/{session_id}/conclude
+        res_conclude = client.post("/api/sessions/sess-api-test-01/conclude", json={})
+        assert res_conclude.status_code == 200
+        concl_data = res_conclude.json()
+        assert concl_data["success"] is True
+        assert concl_data["dossier"]["status"] == "concluded"
+
+    def test_api_cards_preview_session_dossier(self, client):
+        res = client.get("/api/cards/preview?template=SESSION_DOSSIER_VIEWER")
+        assert res.status_code == 200
+        data = res.json()
+        assert data["display_template"] == "SESSION_DOSSIER_VIEWER"
+        assert "card_payload" in data
+        assert data["card_payload"]["template"] == "SESSION_DOSSIER_VIEWER"
+
 
 

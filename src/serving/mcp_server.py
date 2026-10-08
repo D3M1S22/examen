@@ -30,8 +30,10 @@ from src.serving.tools import (
     create_planned_task,
     get_contact_profile,
     get_daily_actions_recap,
+    get_session_dossier,
     get_social_commitments,
     get_upcoming_tasks,
+    list_session_dossiers,
     query_social_contact,
     verify_action_status,
 )
@@ -62,7 +64,7 @@ def broadcast_event(event_type: str, data: Optional[Dict[str, Any]] = None) -> N
             _sse_subscribers.discard(q)
 
 
-# Register the 8 core MCP tools for Alexa+
+# Register the 10 core MCP tools for Alexa+
 mcp.tool()(create_planned_task)
 mcp.tool()(get_upcoming_tasks)
 mcp.tool()(verify_action_status)
@@ -71,6 +73,8 @@ mcp.tool()(query_social_contact)
 mcp.tool()(get_contact_profile)
 mcp.tool()(get_social_commitments)
 mcp.tool()(get_topic_briefing)
+mcp.tool()(get_session_dossier)
+mcp.tool()(list_session_dossiers)
 
 
 # ---------------------------------------------------------------------------
@@ -783,6 +787,62 @@ async def api_cards_preview(request: Request) -> JSONResponse:
     # 6. Upcoming tasks
     upcoming_card = execute_get_upcoming_tasks(store=store)
 
+    # 7. Session dossier card (Milestone 3.2)
+    from src.serving.tools.session_tools import execute_get_session_dossier
+    session_card = execute_get_session_dossier(store=store)
+    if not session_card.get("found"):
+        session_card = {
+            "found": True,
+            "session_id": "sess-arch-01",
+            "title": "Architecture Session: Postgres to DynamoDB Migration",
+            "domain": "meeting",
+            "status": "concluded",
+            "start_time": datetime.now().isoformat(),
+            "concluded_at": datetime.now().isoformat(),
+            "location": {"place_name": "Conference Room B", "semantic_zone": "office"},
+            "transcript_chunks_count": 8,
+            "key_discussion_points": [
+                "DynamoDB Single-Table Design vs RDBMS Postgres",
+                "GSI replication delay and 400KB item size constraints",
+                "Deployment pipeline configuration via Terraform",
+            ],
+            "linked_micro_events": [
+                {
+                    "event_type": "action",
+                    "record_id": "act-tf-01",
+                    "headline": "Terraform apply executed (Tables created in eu-west-1)",
+                    "timestamp": datetime.now().isoformat(),
+                },
+                {
+                    "event_type": "task_scheduled",
+                    "record_id": "tsk-bench-01",
+                    "headline": "Deliver latency benchmarks to Marco",
+                    "timestamp": datetime.now().isoformat(),
+                },
+                {
+                    "event_type": "social_contact",
+                    "record_id": "soc-sarah-01",
+                    "headline": "Met Dr. Sarah Lin (Datadog Principal Architect)",
+                    "timestamp": datetime.now().isoformat(),
+                },
+            ],
+            "actions_count": 1,
+            "tasks_count": 1,
+            "contacts_count": 1,
+            "display_template": "SESSION_DOSSIER_VIEWER",
+            "ui_card_type": "SESSION_DOSSIER_VIEWER",
+            "spoken_summary": "Here is the recap for Architecture Session: Postgres to DynamoDB Migration. I tracked 1 verified action, 1 scheduled task, and 1 contact encountered.",
+            "card_payload": {
+                "template": "SESSION_DOSSIER_VIEWER",
+                "title": "Architecture Session: Postgres to DynamoDB Migration",
+                "location_name": "Conference Room B",
+                "explanatory_synthesis": "The team agreed on DynamoDB single-table design for sub-10ms read latencies, with GSI replication considerations.",
+                "actions": [{"headline": "Terraform apply executed (Tables created in eu-west-1)"}],
+                "tasks": [{"headline": "Deliver latency benchmarks to Marco"}],
+                "contacts": [{"headline": "Dr. Sarah Lin (Datadog Principal Architect)"}],
+            },
+        }
+
     cards = {
         "DEEP_BRIEFING_VIEWER": briefing_card,
         "SOCIAL_PROFILE_CARD": profile_card,
@@ -790,6 +850,7 @@ async def api_cards_preview(request: Request) -> JSONResponse:
         "ACTION_VERIFIED_BADGE": action_card,
         "DAILY_ACTIONS_RECAP": daily_card,
         "UPCOMING_TASKS_VIEWER": upcoming_card,
+        "SESSION_DOSSIER_VIEWER": session_card,
     }
 
     if template:
@@ -820,6 +881,63 @@ async def api_topics(request: Request) -> JSONResponse:
             "created_at": t.created_at,
         })
     return JSONResponse({"topics": result, "count": len(result)})
+
+
+@mcp.custom_route("/api/sessions", methods=["GET"])
+async def api_sessions(request: Request) -> JSONResponse:
+    """Lists recorded macro session dossiers."""
+    store = get_storage_store()
+    status = request.query_params.get("status")
+    limit = int(request.query_params.get("limit", "10"))
+    dossiers = store.list_session_dossiers(status=status, limit=limit)
+    result = [d.model_dump() for d in dossiers]
+    return JSONResponse({"sessions": result, "count": len(result)})
+
+
+@mcp.custom_route("/api/sessions/{session_id}", methods=["GET"])
+async def api_session_detail(request: Request) -> JSONResponse:
+    """Retrieves a specific session dossier by ID."""
+    session_id = request.path_params.get("session_id")
+    from src.serving.tools.session_tools import execute_get_session_dossier
+    data = execute_get_session_dossier(session_id=session_id)
+    if not data.get("found"):
+        return JSONResponse({"error": f"Session '{session_id}' not found", "found": False}, status_code=404)
+    return JSONResponse(data)
+
+
+@mcp.custom_route("/api/sessions/{session_id}/conclude", methods=["POST"])
+async def api_session_conclude(request: Request) -> JSONResponse:
+    """Marks a session dossier as concluded, with optional briefing report synthesis."""
+    session_id = request.path_params.get("session_id")
+    if not session_id:
+        return JSONResponse({"error": "Missing session_id"}, status_code=400)
+
+    from src.ingestion.session_manager import SessionManager
+    store = get_storage_store()
+    mgr = SessionManager(store=store)
+
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+
+    briefing_id = body.get("briefing_report_id")
+    auto_synthesize = body.get("auto_synthesize", False)
+
+    if auto_synthesize and not briefing_id:
+        mgr.synthesize_session_dossier(session_id=session_id, auto_conclude=True)
+        dossier = store.get_session_dossier(session_id)
+        if dossier:
+            broadcast_event("session_concluded", dossier.model_dump())
+            return JSONResponse({"success": True, "concluded": True, "dossier": dossier.model_dump()})
+
+    dossier = mgr.conclude_session(session_id=session_id, briefing_report_id=briefing_id)
+    if not dossier:
+        return JSONResponse({"error": f"Session '{session_id}' not found"}, status_code=404)
+
+    broadcast_event("session_concluded", dossier.model_dump())
+    return JSONResponse({"success": True, "concluded": True, "dossier": dossier.model_dump()})
 
 
 @mcp.custom_route("/api/simulate", methods=["POST"])

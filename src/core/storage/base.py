@@ -1,10 +1,12 @@
 """Abstract interface for EXAMEN context storage."""
 
 from abc import ABC, abstractmethod
-from typing import List, Optional
+from typing import Any, List, Optional
 from src.core.schemas import (
     BriefingReport,
+    MicroEventRef,
     PlannedTask,
+    SessionDossier,
     SocialCommitment,
     SocialEntity,
     SocialWebProfile,
@@ -148,7 +150,47 @@ class AbstractContextStore(ABC):
         """List recently generated briefing reports ordered by created_at descending."""
         pass
 
+    def patch_utterance_speaker(
+        self, chunk_id: str, speaker_id: str, speaker_role: Optional[str] = None
+    ) -> bool:
+        """Retrospectively patches speaker metadata on stored actions/tasks. Returns True if patched."""
+        return False
+
+    # --- Macro Session & Micro-Event Decoupling (Milestone 3.2) ---
+    def save_session_dossier(self, dossier: Any) -> str:
+        """Save or update an aggregate SessionDossier. Returns session_id."""
+        raise NotImplementedError
+
+    def get_session_dossier(self, session_id: str) -> Optional[Any]:
+        """Fetch a SessionDossier by its session_id."""
+        raise NotImplementedError
+
+    def list_session_dossiers(
+        self, status: Optional[str] = None, limit: int = 10
+    ) -> List[Any]:
+        """List session dossiers with optional status filter."""
+        raise NotImplementedError
+
+    def append_chunk_to_session(
+        self, session_id: str, chunk_text: str, location: Optional[dict] = None
+    ) -> Any:
+        """Append a transcript chunk to an active or newly initialized session dossier."""
+        raise NotImplementedError
+
+    def link_micro_event_to_session(
+        self, session_id: str, event_ref: Any
+    ) -> bool:
+        """Link a decoupled micro-event (action, task, contact) to the parent macro session."""
+        raise NotImplementedError
+
+    def conclude_session_dossier(
+        self, session_id: str, briefing_report_id: Optional[str] = None
+    ) -> Optional[Any]:
+        """Mark a session dossier as concluded and link its synthesized briefing report ID."""
+        raise NotImplementedError
+
     @abstractmethod
     def close(self) -> None:
         """Close database connection / resources."""
         pass
+

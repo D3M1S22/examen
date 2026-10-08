@@ -116,7 +116,9 @@ def agent_invocation(payload: Dict[str, Any], context: Any = None) -> Dict[str, 
     # Ingress fallback: If invoked without pre-screening categories (e.g. direct AWS Console test)
     if not categories:
         logger.debug("Ingress payload lacks pre-screened categories; screening via Gatekeeper.")
-        classification = classify_chunk(raw_transcript)
+        classification = classify_chunk(
+            raw_transcript, prior_context=payload.get("historical_context")
+        )
         categories = classification.categories
         confidence = classification.confidence
         summary_hint = classification.summary_hint
@@ -129,6 +131,11 @@ def agent_invocation(payload: Dict[str, Any], context: Any = None) -> Dict[str, 
         "confidence": confidence,
         "summary_hint": summary_hint,
         "timestamp": payload.get("timestamp") or datetime.now().isoformat(),
+        "historical_context": payload.get("historical_context"),
+        "location": payload.get("location"),
+        "speaker": payload.get("speaker") or payload.get("speaker_id"),
+        "speaker_role": payload.get("speaker_role"),
+        "utterance_id": payload.get("utterance_id") or payload.get("chunk_id"),
     }
 
     # 5. Execute LangGraph StateGraph

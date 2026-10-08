@@ -1,8 +1,80 @@
 import re
+import uuid
 from datetime import datetime
-from typing import Annotated, List, Literal, Optional, Union
-from pydantic import BaseModel, Field
+from typing import Annotated, Any, List, Literal, Optional, Union
+from pydantic import BaseModel, Field, model_validator
 from typing_extensions import TypedDict
+
+
+# ============================================================================
+# 0. Wearable Streaming & Multimodal Telemetry (Ingestion Layer)
+# ============================================================================
+class LocationTelemetry(BaseModel):
+    latitude: float = Field(description="GPS latitude in decimal degrees.")
+    longitude: float = Field(description="GPS longitude in decimal degrees.")
+    place_name: Optional[str] = Field(default=None, description="Semantic or reverse-geocoded place name, e.g. 'Market St, San Francisco'.")
+    semantic_zone: Optional[Literal["home", "work_office", "transit", "public_venue", "unknown"]] = Field(
+        default=None,
+        description="Coarse semantic categorization of user's spatial context."
+    )
+    accuracy_meters: Optional[float] = Field(default=None, description="GPS horizontal accuracy in meters.")
+    captured_at: str = Field(
+        default_factory=lambda: datetime.now().isoformat(),
+        description="ISO timestamp when telemetry was captured."
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def default_semantic_zone(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if not data.get("semantic_zone") and data.get("place_name"):
+                data["semantic_zone"] = cls.infer_semantic_zone(data.get("place_name"))
+        return data
+
+    @classmethod
+    def infer_semantic_zone(cls, place_name: Optional[str]) -> Optional[Literal["home", "work_office", "transit", "public_venue"]]:
+        if not place_name:
+            return None
+        name_lower = place_name.lower()
+        if any(w in name_lower for w in ["home", "residence", "house", "apartment", "casa", "condo"]):
+            return "home"
+        if any(w in name_lower for w in ["office", "corp", "work", "lab", "hq", "ufficio", "building", "campus"]):
+            return "work_office"
+        if any(w in name_lower for w in ["transit", "highway", "train", "metro", "bus", "station", "stazione", "airport", "subway", "car", "auto"]):
+            return "transit"
+        if any(w in name_lower for w in ["cafe", "coffee", "starbucks", "hotel", "restaurant", "bar", "convention", "center", "shop"]):
+            return "public_venue"
+        return "unknown"
+
+
+class UtteranceChunk(BaseModel):
+    chunk_id: str = Field(default_factory=lambda: str(uuid.uuid4()), description="Unique utterance chunk identifier.")
+    conversation_uuid: str = Field(default="default_session", description="Conversation session UUID.")
+    text: str = Field(description="Transcribed spoken audio utterance.")
+    speaker_id: Optional[str] = Field(default=None, description="Diarized speaker ID (e.g. 'speaker_0', 'speaker_1').")
+    speaker_role: Optional[Literal["user", "contact", "unknown"]] = Field(
+        default="unknown",
+        description="Role of speaker: primary user ('user'), counterparty ('contact'), or 'unknown'."
+    )
+    timestamp: str = Field(
+        default_factory=lambda: datetime.now().isoformat(),
+        description="ISO timestamp when utterance occurred."
+    )
+    location: Optional[dict] = Field(default=None, description="LocationTelemetry dict at time of speech.")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_chunk_data(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if "utterance_id" in data and "chunk_id" not in data:
+                data["chunk_id"] = data["utterance_id"]
+            if "id" in data and "chunk_id" not in data:
+                data["chunk_id"] = data["id"]
+        return data
+
+    @property
+    def utterance_id(self) -> str:
+        return self.chunk_id
 
 
 # ============================================================================
@@ -100,6 +172,14 @@ class SocialEntity(BaseModel):
         default=None,
         description="Autonomously synthesized executive web dossier."
     )
+    location_encountered: Optional[str] = Field(
+        default=None,
+        description="Place or semantic venue where the encounter occurred (e.g. 'Starbucks on 4th', 'Moscone Center')."
+    )
+    session_id: Optional[str] = Field(
+        default=None,
+        description="Linked conversation session or meeting identifier."
+    )
     timestamp: str = Field(
         default_factory=lambda: datetime.now().isoformat(),
         description="ISO timestamp of the encounter."
@@ -154,6 +234,14 @@ class VerifiedAction(BaseModel):
         default=None,
         description="Linked PlannedTask id if this action fulfilled a scheduled task."
     )
+    session_id: Optional[str] = Field(
+        default=None,
+        description="Linked conversation session or meeting identifier."
+    )
+    location: Optional[dict] = Field(
+        default=None,
+        description="LocationTelemetry dict at time of action confirmation."
+    )
 
 
 class PlannedTask(BaseModel):
@@ -187,7 +275,7 @@ class PlannedTask(BaseModel):
         default_factory=lambda: datetime.now().isoformat(),
         description="Creation timestamp."
     )
-    # Ambient Voice Enhancements (Milestone 1.2)
+    # Ambient Voice Enhancements (Milestone 1.2 & 3.1)
     origin: Literal["manual", "ambient_voice", "social_commitment"] = Field(
         default="manual",
         description="Source modality of task registration."
@@ -207,6 +295,10 @@ class PlannedTask(BaseModel):
     session_id: Optional[str] = Field(
         default=None,
         description="Linked session/meeting ID if extracted from an ambient session."
+    )
+    location: Optional[dict] = Field(
+        default=None,
+        description="LocationTelemetry dict at time of task scheduling."
     )
 
 
@@ -294,7 +386,71 @@ class BriefingReport(BaseModel):
 
 
 # ============================================================================
-# 5. LangGraph State Definition
+# 5. Macro Session & Micro-Event Decoupling (Milestone 3.2)
+# ============================================================================
+class MicroEventRef(BaseModel):
+    event_type: Literal["action", "social_contact", "task_scheduled", "social_commitment"] = Field(
+        description="Type of micro-event decoupled from the session."
+    )
+    record_id: str = Field(description="Database identifier of the micro-event.")
+    headline: str = Field(description="Concise description or title of the micro-event.")
+    timestamp: str = Field(
+        default_factory=lambda: datetime.now().isoformat(),
+        description="ISO timestamp when the micro-event occurred."
+    )
+
+
+class SessionDossier(BaseModel):
+    session_id: str = Field(description="Unique conversation session UUID from wearable audio stream.")
+    title: Optional[str] = Field(default=None, description="Evolving or finalized title of the macro session.")
+    domain: Literal["meeting", "lecture", "technical_debate", "general"] = Field(
+        default="meeting",
+        description="Categorization of the macro session context."
+    )
+    start_time: str = Field(
+        default_factory=lambda: datetime.now().isoformat(),
+        description="ISO timestamp when the session began."
+    )
+    last_updated_at: str = Field(
+        default_factory=lambda: datetime.now().isoformat(),
+        description="ISO timestamp when the session was last updated."
+    )
+    concluded_at: Optional[str] = Field(
+        default=None,
+        description="ISO timestamp when the session was marked concluded."
+    )
+    status: Literal["active", "finalizing", "concluded"] = Field(
+        default="active",
+        description="Lifecycle status of the session."
+    )
+    location: Optional[dict] = Field(
+        default=None,
+        description="Spatial telemetry associated with the macro session."
+    )
+    transcript_chunks: List[str] = Field(
+        default_factory=list,
+        description="Accumulated verbatim audio transcript chunks."
+    )
+    key_discussion_points: List[str] = Field(
+        default_factory=list,
+        description="Salient discussion themes and decisions made."
+    )
+    linked_micro_events: List[MicroEventRef] = Field(
+        default_factory=list,
+        description="Decoupled micro-events (actions, tasks, contacts) linked to this session."
+    )
+    final_briefing_id: Optional[str] = Field(
+        default=None,
+        description="Linked BriefingReport ID after holistic Stage 3C synthesis."
+    )
+    briefing_report: Optional[BriefingReport] = Field(
+        default=None,
+        description="Full synthesized BriefingReport object if available."
+    )
+
+
+# ============================================================================
+# 6. LangGraph State Definition
 # ============================================================================
 class ExamenState(TypedDict, total=False):
     raw_transcript: str
@@ -308,4 +464,11 @@ class ExamenState(TypedDict, total=False):
     scheduled_task: Optional[PlannedTask]
     topic_extracted: Optional[TopicExtraction]
     briefing_report: Optional[BriefingReport]
+    session_dossier: Optional[SessionDossier]
     error: Optional[str]
+    # Ingestion Stream & Multimodal Context (Milestone 3.1)
+    historical_context: Optional[str]
+    location: Optional[dict]
+    speaker: Optional[str]
+    speaker_role: Optional[str]
+    utterance_id: Optional[str]

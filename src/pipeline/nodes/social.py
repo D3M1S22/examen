@@ -45,7 +45,11 @@ def _get_social_extractor():
     return get_fast_model().with_structured_output(SocialEntity)
 
 
-def _heuristic_extract_social(transcript: str) -> Optional[SocialEntity]:
+def _heuristic_extract_social(
+    transcript: str,
+    historical_context: Optional[str] = None,
+    speaker_role: Optional[str] = None,
+) -> Optional[SocialEntity]:
     """Deterministic heuristic extractor for offline dev, testing, or API fallbacks."""
     text = transcript.strip()
     if not text:
@@ -67,11 +71,20 @@ def _heuristic_extract_social(transcript: str) -> Optional[SocialEntity]:
             person_name = m.group(1).title().strip()
             break
 
+    # If name not in current chunk, resolve anaphora from historical context
+    if not person_name and historical_context:
+        for pat in name_patterns:
+            m = re.search(pat, historical_context, re.IGNORECASE)
+            if m:
+                person_name = m.group(1).title().strip()
+                break
+
     if not person_name:
         return None
 
     # Extract company or role
     company_or_role = None
+    combined_context = f"{historical_context or ''} {text}"
     m_role = re.search(r"(?:,\s*|\s+)(?:a\s+|an\s+)?([A-Za-z\s]+(?:Architect|Lead|Engineer|Director|Manager|CTO|CEO|Founder|Researcher)\s*(?:at|di|in)?\s*[A-Za-z0-9_\-\.]*)", text, re.IGNORECASE)
     if m_role:
         company_or_role = m_role.group(1).strip()
@@ -79,11 +92,20 @@ def _heuristic_extract_social(transcript: str) -> Optional[SocialEntity]:
         m_co = re.search(r"(?:at|di|presso|from)\s+([A-Z][A-Za-z0-9_\-\.]+)", text)
         if m_co:
             company_or_role = f"at {m_co.group(1)}"
+        elif historical_context:
+            m_hist_role = re.search(r"(?:,\s*|\s+)(?:a\s+|an\s+)?([A-Za-z\s]+(?:Architect|Lead|Engineer|Director|Manager|CTO|CEO|Founder|Researcher)\s*(?:at|di|in)?\s*[A-Za-z0-9_\-\.]*)", historical_context, re.IGNORECASE)
+            if m_hist_role:
+                company_or_role = m_hist_role.group(1).strip()
+            else:
+                m_hist_co = re.search(r"(?:at|di|presso|from)\s+([A-Z][A-Za-z0-9_\-\.]+)", historical_context)
+                if m_hist_co:
+                    company_or_role = f"at {m_hist_co.group(1)}"
 
     # Extract bilateral commitments
     commitments: List[SocialCommitment] = []
     
-    # 1. User promises (debtor = 'user')
+    # 1. User promises (debtor = 'user', unless speaker is identified as contact)
+    effective_user_debtor = "contact" if speaker_role == "contact" else "user"
     user_patterns = [
         r"(i(?:'ll| will)\s+(?:send|email|forward|share|review|call|text|prepare)\s+[^.,;!?]+)",
         r"(let(?:'s| us)\s+stay in touch[^.,;!?]*)",
@@ -98,7 +120,7 @@ def _heuristic_extract_social(transcript: str) -> Optional[SocialEntity]:
                 norm_iso, raw_time = parse_relative_time_expression(text)
             commitments.append(SocialCommitment(
                 contact_name=person_name,
-                debtor="user",
+                debtor=effective_user_debtor,
                 description=comm_desc,
                 due_date_raw=raw_time,
                 normalized_deadline=norm_iso,
@@ -220,26 +242,36 @@ def _enrich_if_qualified(entity: Optional[SocialEntity]) -> Optional[SocialEntit
 def node_extract_social(state: ExamenState) -> Dict[str, Any]:
     """LangGraph node: Stage 3A Social Recall Extractor.
 
-    Extracts contact info and commitments, merges with existing records, and outputs social_data.
+    Extracts contact info and commitments, grounds location telemetry, resolves
+    speaker roles, merges with existing records, and outputs social_data.
     """
     transcript = state.get("raw_transcript", "").strip()
     if not transcript:
         return {"social_data": None}
 
+    historical_context = state.get("historical_context")
+    location = state.get("location")
+    speaker_role = state.get("speaker_role")
+
     # Fallback if mock_ai or missing provider credentials
     if settings.mock_ai or not has_active_model_credentials(settings.gatekeeper_provider):
         logger.debug("Extracting social entity via heuristic fallback (mock_ai or no credentials).")
-        social = _heuristic_extract_social(transcript)
+        social = _heuristic_extract_social(
+            transcript, historical_context=historical_context, speaker_role=speaker_role
+        )
         if social:
+            if location and not social.location_encountered and location.get("place_name"):
+                social.location_encountered = location.get("place_name")
             social = _deduplicate_and_merge(social)
             social = _enrich_if_qualified(social)
         return {"social_data": social}
 
     try:
         extractor = _get_social_extractor()
+        context_prefix = f"Recent Dialogue Context:\n{historical_context}\n\n" if historical_context else ""
         prompt = (
             f"Extract person encounter details, company/role, contact info, and promises made.\n\n"
-            f"Transcript: \"{transcript}\""
+            f"{context_prefix}Transcript: \"{transcript}\""
         )
         messages = [
             SystemMessage(content=SOCIAL_SYSTEM_PROMPT),
@@ -247,21 +279,28 @@ def node_extract_social(state: ExamenState) -> Dict[str, Any]:
         ]
         result: Optional[SocialEntity] = extractor.invoke(messages)
 
-        if result and result.person_name:
+        if result and result.person_name and result.person_name.strip().lower() not in ("unknown", "none", "n/a", "null", ""):
             if not result.timestamp:
                 result.timestamp = datetime.now().isoformat()
 
+            if location and not result.location_encountered and location.get("place_name"):
+                result.location_encountered = location.get("place_name")
+
             # If LLM left commitments empty, supplement with heuristic extraction
             if not result.commitments:
-                h_social = _heuristic_extract_social(transcript)
+                h_social = _heuristic_extract_social(
+                    transcript, historical_context=historical_context, speaker_role=speaker_role
+                )
                 if h_social and h_social.commitments:
                     result.commitments = h_social.commitments
 
-            # Post-process commitments to ensure contact_name and normalized_deadline are populated
+            # Post-process commitments to ensure contact_name, normalized_deadline, and debtor alignment
             processed_commitments = []
             for c in result.get_commitments_as_objects():
                 if not c.contact_name:
                     c.contact_name = result.person_name
+                if speaker_role == "contact":
+                    c.debtor = "contact"
                 if not c.normalized_deadline:
                     probe_text = f"{c.due_date_raw or ''} {c.description} {transcript}"
                     norm_iso, raw_time = parse_relative_time_expression(probe_text)
@@ -280,8 +319,13 @@ def node_extract_social(state: ExamenState) -> Dict[str, Any]:
 
     except Exception as e:
         logger.warning(f"Social extraction model failed: {e}. Falling back to heuristic.")
-        social = _heuristic_extract_social(transcript)
+        social = _heuristic_extract_social(
+            transcript, historical_context=historical_context, speaker_role=speaker_role
+        )
         if social:
+            if location and not social.location_encountered and location.get("place_name"):
+                social.location_encountered = location.get("place_name")
             social = _deduplicate_and_merge(social)
             social = _enrich_if_qualified(social)
         return {"social_data": social}
+
