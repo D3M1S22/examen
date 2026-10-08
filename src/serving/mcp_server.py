@@ -427,10 +427,10 @@ def create_app() -> Starlette:
     """Constructs the unified ASGI application serving MCP, API, and Web UI."""
     app = mcp.streamable_http_app()
 
-    # Locate static web UI directory
+    # Locate static web UI directory (Next.js static export 'out' folder)
     current_dir = os.path.dirname(os.path.abspath(__file__))
     project_root = os.path.dirname(os.path.dirname(current_dir))
-    web_ui_dir = os.path.join(project_root, "src", "web_ui")
+    web_ui_dir = os.path.join(project_root, "src", "web_ui", "out")
 
     if os.path.isdir(web_ui_dir):
         logger.info(f"Mounting Web UI static assets from: {web_ui_dir}")
@@ -439,7 +439,7 @@ def create_app() -> Starlette:
         # Mount for root web dashboard
         app.mount("/", StaticFiles(directory=web_ui_dir, html=True), name="web-ui")
     else:
-        logger.warning(f"Web UI directory not found at {web_ui_dir}. Skipping static mount.")
+        logger.warning(f"Next.js static export directory not found at {web_ui_dir}. Run 'npm run build' in src/web_ui. Skipping static mount.")
 
     return app
 

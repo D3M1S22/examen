@@ -1,0 +1,101 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-background text-on-background font-sans antialiased min-h-screen overflow-x-hidden;
+  }
+  
+  /* Focus rings instead of hover dependencies */
+  *:focus-visible {
+    @apply outline outline-1 outline-outline-variant outline-offset-2 rounded-sm;
+  }
+
+  @keyframes fade-in {
+    from { opacity: 0; transform: translateY(4px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  
+  .animate-in.fade-in {
+    animation: fade-in 0.3s ease-out forwards;
+  }
+}
+
+@layer components {
+  /* System Bar */
+  .sys-bar {
+    @apply sticky top-0 left-0 right-0 h-[64px] z-[100] flex items-center justify-between px-gutter-desktop border-b border-surface-container backdrop-blur-md bg-surface/90;
+  }
+
+  /* Segmented Tab Navigation */
+  .segmented-nav {
+    @apply flex items-center p-1 rounded-full bg-surface-container-lowest border border-white/5;
+  }
+  
+  .segmented-tab {
+    @apply min-h-[40px] px-6 rounded-full text-label-md transition-colors whitespace-nowrap outline-none flex items-center;
+  }
+  
+  .segmented-tab-active {
+    @apply bg-primary text-background font-bold;
+  }
+  
+  .segmented-tab-inactive {
+    @apply text-secondary hover:text-primary focus-visible:bg-surface-container;
+  }
+
+  /* Cards */
+  .card {
+    @apply bg-surface-container-low border border-surface-container-highest rounded;
+  }
+  
+  .card-elevated {
+    @apply bg-surface-container border border-outline-variant rounded-lg transition-colors;
+  }
+  
+  .card-elevated:focus-within, .card-elevated:active {
+    @apply border-outline bg-surface-container-high;
+  }
+
+  /* Buttons */
+  .btn-primary {
+    @apply flex items-center justify-center min-h-touch px-6 bg-primary text-background text-label-lg font-bold rounded hover:bg-surface-tint active:bg-surface-tint active:scale-[0.98] transition-all;
+  }
+  
+  .btn-ghost {
+    @apply flex items-center justify-center min-h-touch px-6 bg-surface-container-low text-primary text-label-lg border border-surface-container-highest rounded hover:border-outline active:border-outline active:scale-[0.98] transition-all;
+  }
+
+  /* Status Badges */
+  .status-badge {
+    @apply inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-surface-container-lowest border border-surface-container-highest text-label-sm;
+  }
+  
+  .status-dot {
+    @apply w-1.5 h-1.5 rounded-full;
+  }
+  
+  .status-dot-active {
+    @apply bg-primary;
+  }
+  
+  .status-dot-idle {
+    @apply bg-outline-variant;
+  }
+
+  /* Inputs */
+  .input-well {
+    @apply bg-surface-container-lowest border border-surface-container-highest rounded text-body-md text-primary placeholder-outline-variant px-4 py-3 focus-visible:border-outline focus-visible:outline-none transition-colors;
+  }
+}
+
+@layer utilities {
+  .hide-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .hide-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+}

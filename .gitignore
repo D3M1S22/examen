@@ -31,3 +31,6 @@ htmlcov/
 
 #bee
 bee-sync/
+
+**/node_modules/
+**/.next/
