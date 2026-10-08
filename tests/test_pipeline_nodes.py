@@ -16,6 +16,10 @@ from src.core.schemas import (
 from src.core.storage.sqlite_store import SQLiteContextStore
 from src.pipeline.nodes.action_state import node_extract_action
 from src.pipeline.nodes.persist import node_persist
+from src.pipeline.nodes.scheduler import (
+    node_extract_scheduled_task,
+    parse_relative_time_expression,
+)
 from src.pipeline.nodes.social import node_extract_social
 from src.pipeline.nodes.topic_research import node_topic_research
 
@@ -361,3 +365,89 @@ class TestPersistNode:
         briefing = temp_store.get_topic_briefing("Docker")
         assert briefing is not None
         assert briefing.topic_title == "Docker Container Security"
+
+    def test_persist_scheduled_task(self, temp_store):
+        task = PlannedTask(
+            title="Call Dr. Smith",
+            domain="personal",
+            scheduled_time="2026-10-09T15:00:00",
+            origin="ambient_voice",
+            raw_statement="I need to call Dr. Smith at 3 PM tomorrow.",
+            confidence=0.92,
+            relative_time_anchor="at 3 PM tomorrow",
+            status="pending",
+        )
+        state: ExamenState = {
+            "scheduled_task": task,
+        }
+
+        node_persist(state)
+
+        # Verify task is persisted
+        tasks = temp_store.list_planned_tasks(origin="ambient_voice")
+        assert len(tasks) == 1
+        assert tasks[0].title == "Call Dr. Smith"
+        assert tasks[0].origin == "ambient_voice"
+        assert tasks[0].relative_time_anchor == "at 3 PM tomorrow"
+        assert tasks[0].raw_statement == "I need to call Dr. Smith at 3 PM tomorrow."
+
+
+class TestAmbientSchedulerNode:
+    """Tests for Stage 3D Ambient Scheduled Task Extraction."""
+
+    def test_parse_relative_time_expressions(self):
+        from datetime import datetime
+        base = datetime(2026, 10, 8, 10, 0, 0)
+
+        # 1. in 30 minutes
+        iso_min, anchor_min = parse_relative_time_expression("in 30 minutes", ref_dt=base)
+        assert iso_min == "2026-10-08T10:30:00"
+        assert anchor_min == "in 30 minutes"
+
+        # 2. in an hour
+        iso_hr, anchor_hr = parse_relative_time_expression("in an hour", ref_dt=base)
+        assert iso_hr == "2026-10-08T11:00:00"
+        assert anchor_hr == "in an hour"
+
+        # 3. tomorrow at 3 pm
+        iso_tom, anchor_tom = parse_relative_time_expression("tomorrow at 3 pm", ref_dt=base)
+        assert iso_tom == "2026-10-09T15:00:00"
+        assert "tomorrow at 3 pm" in anchor_tom
+
+        # 4. tonight at 9 pm
+        iso_ton, anchor_ton = parse_relative_time_expression("tonight at 9 pm", ref_dt=base)
+        assert iso_ton == "2026-10-08T21:00:00"
+        assert "tonight at 9 pm" in anchor_ton
+
+    def test_extract_scheduled_task_ambient_voice(self):
+        state: ExamenState = {
+            "raw_transcript": "I need to call Dr. Smith at 3 PM tomorrow.",
+            "session_id": "session_sched_1",
+            "categories": ["scheduled_task"],
+        }
+        res = node_extract_scheduled_task(state)
+        task: PlannedTask = res.get("scheduled_task")
+        assert task is not None
+        assert "call dr. smith" in task.title.lower() or "dr. smith" in task.title.lower()
+        assert task.origin == "ambient_voice"
+        assert task.raw_statement == "I need to call Dr. Smith at 3 PM tomorrow."
+        assert task.confidence >= 0.8
+        assert task.status == "pending"
+
+    def test_extract_safety_scheduled_task(self):
+        state: ExamenState = {
+            "raw_transcript": "Remind me to turn off the irrigation valve in an hour.",
+            "session_id": "session_sched_2",
+            "categories": ["scheduled_task"],
+        }
+        res = node_extract_scheduled_task(state)
+        task: PlannedTask = res.get("scheduled_task")
+        assert task is not None
+        assert task.domain == "safety"
+        assert task.origin == "ambient_voice"
+        assert "turn off" in task.title.lower() or "irrigation" in task.title.lower()
+        assert task.scheduled_time is not None
+
+    def test_empty_transcript_scheduler(self):
+        res = node_extract_scheduled_task({"raw_transcript": ""})
+        assert res.get("scheduled_task") is None

@@ -29,6 +29,7 @@ from src.pipeline.app import agent_invocation
 from src.serving.tools import (
     create_planned_task,
     get_daily_actions_recap,
+    get_upcoming_tasks,
     query_social_contact,
     verify_action_status,
 )
@@ -59,8 +60,9 @@ def broadcast_event(event_type: str, data: Optional[Dict[str, Any]] = None) -> N
             _sse_subscribers.discard(q)
 
 
-# Register the 5 core MCP tools for Alexa+
+# Register the 6 core MCP tools for Alexa+
 mcp.tool()(create_planned_task)
+mcp.tool()(get_upcoming_tasks)
 mcp.tool()(verify_action_status)
 mcp.tool()(get_daily_actions_recap)
 mcp.tool()(query_social_contact)
@@ -194,6 +196,11 @@ async def api_routines(request: Request) -> JSONResponse:
             domain=body.get("domain", "routine"),
             scheduled_time=body.get("scheduled_time"),
             recurrence=body.get("recurrence", "none"),
+            origin=body.get("origin", "manual"),
+            raw_statement=body.get("raw_statement"),
+            confidence=float(body.get("confidence", 1.0)),
+            relative_time_anchor=body.get("relative_time_anchor"),
+            session_id=body.get("session_id"),
             status="pending",
         )
         task_id = store.save_planned_task(task)
@@ -201,6 +208,7 @@ async def api_routines(request: Request) -> JSONResponse:
             "task_id": task_id,
             "title": task.title,
             "domain": task.domain,
+            "origin": task.origin,
         })
         return JSONResponse({
             "success": True,
@@ -209,16 +217,27 @@ async def api_routines(request: Request) -> JSONResponse:
             "domain": task.domain,
             "scheduled_time": task.scheduled_time,
             "recurrence": task.recurrence,
+            "origin": task.origin,
+            "raw_statement": task.raw_statement,
+            "confidence": task.confidence,
+            "relative_time_anchor": task.relative_time_anchor,
+            "session_id": task.session_id,
             "status": task.status,
         }, status_code=201)
 
     # GET
     domain = request.query_params.get("domain")
     status = request.query_params.get("status")
+    origin = request.query_params.get("origin")
     filter_domain = None if (not domain or domain.lower() == "all") else domain.lower()
     filter_status = None if (not status or status.lower() == "all") else status.lower()
+    filter_origin = None if (not origin or origin.lower() == "all") else origin.lower()
 
-    tasks = store.list_planned_tasks(domain=filter_domain, status=filter_status)
+    tasks = store.list_planned_tasks(
+        domain=filter_domain,
+        status=filter_status,
+        origin=filter_origin,
+    )
     result = []
     for t in tasks:
         result.append({
@@ -227,6 +246,11 @@ async def api_routines(request: Request) -> JSONResponse:
             "domain": t.domain,
             "scheduled_time": t.scheduled_time,
             "recurrence": t.recurrence,
+            "origin": t.origin,
+            "raw_statement": t.raw_statement,
+            "confidence": t.confidence,
+            "relative_time_anchor": t.relative_time_anchor,
+            "session_id": t.session_id,
             "status": t.status,
             "completed_at": t.completed_at,
             "verified_action_id": t.verified_action_id,
@@ -268,6 +292,12 @@ async def api_routine_detail(request: Request) -> JSONResponse:
         task.scheduled_time = body["scheduled_time"]
     if "recurrence" in body:
         task.recurrence = body["recurrence"]
+    if "origin" in body:
+        task.origin = body["origin"]
+    if "raw_statement" in body:
+        task.raw_statement = body["raw_statement"]
+    if "relative_time_anchor" in body:
+        task.relative_time_anchor = body["relative_time_anchor"]
     if "status" in body:
         new_status = body["status"]
         if new_status == "completed" and task.status != "completed":
@@ -287,6 +317,11 @@ async def api_routine_detail(request: Request) -> JSONResponse:
         "domain": task.domain,
         "scheduled_time": task.scheduled_time,
         "recurrence": task.recurrence,
+        "origin": task.origin,
+        "raw_statement": task.raw_statement,
+        "confidence": task.confidence,
+        "relative_time_anchor": task.relative_time_anchor,
+        "session_id": task.session_id,
         "status": task.status,
         "completed_at": task.completed_at,
         "verified_action_id": task.verified_action_id,

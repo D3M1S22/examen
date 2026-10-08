@@ -167,3 +167,36 @@ def test_planned_task_update_and_delete(temp_store):
     # Deleting non-existent task returns False
     assert temp_store.delete_planned_task("non-existent-id") is False
 
+
+def test_planned_task_ambient_voice_fields(temp_store):
+    task = PlannedTask(
+        title="Call Dr. Smith",
+        domain="personal",
+        scheduled_time="2026-10-09T15:00:00",
+        recurrence="none",
+        status="pending",
+        origin="ambient_voice",
+        raw_statement="I need to call Dr. Smith at 3 PM tomorrow.",
+        confidence=0.95,
+        relative_time_anchor="at 3 PM tomorrow",
+        session_id="ambient_session_123",
+    )
+    task_id = temp_store.save_planned_task(task)
+    assert task_id is not None
+
+    fetched = temp_store.get_planned_task(task_id)
+    assert fetched is not None
+    assert fetched.origin == "ambient_voice"
+    assert fetched.raw_statement == "I need to call Dr. Smith at 3 PM tomorrow."
+    assert fetched.confidence == 0.95
+    assert fetched.relative_time_anchor == "at 3 PM tomorrow"
+    assert fetched.session_id == "ambient_session_123"
+
+    # List with origin filter
+    ambient_tasks = temp_store.list_planned_tasks(origin="ambient_voice")
+    assert len(ambient_tasks) == 1
+    assert ambient_tasks[0].id == task_id
+
+    manual_tasks = temp_store.list_planned_tasks(origin="manual")
+    assert len(manual_tasks) == 0
+

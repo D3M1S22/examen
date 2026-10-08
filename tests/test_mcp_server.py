@@ -19,6 +19,7 @@ from src.serving.mcp_server import create_app
 from src.serving.tools.action_tools import (
     execute_create_planned_task,
     execute_get_daily_actions_recap,
+    execute_get_upcoming_tasks,
     execute_verify_action_status,
     _format_elapsed_time,
 )
@@ -114,6 +115,48 @@ class TestActionServingTools:
         recap_updated = execute_get_daily_actions_recap(store=temp_store)
         assert recap_updated["summary"]["planned_completed"] == 1
         assert recap_updated["summary"]["planned_pending"] == 0
+
+    def test_get_upcoming_tasks(self, temp_store):
+        t1 = PlannedTask(
+            title="Manual Task",
+            domain="routine",
+            scheduled_time="2026-10-09T08:00:00",
+            origin="manual",
+            status="pending",
+        )
+        t2 = PlannedTask(
+            title="Call Dr. Smith",
+            domain="personal",
+            scheduled_time="2026-10-09T15:00:00",
+            origin="ambient_voice",
+            raw_statement="I need to call Dr. Smith at 3 PM tomorrow.",
+            confidence=0.95,
+            relative_time_anchor="at 3 PM tomorrow",
+            status="pending",
+        )
+        t3 = PlannedTask(
+            title="Old Completed Task",
+            domain="safety",
+            origin="ambient_voice",
+            status="completed",
+        )
+        temp_store.save_planned_task(t1)
+        temp_store.save_planned_task(t2)
+        temp_store.save_planned_task(t3)
+
+        res = execute_get_upcoming_tasks(store=temp_store)
+        assert res["count"] == 2
+        assert res["ui_card_type"] == "UPCOMING_TASKS_VIEWER"
+        titles = [task["title"] for task in res["tasks"]]
+        assert "Manual Task" in titles
+        assert "Call Dr. Smith" in titles
+        assert "Old Completed Task" not in titles
+
+        # Filter by domain
+        res_personal = execute_get_upcoming_tasks(domain="personal", store=temp_store)
+        assert res_personal["count"] == 1
+        assert res_personal["tasks"][0]["origin"] == "ambient_voice"
+        assert res_personal["tasks"][0]["raw_statement"] == "I need to call Dr. Smith at 3 PM tomorrow."
 
     def test_format_elapsed_time(self):
         now_iso = datetime.now().isoformat()
@@ -230,7 +273,7 @@ class TestServerRestApiAndWebUi:
         assert isinstance(data["actions"], list)
 
     def test_api_routines_lifecycle(self, client):
-        # Create a planned routine
+        # 1. Create a planned routine
         post_res = client.post("/api/routines", json={
             "title": "Evening blood pressure medication",
             "domain": "routine",
@@ -241,12 +284,35 @@ class TestServerRestApiAndWebUi:
         created = post_res.json()
         assert created["success"] is True
         assert created["title"] == "Evening blood pressure medication"
+        assert created["origin"] == "manual"
 
-        # List planned routines
+        # 2. Create an ambient voice scheduled task
+        amb_res = client.post("/api/routines", json={
+            "title": "Call Dr. Smith",
+            "domain": "personal",
+            "scheduled_time": "2026-10-09T15:00:00",
+            "origin": "ambient_voice",
+            "raw_statement": "I need to call Dr. Smith at 3 PM tomorrow.",
+            "relative_time_anchor": "at 3 PM tomorrow",
+        })
+        assert amb_res.status_code == 201
+        amb_data = amb_res.json()
+        assert amb_data["origin"] == "ambient_voice"
+        assert amb_data["raw_statement"] == "I need to call Dr. Smith at 3 PM tomorrow."
+
+        # 3. List all planned routines
         get_res = client.get("/api/routines")
         assert get_res.status_code == 200
         tasks = get_res.json()["tasks"]
         assert any(t["title"] == "Evening blood pressure medication" for t in tasks)
+        assert any(t["title"] == "Call Dr. Smith" and t["origin"] == "ambient_voice" for t in tasks)
+
+        # 4. Filter by origin
+        amb_get = client.get("/api/routines?origin=ambient_voice")
+        assert amb_get.status_code == 200
+        amb_tasks = amb_get.json()["tasks"]
+        assert all(t["origin"] == "ambient_voice" for t in amb_tasks)
+        assert any(t["title"] == "Call Dr. Smith" for t in amb_tasks)
 
     def test_api_routines_invalid(self, client):
         res = client.post("/api/routines", json={"domain": "safety"})

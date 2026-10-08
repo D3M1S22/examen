@@ -54,17 +54,36 @@ def test_gatekeeper_action_completed():
 
 
 def test_gatekeeper_action_doubt_rejection():
-    """Doubtful statements or future intentions must NOT be treated as completed actions."""
+    """Retrospective doubts and uncertain questions must NOT be treated as completed actions."""
     doubt_samples = [
-        "I should remember to unplug the clothes iron before heading out.",
-        "Need to remember to lock the front door tonight.",
         "Did I unplug the stove? I wonder if I turned it off.",
-        "Need to deploy the database update tomorrow morning.",
-        "I have to check the logs later on.",
+        "Did I lock the front door when leaving?",
+        "I wonder if we turned off the water valve.",
+        "Did we shut down the server? Not sure.",
+        "Was it locked? Maybe I forgot.",
     ]
     for sample in doubt_samples:
         res = classify_chunk(sample, force_mock=True)
-        assert is_noop(res) is True, f"Doubt sample '{sample}' should be dropped, got: {res.categories}"
+        assert is_noop(res) is True, f"Doubt sample '{sample}' should be dropped as noop, got: {res.categories}"
+        assert "action" not in res.categories
+        assert "scheduled_task" not in res.categories
+
+
+def test_gatekeeper_scheduled_tasks():
+    """Forward commitments, reminders, and deadlines must be classified as scheduled_task."""
+    task_samples = [
+        "I need to call Dr. Smith at 3 PM tomorrow.",
+        "Remind me to turn off the irrigation valve in an hour.",
+        "I have to deploy the database update tomorrow morning.",
+        "Don't forget to lock the front door tonight.",
+        "Need to finish the quarterly performance review before Friday.",
+    ]
+    for sample in task_samples:
+        res = classify_chunk(sample, force_mock=True)
+        assert "scheduled_task" in res.categories, f"Sample '{sample}' should be scheduled_task, got: {res.categories}"
+        assert "action" not in res.categories
+        assert is_noop(res) is False
+        assert res.confidence >= 0.85
 
 
 def test_gatekeeper_social_recall():

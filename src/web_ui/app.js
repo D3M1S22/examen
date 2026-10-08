@@ -357,6 +357,16 @@ document.addEventListener("DOMContentLoaded", () => {
       const statusClass = isCompleted ? "status-completed" : "status-pending";
       const icon = isCompleted ? "✓" : "○";
       const badgeText = isCompleted ? "Audio Verified" : "Watching Stream";
+      const isAmbient = r.origin === "ambient_voice";
+      const originBadge = isAmbient
+        ? `<span class="routine-origin-badge">🎙️ Ambient Voice</span>`
+        : "";
+      const heardText = r.raw_statement
+        ? `<div class="routine-heard-text">🎙️ Spoken: "${escapeHtml(r.raw_statement)}"</div>`
+        : "";
+      const anchorText = r.relative_time_anchor
+        ? `<span>Anchor: <strong>${escapeHtml(r.relative_time_anchor)}</strong></span>`
+        : "";
 
       return `
         <div class="routine-item ${statusClass}" data-id="${r.id}">
@@ -368,10 +378,13 @@ document.addEventListener("DOMContentLoaded", () => {
               <div class="routine-title-text">${escapeHtml(r.title)}</div>
               <div class="routine-meta">
                 <span>Category: <strong>${escapeHtml(r.domain)}</strong></span>
+                ${originBadge}
                 ${r.scheduled_time ? `<span>Target: <strong>${escapeHtml(r.scheduled_time)}</strong></span>` : ""}
+                ${anchorText}
                 <span>Recurrence: <strong>${escapeHtml(r.recurrence)}</strong></span>
                 ${isCompleted && r.completed_at ? `<span>Completed at: <strong class="highlight-text">${escapeHtml(r.completed_at)}</strong></span>` : ""}
               </div>
+              ${heardText}
             </div>
           </div>
           <div class="routine-right">

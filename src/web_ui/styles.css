@@ -870,6 +870,33 @@ html, body {
   display: flex;
   gap: 1rem;
   margin-top: 0.2rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.routine-origin-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 0.15rem 0.55rem;
+  border-radius: 9999px;
+  background: rgba(139, 92, 246, 0.2);
+  color: #c4b5fd;
+  border: 1px solid rgba(139, 92, 246, 0.4);
+}
+
+.routine-heard-text {
+  margin-top: 0.35rem;
+  font-size: 0.8rem;
+  color: #cbd5e1;
+  font-style: italic;
+  background: rgba(255, 255, 255, 0.04);
+  padding: 0.3rem 0.65rem;
+  border-radius: var(--radius-sm);
+  border-left: 2px solid var(--accent-purple);
+  line-height: 1.4;
 }
 
 .routine-badge-tag {

@@ -3,7 +3,7 @@
 > **Document Status:** Active Execution Plan & Project Tracking Board  
 > **Source Documents:** [00_overview.md](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/docs/next_steps/00_overview.md) to [06_social_web_enrichment.md](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/docs/next_steps/06_social_web_enrichment.md)  
 > **Target Branch:** `Next_steps` / `main`  
-> **Current Baseline:** v1.0.0 (89/89 Pytest suites passing, FastMCP + Web UI with Realtime SSE live)
+> **Current Baseline:** v1.1.0 (100/100 Pytest suites passing, FastMCP + Web UI with Realtime SSE live)
 
 ---
 
@@ -16,7 +16,7 @@
 │  Baseline v1.0: Foundation Pipeline & Web UI       │ Critical │ High   │ docs/01-07  │ ✅ DONE   │
 │  Phase 1: High-Impact Core Intelligence            │ High     │ Medium │ Docs 01,04,05│ 🔄 IN PROGRESS│
 │    ├─ M1.1: Contextual Deep Topic Synthesis        │ P1       │ Medium │ Doc 01      │ ✅ DONE   │
-│    ├─ M1.2: Ambient Scheduled Tasks (Voice)        │ P1       │ Medium │ Doc 04      │ ⏳ READY  │
+│    ├─ M1.2: Ambient Scheduled Tasks (Voice)        │ P1       │ Medium │ Doc 04      │ ✅ DONE   │
 │    └─ M1.3: Bilateral Social Commitments           │ P1       │ Medium │ Doc 05      │ ⏳ READY  │
 │  Phase 2: Relational Enrichment & Multi-Modal UI   │ Medium   │ Medium │ Docs 06, UI │ ⏳ PLANNED│
 │    ├─ M2.1: Autonomous Social Web Profiler         │ P2       │ Medium │ Doc 06      │ ⏳ PLANNED│
@@ -44,7 +44,7 @@
 
 ---
 
-### Phase 1: High-Impact Core Intelligence (READY FOR EXECUTION ⏳)
+### Phase 1: High-Impact Core Intelligence (IN PROGRESS 🔄)
 > **Goal:** Enhance reasoning depth and capture actionable intent from spoken dialogue without depending on raw BLE streaming changes.
 
 #### 🎯 Milestone 1.1: Contextual Deep Topic Explanatory Synthesis
@@ -66,21 +66,28 @@
 
 #### 🎯 Milestone 1.2: Ambient Scheduled Tasks from Spoken Voice
 * **Reference Spec:** [`04_ambient_scheduled_tasks.md`](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/docs/next_steps/04_ambient_scheduled_tasks.md)
-* **Status:** ⏳ **READY TO IMPLEMENT**
-* **Rationale:** Spoken future intentions (*"I must call Dr. Smith at 3 PM"*) were previously dropped as `noop` to protect `VerifiedAction`. They should be captured as actionable planned tasks.
+* **Status:** ✅ **COMPLETED**
+* **Rationale:** Spoken future intentions (*"I must call Dr. Smith at 3 PM"*, *"Remind me to turn off irrigation in an hour"*) were previously dropped as `noop` to protect `VerifiedAction`. They are now captured as actionable planned tasks.
 * **Work Breakdown:**
-  1. **Gatekeeper Upgrade (`src/pipeline/nodes/gatekeeper.py`)**:
-     * Add `"scheduled_task"` category to `ChunkClassification`.
-     * Update Gatekeeper prompts to distinguish completed past actions (`action`) from future commitments (`scheduled_task`).
-  2. **Schema Extension (`src/core/schemas.py`)**:
-     * Add `origin: Literal["manual", "ambient_voice", "social_commitment"] = "manual"`, `raw_statement`, `relative_time_anchor`, and `confidence` to `PlannedTask`.
-  3. **New LangGraph Node (`src/pipeline/nodes/scheduler.py`)**:
-     * Implement `node_extract_scheduled_task` with relative time normalizer (*"tomorrow morning"* -> ISO-8601 UTC timestamp).
-     * Connect node to `pipeline_graph` in `src/pipeline/graph.py`.
-  4. **Closed-Loop Reconciliation**:
-     * Update `ActionVerifier` (`src/pipeline/nodes/action_state.py`) to auto-complete matched pending tasks when the action is later confirmed.
-  5. **Testing**:
-     * Unit tests for relative time parsing, closed-loop completion, and storage persistence.
+  1. [x] **Gatekeeper Upgrade (`src/ingestion/gatekeeper.py`)**:
+     * Added `"scheduled_task"` category to `ChunkClassification`.
+     * Updated Gatekeeper prompt and regex heuristic to strictly differentiate doubts/queries (`"did I"`, `"wonder if"`) -> `noop` from forward commitments (`"need to"`, `"remind me to"`, `"must"`) -> `scheduled_task`.
+  2. [x] **Schema Extension (`src/core/schemas.py`)**:
+     * Added `origin: Literal["manual", "ambient_voice", "social_commitment"] = "manual"`, `raw_statement`, `confidence`, `relative_time_anchor`, and `session_id` to `PlannedTask`.
+     * Added `ScheduledTaskExtraction` Pydantic model for structured LLM extraction.
+     * Extended `ExamenState` with `scheduled_task: Optional[PlannedTask]`.
+  3. [x] **New LangGraph Node (`src/pipeline/nodes/scheduler.py`)**:
+     * Implemented deterministic `parse_relative_time_expression` (*"in 30 minutes"*, *"in an hour"*, *"tomorrow at 3 pm"*, *"tonight at 9 pm"*) computing ISO-8601 timestamps.
+     * Built `node_extract_scheduled_task` LangGraph node with Bedrock structured output and heuristic fallback.
+     * Connected parallel routing branch in `src/pipeline/graph.py` and state persistence in `src/pipeline/nodes/persist.py`.
+  4. [x] **Storage & FastMCP Serving Layer (`src/core/storage/sqlite_store.py`, `src/serving/tools/action_tools.py`, `src/serving/mcp_server.py`)**:
+     * Non-blocking schema migration for `origin`, `raw_statement`, `confidence`, `relative_time_anchor`, `session_id`.
+     * Implemented `get_upcoming_tasks` tool for Alexa+ / FastMCP.
+     * Exposed full origin metadata in `/api/routines` REST endpoints.
+  5. [x] **Web UI Dashboard Rendering (`src/web_ui/`)**:
+     * Added `🎙️ Ambient Voice` badge, verbatim spoken quotes, and time anchor badges in the Routines list.
+  6. [x] **Testing & Verification**:
+     * 100/100 tests passing with 0 errors across all test suites (`tests/test_gatekeeper.py`, `tests/test_pipeline_nodes.py`, `tests/test_langgraph_pipeline.py`, `tests/test_mcp_server.py`, `tests/test_storage.py`).
 
 #### 🎯 Milestone 1.3: Structured Bilateral Social Commitments
 * **Reference Spec:** [`05_structured_social_commitments.md`](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/docs/next_steps/05_structured_social_commitments.md)

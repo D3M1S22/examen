@@ -10,7 +10,7 @@ from typing_extensions import TypedDict
 # 1. Gatekeeper Classifier Output (Stage 1)
 # ============================================================================
 class ChunkClassification(BaseModel):
-    categories: List[Literal["social", "action", "deep_topic", "noop"]] = Field(
+    categories: List[Literal["social", "action", "deep_topic", "scheduled_task", "noop"]] = Field(
         description="Categories detected in the transcript chunk. 'noop' if irrelevant."
     )
     confidence: float = Field(
@@ -46,7 +46,7 @@ class SocialEntity(BaseModel):
 
 
 # ============================================================================
-# 3. Action-State & Routine Task Channel (Stage 3B)
+# 3. Action-State & Routine Task Channel (Stage 3B & Stage 3D)
 # ============================================================================
 class VerifiedAction(BaseModel):
     id: Optional[str] = Field(default=None, description="Unique action identifier.")
@@ -79,10 +79,10 @@ class VerifiedAction(BaseModel):
 
 class PlannedTask(BaseModel):
     id: Optional[str] = Field(default=None, description="Unique task identifier.")
-    title: str = Field(description="Task description (e.g. 'unplug clothes iron', 'take blood pressure medication').")
-    domain: Literal["safety", "routine", "work_task"] = Field(
+    title: str = Field(description="Task description (e.g. 'unplug clothes iron', 'Call Dr. Smith').")
+    domain: Literal["safety", "routine", "work_task", "personal"] = Field(
         default="routine",
-        description="Domain of action (safety, routine, work_task)."
+        description="Domain of action (safety, routine, work_task, personal)."
     )
     scheduled_time: Optional[str] = Field(
         default=None,
@@ -92,7 +92,7 @@ class PlannedTask(BaseModel):
         default="none",
         description="Recurrence schedule pattern."
     )
-    status: Literal["pending", "completed", "overdue", "skipped"] = Field(
+    status: Literal["pending", "completed", "overdue", "skipped", "cancelled"] = Field(
         default="pending",
         description="Current task status."
     )
@@ -107,6 +107,51 @@ class PlannedTask(BaseModel):
     created_at: str = Field(
         default_factory=lambda: datetime.now().isoformat(),
         description="Creation timestamp."
+    )
+    # Ambient Voice Enhancements (Milestone 1.2)
+    origin: Literal["manual", "ambient_voice", "social_commitment"] = Field(
+        default="manual",
+        description="Source modality of task registration."
+    )
+    raw_statement: Optional[str] = Field(
+        default=None,
+        description="Verbatim spoken utterance indicating intention."
+    )
+    confidence: float = Field(
+        default=1.0, ge=0.0, le=1.0,
+        description="Extraction confidence score."
+    )
+    relative_time_anchor: Optional[str] = Field(
+        default=None,
+        description="Exact spoken temporal anchor, e.g. 'at 3 PM tomorrow', 'in an hour'."
+    )
+    session_id: Optional[str] = Field(
+        default=None,
+        description="Linked session/meeting ID if extracted from an ambient session."
+    )
+
+
+class ScheduledTaskExtraction(BaseModel):
+    title: str = Field(description="Clean imperative title of task, e.g., 'Call Dr. Smith', 'Turn off irrigation valve'")
+    domain: Literal["safety", "routine", "work_task", "personal"] = Field(
+        default="routine",
+        description="Domain of action: safety, routine, work_task, personal."
+    )
+    scheduled_time: Optional[str] = Field(
+        default=None,
+        description="ISO-8601 UTC timestamp computed relative to current reference time, or null if no specific time indicated."
+    )
+    relative_time_anchor: Optional[str] = Field(
+        default=None,
+        description="Exact phrase indicating the temporal anchor, e.g. 'at 3 PM tomorrow', 'in 20 minutes'."
+    )
+    recurrence: Literal["none", "daily", "weekdays", "weekly"] = Field(
+        default="none",
+        description="Recurrence pattern if repeating."
+    )
+    confidence: float = Field(
+        default=0.95, ge=0.0, le=1.0,
+        description="Extraction certainty score."
     )
 
 
@@ -181,6 +226,7 @@ class ExamenState(TypedDict, total=False):
     summary_hint: str
     social_data: Optional[SocialEntity]
     action_data: Optional[VerifiedAction]
+    scheduled_task: Optional[PlannedTask]
     topic_extracted: Optional[TopicExtraction]
     briefing_report: Optional[BriefingReport]
     error: Optional[str]

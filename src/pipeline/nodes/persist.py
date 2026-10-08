@@ -52,4 +52,15 @@ def node_persist(state: ExamenState) -> Dict[str, Any]:
         except Exception as e:
             logger.error(f"Failed to persist topic briefing: {e}", exc_info=True)
 
+    # 4. Persist Scheduled Task (Stage 3D Ambient Voice Tasks)
+    scheduled_task = state.get("scheduled_task")
+    if scheduled_task:
+        try:
+            rec_id = store.save_planned_task(scheduled_task)
+            logger.info(
+                f"Persisted ambient scheduled task '{scheduled_task.title}' (ID: {rec_id}, origin: {scheduled_task.origin})"
+            )
+        except Exception as e:
+            logger.error(f"Failed to persist ambient scheduled task: {e}", exc_info=True)
+
     return {}

@@ -16,6 +16,7 @@ from langgraph.graph.state import CompiledStateGraph
 from src.core.schemas import ExamenState
 from src.pipeline.nodes.action_state import node_extract_action
 from src.pipeline.nodes.persist import node_persist
+from src.pipeline.nodes.scheduler import node_extract_scheduled_task
 from src.pipeline.nodes.social import node_extract_social
 from src.pipeline.nodes.topic_research import node_topic_research
 
@@ -37,6 +38,8 @@ def route_categories(state: ExamenState) -> List[str]:
         targets.append("extract_social")
     if "deep_topic" in categories:
         targets.append("topic_research")
+    if "scheduled_task" in categories:
+        targets.append("extract_scheduled_task")
 
     # If no actionable category detected (e.g. ['noop']), short-circuit directly to END
     if not targets:
@@ -55,6 +58,7 @@ def build_examen_graph() -> CompiledStateGraph:
         * 'extract_action' (Stage 3B Action-State Verifier)
         * 'extract_social' (Stage 3A Social Recall)
         * 'topic_research' (Stage 3C Deep Research & Briefing Synthesizer)
+        * 'extract_scheduled_task' (Stage 3D Ambient Task Scheduler)
         * END (if NOOP / chit-chat)
     - All active channel branches fan-in to 'persist'.
     - 'persist' commits all extracted entities to durable storage and terminates at END.
@@ -65,19 +69,21 @@ def build_examen_graph() -> CompiledStateGraph:
     builder.add_node("extract_action", node_extract_action)
     builder.add_node("extract_social", node_extract_social)
     builder.add_node("topic_research", node_topic_research)
+    builder.add_node("extract_scheduled_task", node_extract_scheduled_task)
     builder.add_node("persist", node_persist)
 
     # Conditional routing from START
     builder.add_conditional_edges(
         START,
         route_categories,
-        ["extract_action", "extract_social", "topic_research", END],
+        ["extract_action", "extract_social", "topic_research", "extract_scheduled_task", END],
     )
 
     # Fan-in edges to persist
     builder.add_edge("extract_action", "persist")
     builder.add_edge("extract_social", "persist")
     builder.add_edge("topic_research", "persist")
+    builder.add_edge("extract_scheduled_task", "persist")
 
     # Termination
     builder.add_edge("persist", END)

@@ -21,14 +21,17 @@ Input transcripts may be spoken in any language (e.g., English, Spanish, German,
 CATEGORIES TO DETECT:
 - "action": Explicit first-person completed actions regarding domestic safety, routine, or completed work tasks.
   * MUST be a confirmed completed action (e.g., "I just turned off the stove", "I unplugged the clothes iron", "Merged PR #42", "I locked the front door").
-  * STRICT NEGATIVE FILTER: If it is a doubt, question, or future intention (e.g., "I should remember to turn off the stove", "Did I lock the door?", "I need to deploy later"), classify as "noop"!
+  * STRICT NEGATIVE FILTER: Future intentions or doubts are NOT completed actions!
+- "scheduled_task": Spoken future intentions, commitments to do something later, or explicit deadlines.
+  * E.g., "I need to call Dr. Smith at 3 PM tomorrow", "Remind me to turn off the irrigation valve in an hour", "I must send the report before Friday", "Don't forget to take blood pressure medication tonight".
+  * Doubts or retrospective questions (e.g. "Did I lock the door?", "I wonder if I turned it off") are NOT scheduled tasks and MUST be "noop"!
 - "social": Professional introductions, name/role exchanges, or explicit bilateral promises.
   * E.g., "Nice to meet you, I'm Marco, Tech Lead at Acme", "Pleased to meet you, let's stay in touch and I'll send you the documentation tomorrow".
   * Casual mentions of third parties without meeting or commitments are NOT "social".
 - "deep_topic": Technical discussions, architectural debates, specific bugs, named libraries/frameworks, or academic lectures.
   * E.g., "In today's meeting we are evaluating AWS Bedrock AgentCore and investigating a memory leak in the runtime", "Today's lecture covers distributed consensus algorithms".
-- "noop": Default for casual chit-chat, small talk, pleasantries, background noise, fragmented speech, or topics lacking durable informational value.
-  * E.g., "What's the weather like today?", "Let's grab a coffee at the corner", "Yeah, sure", "See you later", "Sounds good, thanks".
+- "noop": Default for casual chit-chat, small talk, pleasantries, background noise, fragmented speech, doubts, or topics lacking durable informational value.
+  * E.g., "What's the weather like today?", "Let's grab a coffee at the corner", "Did I unplug the stove? I wonder if I turned it off.", "Yeah, sure", "See you later", "Sounds good, thanks".
 
 STRICT RULES:
 1. BIAS HEAVILY TOWARDS "noop". Over 90% of daily ambient speech should be classified as "noop".
@@ -73,16 +76,15 @@ def _heuristic_classify(
     if not text:
         return ChunkClassification(categories=["noop"], confidence=1.0, summary_hint="Empty transcript")
 
-    # Strict doubt & future intention filter -> immediately NOOP
+    # 0. Strict doubt & retrospective uncertainty check -> immediately NOOP
     doubt_patterns = [
-        r"\b(should remember|need to remember|need to|have to|did i|wonder if)\b",
-        r"\b(supposed to|planning to|going to|thinking of|tomorrow|later on|later today)\b"
+        r"\b(did i|did we|wonder if|i wonder|have i|was it|were they|maybe i)\b",
     ]
     if any(re.search(pat, text) for pat in doubt_patterns):
         return ChunkClassification(
             categories=["noop"],
             confidence=0.96,
-            summary_hint="Doubt or future intention discarded"
+            summary_hint="Doubt or retrospective question discarded"
         )
 
     categories: List[str] = []
@@ -110,6 +112,14 @@ def _heuristic_classify(
                 if has_completion_signal:
                     categories.append("action")
                     break
+
+    # 1c. Scheduled task / future intention check: explicit future commitments, reminders, or deadlines
+    scheduled_patterns = [
+        r"\b(i need to|need to|i have to|have to|i must|must|remind me to|don't forget to|remember to|schedule a|schedule an)\b",
+        r"\b(i will|i'll)\s+(call|send|meet|finish|buy|turn off|unplug|lock|shut|take|deploy|review|deliver)\b",
+    ]
+    if any(re.search(pat, text) for pat in scheduled_patterns) and "action" not in categories:
+        categories.append("scheduled_task")
 
     # 2. Social interaction check: strictly explicit introductions, professional roles, or follow-up commitments
     social_patterns = [
@@ -151,6 +161,7 @@ def _heuristic_classify(
 
     hint_map = {
         "action": "Completed action confirmed",
+        "scheduled_task": "Spoken future intention or scheduled task detected",
         "social": "Social encounter or commitment detected",
         "deep_topic": "Meeting, architecture review or lecture detected"
     }

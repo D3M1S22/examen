@@ -136,6 +136,29 @@ class TestLangGraphPipeline:
         action = temp_store.get_action_status("build") or temp_store.get_action_status("service")
         assert action is not None
 
+    def test_pipeline_scheduled_task_flow(self, temp_store):
+        """Validates that spoken future tasks fan out to scheduler node and persist in SQLite."""
+        state: ExamenState = {
+            "raw_transcript": "I need to call Dr. Smith at 3 PM tomorrow.",
+            "session_id": "test_sched_flow_sess",
+            "categories": ["scheduled_task"],
+            "confidence": 0.94,
+        }
+
+        result = pipeline_graph.invoke(state)
+
+        # 1. Verify state outputs
+        task = result.get("scheduled_task")
+        assert task is not None
+        assert "dr. smith" in task.title.lower() or "call" in task.title.lower()
+        assert task.origin == "ambient_voice"
+        assert task.status == "pending"
+
+        # 2. Verify persistence in context store
+        stored_tasks = temp_store.list_planned_tasks(origin="ambient_voice")
+        assert len(stored_tasks) >= 1
+        assert any("smith" in t.title.lower() for t in stored_tasks)
+
     def test_pipeline_noop_shortcircuit(self, temp_store):
         """Validates that noop categories bypass extraction nodes directly to END."""
         state: ExamenState = {
@@ -150,6 +173,7 @@ class TestLangGraphPipeline:
         assert result.get("action_data") is None
         assert result.get("social_data") is None
         assert result.get("briefing_report") is None
+        assert result.get("scheduled_task") is None
 
         # Verify nothing persisted
         actions = temp_store.list_recent_actions(limit=10)
@@ -188,6 +212,21 @@ class TestAgentCoreApp:
         assert res["session_id"] == "sess-prompt-01"
         assert res["action_data"] is not None
         assert res["action_data"]["action_type"] == "stove_off"
+
+    def test_agentcore_scheduled_task_ingress(self, temp_store):
+        """Validates that a direct conversational prompt with future intention extracts scheduled task."""
+        payload = {
+            "prompt": "I need to call Dr. Smith at 3 PM tomorrow",
+            "session_id": "sess-prompt-sched",
+        }
+
+        res = agent_invocation(payload, None)
+
+        assert res["status"] == "success"
+        assert res["session_id"] == "sess-prompt-sched"
+        assert res["scheduled_task"] is not None
+        assert res["scheduled_task"]["origin"] == "ambient_voice"
+        assert "scheduled task" in res["summary"].lower()
 
     def test_agentcore_empty_prompt_returns_noop(self):
         payload = {"prompt": "   "}

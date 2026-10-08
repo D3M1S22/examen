@@ -21,9 +21,9 @@ class AbstractContextStore(ABC):
 
     @abstractmethod
     def list_planned_tasks(
-        self, status: Optional[str] = None, domain: Optional[str] = None
+        self, status: Optional[str] = None, domain: Optional[str] = None, origin: Optional[str] = None
     ) -> List[PlannedTask]:
-        """List planned tasks, optionally filtered by status or domain."""
+        """List planned tasks, optionally filtered by status, domain, or origin."""
         pass
 
     @abstractmethod

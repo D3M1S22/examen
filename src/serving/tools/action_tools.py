@@ -239,3 +239,55 @@ def get_daily_actions_recap(
         limit: Max number of spontaneous actions to return (default 10).
     """
     return execute_get_daily_actions_recap(domain=domain, limit=limit)
+
+
+def execute_get_upcoming_tasks(
+    domain: Optional[str] = None,
+    limit: int = 10,
+    store: Optional[AbstractContextStore] = None,
+) -> Dict[str, Any]:
+    """Internal implementation for querying pending tasks and reminders."""
+    ctx_store = store or get_storage_store()
+    filter_domain = None if (not domain or domain.lower() == "all") else domain.lower()
+    tasks = ctx_store.list_planned_tasks(status="pending", domain=filter_domain)
+    tasks = tasks[:limit]
+
+    formatted = []
+    for t in tasks:
+        formatted.append({
+            "id": t.id,
+            "title": t.title,
+            "domain": t.domain,
+            "scheduled_time": t.scheduled_time,
+            "recurrence": t.recurrence,
+            "origin": t.origin,
+            "raw_statement": t.raw_statement,
+            "relative_time_anchor": t.relative_time_anchor,
+            "status": t.status,
+            "created_at": t.created_at,
+        })
+
+    spoken_summary = (
+        f"You have {len(formatted)} upcoming scheduled task{'s' if len(formatted) != 1 else ''}."
+        if formatted else "You have no upcoming scheduled tasks."
+    )
+
+    return {
+        "tasks": formatted,
+        "count": len(formatted),
+        "spoken_summary": spoken_summary,
+        "ui_card_type": "UPCOMING_TASKS_VIEWER",
+    }
+
+
+def get_upcoming_tasks(
+    domain: Optional[str] = None,
+    limit: int = 10,
+) -> Dict[str, Any]:
+    """Query upcoming scheduled tasks and deadlines, including those captured ambiently via voice.
+    
+    Args:
+        domain: Optional filter category ('safety', 'routine', 'work_task', 'personal', or None).
+        limit: Maximum number of tasks to return (default 10).
+    """
+    return execute_get_upcoming_tasks(domain=domain, limit=limit)

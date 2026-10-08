@@ -36,11 +36,28 @@ class SQLiteContextStore(AbstractContextStore):
                     status TEXT NOT NULL DEFAULT 'pending',
                     completed_at TEXT,
                     verified_action_id TEXT,
-                    created_at TEXT NOT NULL
+                    created_at TEXT NOT NULL,
+                    origin TEXT NOT NULL DEFAULT 'manual',
+                    raw_statement TEXT,
+                    confidence REAL NOT NULL DEFAULT 1.0,
+                    relative_time_anchor TEXT,
+                    session_id TEXT
                 )
             """)
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_planned_status ON planned_tasks (status);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_planned_time ON planned_tasks (scheduled_time);")
+            for col_name, col_type in [
+                ("origin", "TEXT NOT NULL DEFAULT 'manual'"),
+                ("raw_statement", "TEXT"),
+                ("confidence", "REAL NOT NULL DEFAULT 1.0"),
+                ("relative_time_anchor", "TEXT"),
+                ("session_id", "TEXT"),
+            ]:
+                try:
+                    cursor.execute(f"ALTER TABLE planned_tasks ADD COLUMN {col_name} {col_type};")
+                except Exception:
+                    pass
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_planned_origin ON planned_tasks (origin);")
 
             # 1. Verified Actions Table
             cursor.execute("""
@@ -127,8 +144,9 @@ class SQLiteContextStore(AbstractContextStore):
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT OR REPLACE INTO planned_tasks
-                (id, title, domain, scheduled_time, recurrence, status, completed_at, verified_action_id, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (id, title, domain, scheduled_time, recurrence, status, completed_at, verified_action_id, created_at,
+                 origin, raw_statement, confidence, relative_time_anchor, session_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 rec_id,
                 task.title.strip(),
@@ -139,6 +157,11 @@ class SQLiteContextStore(AbstractContextStore):
                 task.completed_at,
                 task.verified_action_id,
                 task.created_at,
+                task.origin,
+                task.raw_statement,
+                task.confidence,
+                task.relative_time_anchor,
+                task.session_id,
             ))
             conn.commit()
         return rec_id
@@ -158,11 +181,16 @@ class SQLiteContextStore(AbstractContextStore):
                     completed_at=row["completed_at"],
                     verified_action_id=row["verified_action_id"],
                     created_at=row["created_at"],
+                    origin=row["origin"] if ("origin" in row.keys() and row["origin"]) else "manual",
+                    raw_statement=row["raw_statement"] if "raw_statement" in row.keys() else None,
+                    confidence=row["confidence"] if ("confidence" in row.keys() and row["confidence"] is not None) else 1.0,
+                    relative_time_anchor=row["relative_time_anchor"] if "relative_time_anchor" in row.keys() else None,
+                    session_id=row["session_id"] if "session_id" in row.keys() else None,
                 )
         return None
 
     def list_planned_tasks(
-        self, status: Optional[str] = None, domain: Optional[str] = None
+        self, status: Optional[str] = None, domain: Optional[str] = None, origin: Optional[str] = None
     ) -> List[PlannedTask]:
         sql = "SELECT * FROM planned_tasks WHERE 1=1"
         params = []
@@ -172,6 +200,9 @@ class SQLiteContextStore(AbstractContextStore):
         if domain:
             sql += " AND domain = ?"
             params.append(domain)
+        if origin:
+            sql += " AND origin = ?"
+            params.append(origin)
         sql += " ORDER BY scheduled_time ASC, created_at ASC"
 
         results = []
@@ -189,6 +220,11 @@ class SQLiteContextStore(AbstractContextStore):
                     completed_at=r["completed_at"],
                     verified_action_id=r["verified_action_id"],
                     created_at=r["created_at"],
+                    origin=r["origin"] if ("origin" in r.keys() and r["origin"]) else "manual",
+                    raw_statement=r["raw_statement"] if "raw_statement" in r.keys() else None,
+                    confidence=r["confidence"] if ("confidence" in r.keys() and r["confidence"] is not None) else 1.0,
+                    relative_time_anchor=r["relative_time_anchor"] if "relative_time_anchor" in r.keys() else None,
+                    session_id=r["session_id"] if "session_id" in r.keys() else None,
                 ))
         return results
 
@@ -214,7 +250,9 @@ class SQLiteContextStore(AbstractContextStore):
             cursor.execute("""
                 UPDATE planned_tasks
                 SET title = ?, domain = ?, scheduled_time = ?, recurrence = ?,
-                    status = ?, completed_at = ?, verified_action_id = ?
+                    status = ?, completed_at = ?, verified_action_id = ?,
+                    origin = ?, raw_statement = ?, confidence = ?,
+                    relative_time_anchor = ?, session_id = ?
                 WHERE id = ?
             """, (
                 task.title.strip(),
@@ -224,6 +262,11 @@ class SQLiteContextStore(AbstractContextStore):
                 task.status,
                 task.completed_at,
                 task.verified_action_id,
+                task.origin,
+                task.raw_statement,
+                task.confidence,
+                task.relative_time_anchor,
+                task.session_id,
                 task.id,
             ))
             conn.commit()
