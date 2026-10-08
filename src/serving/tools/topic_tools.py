@@ -43,6 +43,7 @@ def execute_get_topic_briefing(
             "context_type": briefing.context_type,
             "created_at": briefing.created_at,
             "executive_summary": briefing.executive_summary,
+            "explanatory_synthesis": briefing.explanatory_synthesis,
             "web_sources": briefing.web_sources,
             "action_items": briefing.action_items,
             "deep_dive_markdown": briefing.deep_dive_markdown,

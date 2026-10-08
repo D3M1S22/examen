@@ -1180,6 +1180,54 @@ html, body {
   font-weight: bold;
 }
 
+.briefing-explanatory-box {
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.08) 0%, rgba(6, 182, 212, 0.04) 100%);
+  border: 1px solid rgba(139, 92, 246, 0.25);
+  border-left: 3px solid var(--accent-purple);
+  border-radius: var(--radius-md);
+  padding: 1.15rem 1.4rem;
+  margin: 1.15rem 0;
+  backdrop-filter: blur(10px);
+}
+
+.explanatory-header {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.65rem;
+}
+
+.explanatory-icon {
+  font-size: 1rem;
+}
+
+.explanatory-title {
+  font-family: var(--font-display);
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: #e2e8f0;
+  letter-spacing: 0.02em;
+}
+
+.explanatory-badge {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  background: rgba(139, 92, 246, 0.2);
+  color: #c4b5fd;
+  padding: 2px 7px;
+  border-radius: var(--radius-full);
+  margin-left: auto;
+  border: 1px solid rgba(139, 92, 246, 0.4);
+}
+
+.explanatory-content {
+  font-family: var(--font-body);
+  font-size: 0.92rem;
+  line-height: 1.6;
+  color: #cbd5e1;
+  white-space: pre-line;
+}
+
 .sources-row {
   display: flex;
   flex-wrap: wrap;

@@ -2,6 +2,7 @@
 
 > **Document Status:** Architectural Specification  
 > **Source Task:** [Next_steps.txt](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/Next_steps.txt)  
+> **Execution Tracking:** See the full [ROADMAP.md](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/docs/next_steps/ROADMAP.md) for milestone order and progress.  
 > **Scope:** High-impact enhancements to ambient screening, multi-modal ingestion, contextual synthesis, and relational intelligence.
 
 ---
@@ -14,7 +15,7 @@
 3. Durable context storage with **SQLite FTS5**.
 4. Multi-modal serving to **Alexa+ on Echo Show** via **FastMCP** (Streamable-HTTP).
 
-While the foundational pipeline operates reliably (89/89 tests passing), real-world wearable audio from the **Bee Wearable** presents nuanced conversational patterns that demand six targeted architectural refinements:
+While the foundational pipeline operates reliably (89/89 tests passing), real-world wearable audio from the **Bee Wearable** presents nuanced conversational patterns that demand six targeted architectural refinements tracked in the [Evolution Roadmap](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/docs/next_steps/ROADMAP.md):
 
 ```mermaid
 flowchart TD

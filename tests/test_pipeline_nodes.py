@@ -225,9 +225,35 @@ class TestTopicResearchNode:
         assert len(report.executive_summary) >= 2
         assert len(report.deep_dive_markdown) > 50
         assert len(report.action_items) >= 1
+        assert len(report.explanatory_synthesis) > 40
         # Real web search should have populated sources
         assert isinstance(report.web_sources, list)
         assert len(report.web_sources) >= 1
+
+    def test_contextual_synthesis_depth_academic_and_bug(self):
+        # 1. Academic lecture test
+        academic_state: ExamenState = {
+            "raw_transcript": "In today's lecture we study distributed consensus algorithms and the Raft leader election theorem.",
+            "session_id": "academic_session",
+            "categories": ["deep_topic"],
+        }
+        res_acad = node_topic_research(academic_state)
+        report_acad = res_acad.get("briefing_report")
+        assert report_acad is not None
+        assert report_acad.context_type == "academic_lecture"
+        assert len(report_acad.explanatory_synthesis) > 30
+
+        # 2. Bug / incident test
+        bug_state: ExamenState = {
+            "raw_transcript": "We hit a critical bug with Bedrock AgentCore socket timeouts causing 504 Gateway errors in production.",
+            "session_id": "incident_session",
+            "categories": ["deep_topic"],
+        }
+        res_bug = node_topic_research(bug_state)
+        report_bug = res_bug.get("briefing_report")
+        assert report_bug is not None
+        assert report_bug.context_type in ("bug", "system_incident")
+        assert len(report_bug.explanatory_synthesis) > 30
 
     def test_empty_transcript_topic(self):
         res = node_topic_research({"raw_transcript": ""})

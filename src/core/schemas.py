@@ -115,7 +115,14 @@ class PlannedTask(BaseModel):
 # ============================================================================
 class TopicExtraction(BaseModel):
     topic_title: str = Field(description="Succinct title of topic, bug, or technology.")
-    context_type: Literal["bug", "feature_discussion", "tech_stack", "academic_lecture"] = Field(
+    context_type: Literal[
+        "bug",
+        "feature_discussion",
+        "tech_stack",
+        "academic_lecture",
+        "system_incident",
+        "general_meeting",
+    ] = Field(
         description="Type of context that triggered the topic."
     )
     search_queries: List[str] = Field(
@@ -135,6 +142,14 @@ class BriefingReport(BaseModel):
     executive_summary: List[str] = Field(
         default_factory=list,
         description="Executive summary in 3-4 bullet points."
+    )
+    explanatory_synthesis: str = Field(
+        default="",
+        description=(
+            "A cohesive, authoritative narrative (2-3 paragraphs) that explains and deep dives "
+            "into the concepts discussed using findings from retrieved web documentation. "
+            "Tailored to be educational, practical, and immediately usable."
+        )
     )
     deep_dive_markdown: str = Field(
         default="",

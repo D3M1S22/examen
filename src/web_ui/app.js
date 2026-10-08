@@ -451,6 +451,19 @@ document.addEventListener("DOMContentLoaded", () => {
         `
         : "";
 
+      const synthesisBox = t.explanatory_synthesis
+        ? `
+          <div class="briefing-explanatory-box">
+            <div class="explanatory-header">
+              <span class="explanatory-icon">💡</span>
+              <span class="explanatory-title">Contextual Explanatory Synthesis</span>
+              <span class="explanatory-badge">${escapeHtml(t.context_type || 'tech_stack').toUpperCase()}</span>
+            </div>
+            <div class="explanatory-content">${escapeHtml(t.explanatory_synthesis)}</div>
+          </div>
+        `
+        : "";
+
       return `
         <div class="briefing-card">
           <div class="card-top-row">
@@ -461,6 +474,7 @@ document.addEventListener("DOMContentLoaded", () => {
           <ul class="briefing-summary-bullets">
             ${summaryItems}
           </ul>
+          ${synthesisBox}
           ${sourcesItems ? `<div class="sources-row"><span>Autonomously Consulted Sources:</span> ${sourcesItems}</div>` : ""}
           ${actionsItems}
         </div>

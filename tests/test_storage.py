@@ -69,6 +69,7 @@ def test_topic_briefing_lifecycle(temp_store):
         topic_title="AWS AgentCore Architecture",
         context_type="tech_stack",
         executive_summary=["Serverless runtime framework", "Multi-model tiering"],
+        explanatory_synthesis="AWS Bedrock AgentCore provides low-latency runtime microVM isolation specifically engineered for autonomous agents.",
         deep_dive_markdown="## AgentCore Overview\nSupports isolated microVMs.",
         web_sources=["https://docs.aws.amazon.com"],
         action_items=["Configure IAM Execution Role"],
@@ -82,6 +83,13 @@ def test_topic_briefing_lifecycle(temp_store):
     assert report is not None
     assert report.topic_title == "AWS AgentCore Architecture"
     assert len(report.executive_summary) == 2
+    assert "low-latency runtime" in report.explanatory_synthesis
+
+    # Search by keyword matching explanatory_synthesis
+    searched = temp_store.get_topic_briefing(query="microVM isolation")
+    assert searched is not None
+    assert searched.id == rec_id
+    assert searched.explanatory_synthesis == briefing.explanatory_synthesis
 
 
 def test_planned_task_lifecycle(temp_store):

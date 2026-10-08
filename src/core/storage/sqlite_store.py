@@ -79,6 +79,7 @@ class SQLiteContextStore(AbstractContextStore):
                     topic_title TEXT NOT NULL,
                     context_type TEXT NOT NULL,
                     executive_summary_json TEXT,
+                    explanatory_synthesis TEXT,
                     deep_dive_markdown TEXT,
                     web_sources_json TEXT,
                     action_items_json TEXT,
@@ -86,6 +87,10 @@ class SQLiteContextStore(AbstractContextStore):
                 )
             """)
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_briefings_time ON topic_briefings (created_at DESC);")
+            try:
+                cursor.execute("ALTER TABLE topic_briefings ADD COLUMN explanatory_synthesis TEXT;")
+            except Exception:
+                pass
 
             # 4. FTS5 Virtual Tables (if supported by SQLite runtime)
             try:
@@ -437,13 +442,14 @@ class SQLiteContextStore(AbstractContextStore):
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT OR REPLACE INTO topic_briefings
-                (id, topic_title, context_type, executive_summary_json, deep_dive_markdown, web_sources_json, action_items_json, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                (id, topic_title, context_type, executive_summary_json, explanatory_synthesis, deep_dive_markdown, web_sources_json, action_items_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 rec_id,
                 briefing.topic_title,
                 briefing.context_type,
                 exec_summary_str,
+                briefing.explanatory_synthesis or "",
                 briefing.deep_dive_markdown,
                 sources_str,
                 items_str,
@@ -464,10 +470,10 @@ class SQLiteContextStore(AbstractContextStore):
                 clean_query = f"%{query.strip().lower()}%"
                 sql = """
                     SELECT * FROM topic_briefings
-                    WHERE LOWER(topic_title) LIKE ? OR LOWER(deep_dive_markdown) LIKE ?
+                    WHERE LOWER(topic_title) LIKE ? OR LOWER(deep_dive_markdown) LIKE ? OR LOWER(COALESCE(explanatory_synthesis, '')) LIKE ?
                     ORDER BY created_at DESC LIMIT 1
                 """
-                row = cursor.execute(sql, (clean_query, clean_query)).fetchone()
+                row = cursor.execute(sql, (clean_query, clean_query, clean_query)).fetchone()
             else:
                 sql = "SELECT * FROM topic_briefings ORDER BY created_at DESC LIMIT 1"
                 row = cursor.execute(sql).fetchone()
@@ -476,11 +482,13 @@ class SQLiteContextStore(AbstractContextStore):
                 exec_summary = json.loads(row["executive_summary_json"]) if row["executive_summary_json"] else []
                 sources = json.loads(row["web_sources_json"]) if row["web_sources_json"] else []
                 items = json.loads(row["action_items_json"]) if row["action_items_json"] else []
+                synthesis = row["explanatory_synthesis"] if "explanatory_synthesis" in row.keys() and row["explanatory_synthesis"] else ""
                 return BriefingReport(
                     id=row["id"],
                     topic_title=row["topic_title"],
                     context_type=row["context_type"],
                     executive_summary=exec_summary,
+                    explanatory_synthesis=synthesis,
                     deep_dive_markdown=row["deep_dive_markdown"] or "",
                     web_sources=sources,
                     action_items=items,
@@ -499,12 +507,14 @@ class SQLiteContextStore(AbstractContextStore):
                 exec_summary = json.loads(row["executive_summary_json"]) if row["executive_summary_json"] else []
                 sources = json.loads(row["web_sources_json"]) if row["web_sources_json"] else []
                 items = json.loads(row["action_items_json"]) if row["action_items_json"] else []
+                synthesis = row["explanatory_synthesis"] if "explanatory_synthesis" in row.keys() and row["explanatory_synthesis"] else ""
                 results.append(
                     BriefingReport(
                         id=row["id"],
                         topic_title=row["topic_title"],
                         context_type=row["context_type"],
                         executive_summary=exec_summary,
+                        explanatory_synthesis=synthesis,
                         deep_dive_markdown=row["deep_dive_markdown"] or "",
                         web_sources=sources,
                         action_items=items,

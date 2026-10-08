@@ -367,6 +367,7 @@ async def api_topics(request: Request) -> JSONResponse:
             "topic_title": t.topic_title,
             "context_type": t.context_type,
             "executive_summary": t.executive_summary,
+            "explanatory_synthesis": t.explanatory_synthesis,
             "web_sources": t.web_sources,
             "action_items": t.action_items,
             "deep_dive_markdown": t.deep_dive_markdown,

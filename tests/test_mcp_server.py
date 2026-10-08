@@ -24,6 +24,7 @@ from src.serving.tools.action_tools import (
 )
 from src.serving.tools.social_tools import execute_query_social_contact
 from src.serving.tools.topic_tools import execute_get_topic_briefing
+from src.core.storage import get_storage_store
 
 
 @pytest.fixture
@@ -163,6 +164,7 @@ class TestTopicServingTools:
             ],
             web_sources=["https://docs.aws.amazon.com/bedrock", "https://github.com/awslabs/bedrock-agentcore"],
             action_items=["Setup IAM execution role", "Test gatekeeper screening latency"],
+            explanatory_synthesis="Bedrock AgentCore architecture utilizes firecracker microVMs for isolated execution.",
             deep_dive_markdown="# Deep Dive on AgentCore\n\nFull architecture analysis...",
             created_at=datetime.now().isoformat(),
         )
@@ -173,6 +175,7 @@ class TestTopicServingTools:
         assert res["topic_title"] == "AWS Bedrock AgentCore Orchestration"
         assert len(res["executive_summary"]) == 2
         assert len(res["web_sources"]) == 2
+        assert res["explanatory_synthesis"] == "Bedrock AgentCore architecture utilizes firecracker microVMs for isolated execution."
         assert res["ui_card_type"] == "DEEP_BRIEFING_VIEWER"
         assert "spoken_summary" in res
 
@@ -256,10 +259,26 @@ class TestServerRestApiAndWebUi:
         assert "contacts" in data
 
     def test_api_topics(self, client):
+        store = get_storage_store()
+        briefing = BriefingReport(
+            topic_title="HTTP/3 and QUIC Protocols",
+            context_type="tech_stack",
+            executive_summary=["0-RTT handshakes", "Multiplexing without head-of-line blocking"],
+            explanatory_synthesis="QUIC replaces TCP and TLS handshakes with a UDP-based encrypted transport layer.",
+            web_sources=["https://cloudflare.com/quic"],
+            action_items=["Verify UDP 443 firewall access"],
+        )
+        store.save_topic_briefing(briefing)
+
         res = client.get("/api/topics")
         assert res.status_code == 200
         data = res.json()
         assert "topics" in data
+        assert len(data["topics"]) >= 1
+        first_topic = next((t for t in data["topics"] if t["topic_title"] == "HTTP/3 and QUIC Protocols"), None)
+        assert first_topic is not None
+        assert "explanatory_synthesis" in first_topic
+        assert first_topic["explanatory_synthesis"] == "QUIC replaces TCP and TLS handshakes with a UDP-based encrypted transport layer."
 
     def test_web_ui_root(self, client):
         res = client.get("/")
@@ -282,10 +301,12 @@ class TestServerRestApiAndWebUi:
         assert "app-layout" in css_res.text
         assert "actions-timeline" in css_res.text
         assert "timeline-pin" in css_res.text
+        assert "briefing-explanatory-box" in css_res.text
 
         js_res = client.get("/app.js")
         assert js_res.status_code == 200
         assert "fetchStatus" in js_res.text
+        assert "briefing-explanatory-box" in js_res.text
         assert "initSSE" in js_res.text
         assert "renderTimeline" in js_res.text
 
