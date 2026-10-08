@@ -237,6 +237,13 @@ def node_extract_action(state: ExamenState) -> Dict[str, Any]:
             return {"action_data": result}
         else:
             logger.info(f"Action candidate rejected (confidence too low or empty): {result}")
+            heuristic_action = _heuristic_extract_action(
+                transcript, pending_tasks=pending_tasks, historical_context=historical_context
+            )
+            if heuristic_action and heuristic_action.confidence >= 0.90:
+                if location and not heuristic_action.location:
+                    heuristic_action.location = location
+                return {"action_data": heuristic_action}
             return {"action_data": None}
 
     except Exception as e:
