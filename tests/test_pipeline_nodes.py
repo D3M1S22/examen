@@ -34,6 +34,7 @@ def temp_store(monkeypatch):
     monkeypatch.setattr("src.core.storage.get_storage_store", lambda: store)
     monkeypatch.setattr("src.pipeline.nodes.action_state.get_storage_store", lambda: store)
     monkeypatch.setattr("src.pipeline.nodes.social.get_storage_store", lambda: store)
+    monkeypatch.setattr("src.pipeline.nodes.social_profiler.get_storage_store", lambda: store)
     monkeypatch.setattr("src.pipeline.nodes.persist.get_storage_store", lambda: store)
 
     yield store
@@ -483,3 +484,110 @@ class TestAmbientSchedulerNode:
     def test_empty_transcript_scheduler(self):
         res = node_extract_scheduled_task({"raw_transcript": ""})
         assert res.get("scheduled_task") is None
+
+
+class TestSocialProfilerNode:
+    """Tests for Milestone 2.1: Autonomous Social Web Profiler."""
+
+    def test_disambiguation_guardrails(self):
+        from src.pipeline.nodes.social_profiler import verify_disambiguation_anchors
+
+        # 1. Standalone single-word names without company/role/topics must be rejected
+        assert verify_disambiguation_anchors("Dave") is False
+        assert verify_disambiguation_anchors("Marco") is False
+        assert verify_disambiguation_anchors("Elena") is False
+        assert verify_disambiguation_anchors("") is False
+        assert verify_disambiguation_anchors("   ") is False
+
+        # 2. Single-word name with strong company/role anchor passes
+        assert verify_disambiguation_anchors("Luca", company_or_role="VP at CloudScale") is True
+        assert verify_disambiguation_anchors("Elena", company_or_role="Lab Head at ETH Zurich") is True
+        assert verify_disambiguation_anchors("Marco", topics=["AgentCore", "AWS"]) is True
+
+        # 3. Full multi-word names pass with or without additional context
+        assert verify_disambiguation_anchors("Luca Bianchi", company_or_role="VP of Infrastructure") is True
+        assert verify_disambiguation_anchors("Dr. Elena Rostova", topics=["Computer Vision"]) is True
+        assert verify_disambiguation_anchors("Sarah Connor", notes="sarah@cyberdyne.com") is True
+        assert verify_disambiguation_anchors("Luca Bianchi") is True
+
+    def test_query_formulation(self):
+        from src.pipeline.nodes.social_profiler import build_profiling_queries
+
+        queries = build_profiling_queries(
+            name="Luca Bianchi",
+            company_or_role="VP of Infrastructure at CloudScale",
+            topics=["Distributed Systems", "Raft"]
+        )
+        assert len(queries) >= 2
+        assert any("Luca Bianchi" in q for q in queries)
+        assert any("CloudScale" in q or "VP" in q for q in queries)
+        # Should NOT contain personal social networks
+        for q in queries:
+            assert "instagram" not in q.lower()
+            assert "tiktok" not in q.lower()
+
+    def test_enrich_social_contact_heuristic(self, temp_store, monkeypatch):
+        from src.pipeline.nodes.social_profiler import enrich_social_contact_sync, heuristic_profile_synthesis
+        from src.core.schemas import SocialEntity
+
+        # Test deterministic heuristic synthesizer directly
+        contact = SocialEntity(
+            person_name="Luca Bianchi",
+            company_or_role="VP of Infrastructure at CloudScale",
+            key_topics=["Distributed Systems", "AWS"],
+        )
+        h_profile = heuristic_profile_synthesis(contact)
+        assert h_profile is not None
+        assert "CloudScale" in (h_profile.organization or h_profile.headline)
+        assert "Distributed Systems" in h_profile.areas_of_expertise
+        assert h_profile.linkedin_url is not None
+
+        # Test enrich_social_contact_sync with mock_ai
+        monkeypatch.setattr(settings, "mock_ai", True)
+        temp_store.save_social_contact(contact)
+        profile = enrich_social_contact_sync(contact, store=temp_store)
+        assert profile is not None
+        assert profile.headline is not None
+        assert "CloudScale" in (profile.organization or profile.headline)
+        assert profile.bio_summary is not None
+        assert len(profile.areas_of_expertise) > 0
+        assert profile.linkedin_url is not None
+        assert "linkedin.com/in/" in profile.linkedin_url
+
+        # Verify persisted in store
+        persisted = temp_store.get_social_contact("Luca Bianchi")
+        assert persisted.web_profile is not None
+        assert persisted.web_profile.headline == profile.headline
+
+    def test_enrich_social_contact_guardrail_rejection(self, temp_store):
+        from src.pipeline.nodes.social_profiler import enrich_social_contact_sync
+        from src.core.schemas import SocialEntity
+
+        # Ambiguous contact with only first name and no role/topics
+        contact = SocialEntity(
+            person_name="Dave",
+            company_or_role=None,
+            key_topics=[],
+        )
+        profile = enrich_social_contact_sync(contact, store=temp_store)
+        assert profile is None
+
+    def test_node_extract_social_with_profiler(self, temp_store):
+        from src.pipeline.nodes.social import node_extract_social
+        from src.core.schemas import ExamenState
+
+        state: ExamenState = {
+            "raw_transcript": "Hi, I'm Luca Bianchi, VP of Infrastructure at CloudScale. Let's discuss Raft consensus.",
+            "session_id": "test_social_profiler_sess",
+            "categories": ["social"],
+        }
+        res = node_extract_social(state)
+        social = res.get("social_data")
+        assert social is not None
+        assert social.person_name == "Luca Bianchi"
+        # Autonomous profiler should have enriched this qualified contact
+        assert social.web_profile is not None
+        assert social.web_profile.headline is not None
+        assert len(social.web_profile.bio_summary) > 0
+        assert social.web_profile.confidence_score > 0
+

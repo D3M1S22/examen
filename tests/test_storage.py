@@ -290,3 +290,110 @@ def test_social_commitments_closed_loop_fulfillment(temp_store):
     assert task.status == "completed"
 
 
+def test_social_web_profile_storage_lifecycle(temp_store):
+    from src.core.schemas import SocialEntity, SocialWebProfile
+
+    profile = SocialWebProfile(
+        headline="Robotics Vision Lab Head @ ETH Zurich",
+        organization="ETH Zurich",
+        current_role="Lab Head",
+        bio_summary="Dr. Elena Rostova leads advanced computer vision and robotic perception initiatives at ETH Zurich.",
+        areas_of_expertise=["Robotics", "Computer Vision", "Deep Learning"],
+        linkedin_url="https://www.linkedin.com/in/elena-rostova",
+        github_url="https://github.com/erostova",
+        website_url="https://vision.ethz.ch/rostova",
+        confidence_score=0.95,
+    )
+
+    contact = SocialEntity(
+        person_name="Dr. Elena Rostova",
+        company_or_role="Head of Robotics Vision Lab at ETH Zurich",
+        contact_info="elena@ethz.ch",
+        key_topics=["Robotics", "Computer Vision"],
+        web_profile=profile,
+    )
+
+    rec_id = temp_store.save_social_contact(contact)
+    assert rec_id is not None
+
+    # 1. Fetch by ID
+    fetched_by_id = temp_store.get_social_contact(rec_id)
+    assert fetched_by_id is not None
+    assert fetched_by_id.person_name == "Dr. Elena Rostova"
+    assert fetched_by_id.web_profile is not None
+    assert fetched_by_id.web_profile.organization == "ETH Zurich"
+    assert fetched_by_id.web_profile.linkedin_url == "https://www.linkedin.com/in/elena-rostova"
+    assert "Computer Vision" in fetched_by_id.web_profile.areas_of_expertise
+
+    # 2. Fetch by name (case-insensitive)
+    fetched_by_name = temp_store.get_social_contact("dr. elena rostova")
+    assert fetched_by_name is not None
+    assert fetched_by_name.id == rec_id
+    assert fetched_by_name.web_profile.headline == "Robotics Vision Lab Head @ ETH Zurich"
+
+    # 3. Update web profile
+    new_profile = SocialWebProfile(
+        headline="Distinguished Professor @ ETH Zurich",
+        organization="ETH Zurich",
+        current_role="Distinguished Professor",
+        bio_summary="Recently awarded distinguished chair in Autonomous Perception.",
+        areas_of_expertise=["Perception", "Embodied AI"],
+        linkedin_url="https://www.linkedin.com/in/elena-rostova",
+        confidence_score=0.99,
+    )
+    updated = temp_store.update_contact_web_profile(rec_id, new_profile)
+    assert updated is True
+
+    fetched_updated = temp_store.get_social_contact(rec_id)
+    assert fetched_updated.web_profile.headline == "Distinguished Professor @ ETH Zurich"
+    assert fetched_updated.web_profile.confidence_score == 0.99
+
+    # 4. Re-saving contact with web_profile=None should preserve existing web_profile
+    contact_no_wp = SocialEntity(
+        id=rec_id,
+        person_name="Dr. Elena Rostova",
+        company_or_role="Distinguished Professor at ETH Zurich",
+        contact_info="elena@ethz.ch",
+        web_profile=None,
+    )
+    temp_store.save_social_contact(contact_no_wp)
+    preserved = temp_store.get_social_contact(rec_id)
+    assert preserved.web_profile is not None
+    assert preserved.web_profile.headline == "Distinguished Professor @ ETH Zurich"
+
+
+def test_delete_social_commitment(temp_store):
+    from src.core.schemas import SocialCommitment
+
+    # Create a planned task to simulate auto-provisioned task
+    task = PlannedTask(
+        title="Send proposal to Dr. Stone",
+        domain="routine",
+        origin="social_commitment",
+    )
+    task_id = temp_store.save_planned_task(task)
+    assert task_id is not None
+    assert temp_store.get_planned_task(task_id) is not None
+
+    # Create and save a commitment linked to this task
+    commitment = SocialCommitment(
+        contact_name="Dr. Stone",
+        debtor="user",
+        description="Send proposal to Dr. Stone by Friday",
+        auto_scheduled_task_id=task_id,
+    )
+    comm_id = temp_store.save_social_commitment(commitment)
+    assert comm_id is not None
+    assert temp_store.get_social_commitment(comm_id) is not None
+
+    # Deleting commitment should also clean up the linked planned task
+    success = temp_store.delete_social_commitment(comm_id)
+    assert success is True
+    assert temp_store.get_social_commitment(comm_id) is None
+    assert temp_store.get_planned_task(task_id) is None
+
+    # Deleting an already deleted or non-existent commitment should return False
+    assert temp_store.delete_social_commitment("non-existent-id") is False
+
+
+

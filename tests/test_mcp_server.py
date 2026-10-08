@@ -13,7 +13,14 @@ import pytest
 from datetime import datetime
 from starlette.testclient import TestClient
 
-from src.core.schemas import BriefingReport, PlannedTask, SocialCommitment, SocialEntity, VerifiedAction
+from src.core.schemas import (
+    BriefingReport,
+    PlannedTask,
+    SocialCommitment,
+    SocialEntity,
+    SocialWebProfile,
+    VerifiedAction,
+)
 from src.core.storage.sqlite_store import SQLiteContextStore
 from src.serving.mcp_server import create_app
 from src.serving.tools.action_tools import (
@@ -24,8 +31,10 @@ from src.serving.tools.action_tools import (
     _format_elapsed_time,
 )
 from src.serving.tools.social_tools import (
+    execute_get_contact_profile,
     execute_get_social_commitments,
     execute_query_social_contact,
+    get_contact_profile,
 )
 from src.serving.tools.topic_tools import execute_get_topic_briefing
 from src.core.storage import get_storage_store
@@ -235,6 +244,39 @@ class TestSocialServingTools:
         empty_res = execute_get_social_commitments(status="cancelled", store=temp_store)
         assert empty_res["found"] is False
 
+    def test_get_contact_profile_tool(self, temp_store):
+        # 1. Non-existent contact
+        not_found = execute_get_contact_profile("NonExistentContact", store=temp_store)
+        assert not_found["found"] is False
+        assert not_found["ui_card_type"] == "SOCIAL_NOT_FOUND"
+
+        # 2. Existing contact with web profile
+        contact = SocialEntity(
+            person_name="Luca Bianchi",
+            company_or_role="VP of Infrastructure at CloudScale",
+            contact_info="luca@cloudscale.io",
+            key_topics=["Distributed Systems"],
+            web_profile=SocialWebProfile(
+                headline="VP of Infrastructure at CloudScale | ex-AWS",
+                organization="CloudScale",
+                current_role="VP of Infrastructure",
+                bio_summary="Luca Bianchi oversees cloud infrastructure at CloudScale.",
+                areas_of_expertise=["Distributed Systems", "Kubernetes", "AWS Architecture"],
+                linkedin_url="https://www.linkedin.com/in/luca-bianchi-cloud",
+                confidence_score=0.98,
+            ),
+        )
+        temp_store.save_social_contact(contact)
+
+        res = execute_get_contact_profile("Luca Bianchi", store=temp_store)
+        assert res["found"] is True
+        assert res["ui_card_type"] == "SOCIAL_PROFILE_CARD"
+        assert res["display_template"] == "SOCIAL_PROFILE_CARD"
+        assert res["web_profile"]["organization"] == "CloudScale"
+        assert res["web_profile"]["confidence_score"] == 0.98
+        assert "Luca Bianchi" in res["spoken_summary"]
+        assert "CloudScale" in res["spoken_summary"]
+
 
 class TestTopicServingTools:
     """Tests for synthesized technical briefing tools."""
@@ -396,12 +438,19 @@ class TestServerRestApiAndWebUi:
         assert "actions-timeline" in res.text
         assert "btn-view-timeline" in res.text
         assert "edit-task-drawer" in res.text
+        # Echo Show Multi-Modal Device and Social components
+        assert "modal-echo-show" in res.text
+        assert "modal-executive-dossier" in res.text
+        assert "btn-open-echo-modal" in res.text
+        assert "social-subnav-bar" in res.text
+        assert "echo-screen" in res.text
 
     def test_web_ui_ext_app(self, client):
         res = client.get("/ext-app/")
         assert res.status_code == 200
         assert "EXAMEN" in res.text
         assert "actions-timeline" in res.text
+        assert "modal-echo-show" in res.text
 
     def test_web_ui_css_and_js(self, client):
         css_res = client.get("/styles.css")
@@ -410,12 +459,16 @@ class TestServerRestApiAndWebUi:
         assert "actions-timeline" in css_res.text
         assert "timeline-pin" in css_res.text
         assert "briefing-explanatory-box" in css_res.text
+        assert "echo-hardware-bezel" in css_res.text
+        assert "modal-dossier" in css_res.text
 
         js_res = client.get("/app.js")
         assert js_res.status_code == 200
         assert "fetchStatus" in js_res.text
         assert "briefing-explanatory-box" in js_res.text
         assert "initSSE" in js_res.text
+        assert "renderEchoCard" in js_res.text
+        assert "openDossierModal" in js_res.text
         assert "renderTimeline" in js_res.text
 
     def test_api_routines_update_and_delete(self, client):
@@ -520,3 +573,169 @@ class TestServerRestApiAndWebUi:
         stats = status_res.json()["stats"]
         assert "total_commitments" in stats
         assert "open_commitments" in stats
+
+    def test_api_contact_profile_and_enrich_endpoints(self, client):
+        store = get_storage_store()
+
+        # 1. Non-existent profile query returns 404
+        assert client.get("/api/contacts/nonexistent-id/profile").status_code == 404
+
+        # 2. Pre-seed contact with web profile
+        contact = SocialEntity(
+            person_name="Luca Bianchi",
+            company_or_role="VP of Infrastructure at CloudScale",
+            web_profile=SocialWebProfile(
+                headline="VP of Infrastructure at CloudScale",
+                organization="CloudScale",
+                current_role="VP of Infrastructure",
+                bio_summary="Luca Bianchi leads cloud infrastructure at CloudScale.",
+                areas_of_expertise=["Distributed Systems", "Cloud"],
+                confidence_score=0.96,
+            ),
+        )
+        rec_id = store.save_social_contact(contact)
+
+        # GET /api/contacts/{id}/profile returns 200
+        res = client.get(f"/api/contacts/{rec_id}/profile")
+        assert res.status_code == 200
+        data = res.json()
+        assert data["found"] is True
+        assert data["web_profile"]["organization"] == "CloudScale"
+        assert data["ui_card_type"] == "SOCIAL_PROFILE_CARD"
+
+        # Also verify GET /api/contacts includes web_profile
+        list_res = client.get(f"/api/contacts?q=Luca")
+        assert list_res.status_code == 200
+        contacts = list_res.json()["contacts"]
+        assert len(contacts) >= 1
+        assert contacts[0]["web_profile"] is not None
+        assert contacts[0]["web_profile"]["organization"] == "CloudScale"
+
+        # 3. Test POST /api/contacts/{id}/enrich on unenriched qualified contact
+        contact_new = SocialEntity(
+            person_name="Dr. Elena Rostova",
+            company_or_role="Robotics Vision Lab Head at ETH Zurich",
+            key_topics=["Robotics", "Computer Vision"],
+            web_profile=None,
+        )
+        new_id = store.save_social_contact(contact_new)
+
+        enrich_res = client.post(f"/api/contacts/{new_id}/enrich")
+        assert enrich_res.status_code == 200
+        enrich_data = enrich_res.json()
+        assert enrich_data["success"] is True
+        assert enrich_data["web_profile"] is not None
+
+        # Verify profile is now persisted in store
+        persisted = store.get_social_contact(new_id)
+        assert persisted.web_profile is not None
+
+    def test_api_single_commitment_get_and_delete(self, client):
+        # 1. Create a commitment
+        create_res = client.post("/api/commitments", json={
+            "contact_name": "Test User",
+            "debtor": "user",
+            "description": "Send meeting notes",
+            "due_date_raw": "today at 6 PM",
+        })
+        assert create_res.status_code == 201
+        com_id = create_res.json()["commitment"]["id"]
+
+        # 2. GET /api/commitments/{id}
+        get_res = client.get(f"/api/commitments/{com_id}")
+        assert get_res.status_code == 200
+        assert get_res.json()["commitment"]["id"] == com_id
+        assert get_res.json()["commitment"]["description"] == "Send meeting notes"
+
+        # 3. DELETE /api/commitments/{id}
+        del_res = client.delete(f"/api/commitments/{com_id}")
+        assert del_res.status_code == 200
+        assert del_res.json()["success"] is True
+
+        # 4. Verify 404 after deletion
+        get_after = client.get(f"/api/commitments/{com_id}")
+        assert get_after.status_code == 404
+
+        # 5. Deleting non-existent commitment returns 404
+        del_after = client.delete(f"/api/commitments/{com_id}")
+        assert del_after.status_code == 404
+
+    def test_api_cards_preview_templates(self, client):
+        # Seed test data in store
+        store = get_storage_store()
+        store.save_action(VerifiedAction(
+            action_type="iron_unplugged",
+            domain="safety",
+            raw_statement="Staccato il ferro",
+            confidence=0.98,
+            timestamp=datetime.now().isoformat(),
+        ))
+        store.save_social_contact(SocialEntity(
+            person_name="Preview Contact",
+            company_or_role="Lead Architect",
+            commitments=["Review code"],
+        ))
+        store.save_planned_task(PlannedTask(
+            title="Check kitchen lights",
+            domain="safety",
+            status="pending",
+        ))
+
+        templates = [
+            "DEEP_BRIEFING_VIEWER",
+            "SOCIAL_PROFILE_CARD",
+            "SOCIAL_COMMITMENTS_CARD",
+            "ACTION_VERIFIED_BADGE",
+            "DAILY_ACTIONS_RECAP",
+            "UPCOMING_TASKS_VIEWER",
+        ]
+
+        for tmpl in templates:
+            res = client.get(f"/api/cards/preview?template={tmpl}")
+            assert res.status_code == 200
+            data = res.json()
+            assert data["display_template"] == tmpl
+            assert "card_payload" in data
+            assert isinstance(data["card_payload"], dict)
+            assert "spoken_summary" in data
+            assert len(data["spoken_summary"]) > 0
+
+    def test_serving_tools_standardized_card_payloads(self, client):
+        store = get_storage_store()
+
+        # 1. Topic briefing tool
+        briefing_res = execute_get_topic_briefing(store=store)
+        assert briefing_res["display_template"] == "DEEP_BRIEFING_VIEWER"
+        assert "card_payload" in briefing_res
+        assert "topic_title" in briefing_res["card_payload"]
+
+        # 2. Social query tool
+        social_res = execute_query_social_contact(name_or_query="Preview Contact", store=store)
+        assert social_res["display_template"] == "SOCIAL_PROFILE_CARD"
+        assert "card_payload" in social_res
+        assert "name" in social_res["card_payload"]
+
+        # 3. Social commitments tool
+        comm_res = execute_get_social_commitments(store=store)
+        assert comm_res["display_template"] == "SOCIAL_COMMITMENTS_CARD"
+        assert "card_payload" in comm_res
+        assert "user_debts" in comm_res["card_payload"]
+
+        # 4. Action verify tool
+        action_res = execute_verify_action_status(action_query="iron", store=store)
+        assert action_res["display_template"] in ("ACTION_VERIFIED_BADGE", "ACTION_UNVERIFIED_BADGE")
+        assert "card_payload" in action_res
+
+        # 5. Daily recap tool
+        recap_res = execute_get_daily_actions_recap(store=store)
+        assert recap_res["display_template"] == "DAILY_ACTIONS_RECAP"
+        assert "card_payload" in recap_res
+        assert "total_actions" in recap_res["card_payload"]
+
+        # 6. Upcoming tasks tool
+        tasks_res = execute_get_upcoming_tasks(store=store)
+        assert tasks_res["display_template"] == "UPCOMING_TASKS_VIEWER"
+        assert "card_payload" in tasks_res
+        assert "tasks" in tasks_res["card_payload"]
+
+

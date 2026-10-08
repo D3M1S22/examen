@@ -184,11 +184,37 @@ def _deduplicate_and_merge(extracted: SocialEntity) -> SocialEntity:
                 if t not in merged_topics:
                     merged_topics.append(t)
             extracted.key_topics = merged_topics
+
+            # Merge web profile
+            if not extracted.web_profile and primary.web_profile:
+                extracted.web_profile = primary.web_profile
+
             logger.info(f"Merged social entity with existing contact '{primary.person_name}' (ID: {primary.id})")
     except Exception as e:
         logger.warning(f"Social deduplication lookup failed: {e}")
 
     return extracted
+
+
+def _enrich_if_qualified(entity: Optional[SocialEntity]) -> Optional[SocialEntity]:
+    """Autonomously enriches newly encountered contacts if they satisfy disambiguation guardrails."""
+    if not entity or entity.web_profile:
+        return entity
+    try:
+        from src.pipeline.nodes.social_profiler import (
+            enrich_social_contact_sync,
+            verify_disambiguation_anchors,
+        )
+        if verify_disambiguation_anchors(
+            name=entity.person_name,
+            company_or_role=entity.company_or_role,
+            notes=entity.contact_info,
+            topics=entity.key_topics,
+        ):
+            enrich_social_contact_sync(entity)
+    except Exception as e:
+        logger.warning(f"Autonomous web enrichment hook failed: {e}")
+    return entity
 
 
 def node_extract_social(state: ExamenState) -> Dict[str, Any]:
@@ -206,6 +232,7 @@ def node_extract_social(state: ExamenState) -> Dict[str, Any]:
         social = _heuristic_extract_social(transcript)
         if social:
             social = _deduplicate_and_merge(social)
+            social = _enrich_if_qualified(social)
         return {"social_data": social}
 
     try:
@@ -246,6 +273,7 @@ def node_extract_social(state: ExamenState) -> Dict[str, Any]:
             result.commitments = processed_commitments
 
             result = _deduplicate_and_merge(result)
+            result = _enrich_if_qualified(result)
             return {"social_data": result}
         else:
             return {"social_data": None}
@@ -255,4 +283,5 @@ def node_extract_social(state: ExamenState) -> Dict[str, Any]:
         social = _heuristic_extract_social(transcript)
         if social:
             social = _deduplicate_and_merge(social)
+            social = _enrich_if_qualified(social)
         return {"social_data": social}

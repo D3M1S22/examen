@@ -10,6 +10,7 @@ from src.core.schemas import (
     PlannedTask,
     SocialCommitment,
     SocialEntity,
+    SocialWebProfile,
     VerifiedAction,
 )
 from src.core.storage.base import AbstractContextStore
@@ -90,10 +91,15 @@ class SQLiteContextStore(AbstractContextStore):
                     contact_info TEXT,
                     commitments_json TEXT,
                     key_topics_json TEXT,
-                    timestamp TEXT NOT NULL
+                    timestamp TEXT NOT NULL,
+                    web_profile_json TEXT
                 )
             """)
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_social_name ON social_contacts (person_name);")
+            try:
+                cursor.execute("ALTER TABLE social_contacts ADD COLUMN web_profile_json TEXT;")
+            except Exception:
+                pass
 
             # 2b. Social Commitments Table (Bilateral Promises - Milestone 1.3)
             cursor.execute("""
@@ -474,12 +480,26 @@ class SQLiteContextStore(AbstractContextStore):
         commitments_str = json.dumps(commitments_payload, ensure_ascii=False)
         topics_str = json.dumps(contact.key_topics, ensure_ascii=False)
 
+        # Preserve existing web_profile_json if not provided in incoming contact
+        web_profile_str = None
+        if contact.web_profile:
+            web_profile_str = contact.web_profile.model_dump_json()
+        else:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                existing_row = cursor.execute(
+                    "SELECT web_profile_json FROM social_contacts WHERE id = ? OR LOWER(person_name) = LOWER(?)",
+                    (rec_id, contact.person_name),
+                ).fetchone()
+                if existing_row and "web_profile_json" in existing_row.keys() and existing_row["web_profile_json"]:
+                    web_profile_str = existing_row["web_profile_json"]
+
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT OR REPLACE INTO social_contacts
-                (id, person_name, company_or_role, contact_info, commitments_json, key_topics_json, timestamp)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                (id, person_name, company_or_role, contact_info, commitments_json, key_topics_json, timestamp, web_profile_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 rec_id,
                 contact.person_name,
@@ -487,7 +507,8 @@ class SQLiteContextStore(AbstractContextStore):
                 contact.contact_info,
                 commitments_str,
                 topics_str,
-                contact.timestamp
+                contact.timestamp,
+                web_profile_str,
             ))
             if self._has_fts:
                 cursor.execute("""
@@ -496,6 +517,61 @@ class SQLiteContextStore(AbstractContextStore):
                 """, (rec_id,))
             conn.commit()
         return rec_id
+
+    def get_social_contact(self, contact_id_or_name: str) -> Optional[SocialEntity]:
+        target = contact_id_or_name.strip()
+        sql = """
+            SELECT * FROM social_contacts
+            WHERE id = ? OR LOWER(person_name) = LOWER(?)
+            ORDER BY timestamp DESC LIMIT 1
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            row = cursor.execute(sql, (target, target)).fetchone()
+            if not row:
+                return None
+            person_name = row["person_name"]
+            commitments = self.list_social_commitments(contact_name=person_name)
+            if not commitments and row["commitments_json"]:
+                try:
+                    commitments = json.loads(row["commitments_json"])
+                except Exception:
+                    commitments = []
+            topics = json.loads(row["key_topics_json"]) if row["key_topics_json"] else []
+            web_profile = None
+            if "web_profile_json" in row.keys() and row["web_profile_json"]:
+                try:
+                    web_profile = SocialWebProfile.model_validate_json(row["web_profile_json"])
+                except Exception:
+                    pass
+            return SocialEntity(
+                id=row["id"],
+                person_name=row["person_name"],
+                company_or_role=row["company_or_role"],
+                contact_info=row["contact_info"],
+                commitments=commitments,
+                key_topics=topics,
+                web_profile=web_profile,
+                timestamp=row["timestamp"],
+            )
+
+    def update_contact_web_profile(
+        self, contact_id_or_name: str, profile: SocialWebProfile
+    ) -> bool:
+        target = contact_id_or_name.strip()
+        profile_json = profile.model_dump_json()
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                UPDATE social_contacts
+                SET web_profile_json = ?
+                WHERE id = ? OR LOWER(person_name) = LOWER(?)
+                """,
+                (profile_json, target, target),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
 
     def search_social_contact(self, query: str) -> List[SocialEntity]:
         clean_query = f"%{query.strip().lower()}%"
@@ -520,6 +596,12 @@ class SQLiteContextStore(AbstractContextStore):
                     except Exception:
                         commitments = []
                 topics = json.loads(row["key_topics_json"]) if row["key_topics_json"] else []
+                web_profile = None
+                if "web_profile_json" in row.keys() and row["web_profile_json"]:
+                    try:
+                        web_profile = SocialWebProfile.model_validate_json(row["web_profile_json"])
+                    except Exception:
+                        pass
                 results.append(
                     SocialEntity(
                         id=row["id"],
@@ -528,6 +610,7 @@ class SQLiteContextStore(AbstractContextStore):
                         contact_info=row["contact_info"],
                         commitments=commitments,
                         key_topics=topics,
+                        web_profile=web_profile,
                         timestamp=row["timestamp"],
                     )
                 )
@@ -661,6 +744,25 @@ class SQLiteContextStore(AbstractContextStore):
             if task:
                 task.status = "cancelled"
                 self.update_planned_task(task)
+
+        return True
+
+    def delete_social_commitment(self, commitment_id: str) -> bool:
+        commitment = self.get_social_commitment(commitment_id)
+        if not commitment:
+            return False
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM social_commitments WHERE id = ?", (commitment_id,))
+            conn.commit()
+
+        # If it had an auto scheduled task, also clean it up
+        if commitment.auto_scheduled_task_id:
+            try:
+                self.delete_planned_task(commitment.auto_scheduled_task_id)
+            except Exception:
+                pass
 
         return True
 

@@ -43,6 +43,10 @@
           <span class="pill-label">Gatekeeper</span>
           <span id="telemetry-model" class="pill-value">Loading...</span>
         </div>
+        <button id="btn-open-echo-modal" class="btn-echo-preview" title="Echo Show Multi-Modal Card Previewer">
+          <span class="echo-icon">📺</span>
+          <span>Echo Show Cards</span>
+        </button>
         <button id="btn-refresh" class="btn-icon" title="Refresh all data">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/>
@@ -270,8 +274,104 @@
           </div>
         </div>
 
-        <div id="social-grid" class="cards-grid">
-          <div class="empty-state">Loading social contacts...</div>
+        <!-- Social Rolodex Sub-navigation Bar -->
+        <div class="social-subnav-bar">
+          <div class="subnav-tabs" role="tablist">
+            <button id="subtab-contacts" class="subnav-tab active" data-subtab="view-contacts">
+              <span>👥 All Contacts</span>
+              <span class="subnav-badge" id="badge-sub-contacts">0</span>
+            </button>
+            <button id="subtab-commitments" class="subnav-tab" data-subtab="view-commitments">
+              <span>🤝 Bilateral Commitments</span>
+              <span class="subnav-badge" id="badge-sub-commitments">0</span>
+            </button>
+            <button id="subtab-dossiers" class="subnav-tab" data-subtab="view-dossiers">
+              <span>⚡ Executive Dossiers</span>
+              <span class="subnav-badge" id="badge-sub-dossiers">0</span>
+            </button>
+          </div>
+          <div class="subnav-actions">
+            <button id="btn-toggle-add-commitment" class="btn-primary btn-sm">
+              <span>+</span> New Commitment
+            </button>
+          </div>
+        </div>
+
+        <!-- Add Commitment Slide-down Drawer -->
+        <div id="add-commitment-drawer" class="add-task-drawer hidden">
+          <div class="drawer-header">
+            <h3 class="drawer-title">🤝 Record Bilateral Social Commitment</h3>
+          </div>
+          <form id="form-add-commitment" class="task-form">
+            <div class="form-grid">
+              <div class="form-group">
+                <label for="com-contact-name">Contact Name</label>
+                <input type="text" id="com-contact-name" list="contact-names-list" required placeholder="e.g. Luca Bianchi, Sara Rossi" />
+                <datalist id="contact-names-list"></datalist>
+              </div>
+              <div class="form-group">
+                <label for="com-debtor">Commitment Role (Who owes whom?)</label>
+                <select id="com-debtor">
+                  <option value="user" selected>📤 You Promised (I owe the contact)</option>
+                  <option value="contact">📥 Contact Promised (They owe me)</option>
+                </select>
+              </div>
+              <div class="form-group" style="grid-column: span 2;">
+                <label for="com-desc">Promise Description</label>
+                <input type="text" id="com-desc" required placeholder="e.g. Send architecture diagram & cost estimate by Friday" />
+              </div>
+              <div class="form-group">
+                <label for="com-due-date">Due Date / Time Anchor (Optional)</label>
+                <input type="text" id="com-due-date" placeholder="e.g. Tomorrow at 5 PM, Friday, by Monday" />
+              </div>
+              <div class="form-group">
+                <label for="com-status">Status</label>
+                <select id="com-status">
+                  <option value="open" selected>Open</option>
+                  <option value="fulfilled">Fulfilled</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-actions">
+              <button type="submit" class="btn-primary">Save Commitment</button>
+              <button type="button" id="btn-cancel-commitment" class="btn-secondary">Cancel</button>
+            </div>
+          </form>
+        </div>
+
+        <!-- Sub-View 1: All Contacts Grid (Default) -->
+        <div id="view-contacts" class="subtab-pane active">
+          <div id="social-grid" class="cards-grid">
+            <div class="empty-state">Loading social contacts...</div>
+          </div>
+        </div>
+
+        <!-- Sub-View 2: Dedicated Bilateral Commitments View -->
+        <div id="view-commitments" class="subtab-pane hidden">
+          <!-- Commitments Filter Pills & Summary -->
+          <div class="commitments-filter-bar">
+            <div class="filter-pills-group">
+              <button class="filter-pill active" data-filter="all">All Commitments (<span id="count-comm-all">0</span>)</button>
+              <button class="filter-pill pill-user" data-filter="user">📤 Debts I Owe (<span id="count-comm-user">0</span>)</button>
+              <button class="filter-pill pill-contact" data-filter="contact">📥 Owed to Me (<span id="count-comm-contact">0</span>)</button>
+              <button class="filter-pill pill-fulfilled" data-filter="fulfilled">✓ Fulfilled (<span id="count-comm-done">0</span>)</button>
+            </div>
+          </div>
+
+          <!-- Commitments Board / List -->
+          <div id="commitments-full-list" class="commitments-board">
+            <div class="empty-state">Loading bilateral commitments...</div>
+          </div>
+        </div>
+
+        <!-- Sub-View 3: Executive Dossiers Sub-view -->
+        <div id="view-dossiers" class="subtab-pane hidden">
+          <div class="dossiers-intro-bar">
+            <span>⚡ Professional executive profiles corroborated via autonomous public web intelligence</span>
+          </div>
+          <div id="dossiers-grid" class="cards-grid">
+            <div class="empty-state">Loading executive dossiers...</div>
+          </div>
         </div>
       </section>
 
@@ -367,6 +467,130 @@
         <span>FastMCP</span>
       </div>
     </footer>
+  </div>
+
+  <!-- Executive Contact Dossier Modal -->
+  <div id="modal-executive-dossier" class="modal-backdrop hidden">
+    <div class="modal-dialog modal-dossier">
+      <div class="modal-header">
+        <div class="dossier-hero-row">
+          <div class="dossier-avatar" id="modal-dossier-avatar">LB</div>
+          <div class="dossier-titles">
+            <div class="dossier-name-row">
+              <h2 id="modal-dossier-name" class="dossier-name">Contact Name</h2>
+              <span id="modal-dossier-conf" class="badge-verified">⚡ 98% Match</span>
+            </div>
+            <div id="modal-dossier-role" class="dossier-role">Company & Role</div>
+          </div>
+        </div>
+        <button type="button" class="btn-modal-close" id="btn-close-dossier" aria-label="Close modal">✕</button>
+      </div>
+
+      <div class="modal-body">
+        <!-- Headline -->
+        <div id="modal-dossier-headline" class="dossier-headline-banner"></div>
+
+        <!-- Bio Summary -->
+        <div class="dossier-section">
+          <div class="dossier-section-title">📖 Professional Intelligence Narrative</div>
+          <div id="modal-dossier-bio" class="dossier-bio-text"></div>
+        </div>
+
+        <!-- Areas of Expertise -->
+        <div class="dossier-section">
+          <div class="dossier-section-title">🎯 Corroborated Areas of Expertise</div>
+          <div id="modal-dossier-expertise" class="dossier-expertise-row"></div>
+        </div>
+
+        <!-- Verified Links -->
+        <div class="dossier-section">
+          <div class="dossier-section-title">🌐 Verified Professional Footprint</div>
+          <div id="modal-dossier-links" class="dossier-links-row"></div>
+        </div>
+
+        <!-- Bilateral Commitments -->
+        <div class="dossier-section">
+          <div class="dossier-section-title">🤝 Bilateral Promises & Commitments</div>
+          <ul id="modal-dossier-commitments" class="commitments-list"></ul>
+        </div>
+
+        <!-- Encounter Context -->
+        <div class="dossier-section">
+          <div class="dossier-section-title">💬 Meeting Key Topics & Context</div>
+          <div id="modal-dossier-topics" class="social-topics-tags"></div>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button type="button" id="btn-dossier-refresh" class="btn-primary">⚡ Refresh Web Intelligence</button>
+        <button type="button" id="btn-dossier-add-comm" class="btn-secondary">+ Add Commitment</button>
+        <button type="button" id="btn-dossier-close-footer" class="btn-secondary">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Echo Show Multi-Modal Device & Card Previewer Modal -->
+  <div id="modal-echo-show" class="modal-backdrop hidden">
+    <div class="modal-dialog modal-echo-device">
+      <!-- Simulated Echo Show Hardware Bezel -->
+      <div class="echo-hardware-bezel">
+        <!-- Echo Hardware Sensor Notch -->
+        <div class="echo-camera-notch">
+          <span class="echo-cam-dot"></span>
+        </div>
+
+        <!-- Echo Show Glass Display -->
+        <div class="echo-screen">
+          <!-- Echo System Bar -->
+          <div class="echo-system-bar">
+            <div class="echo-time" id="echo-clock">15:30</div>
+            <div class="echo-brand-pill">
+              <span class="echo-alexa-dot"></span>
+              <span>Alexa+ Ext-App</span>
+            </div>
+            <div class="echo-system-right">
+              <span class="echo-wifi">📶 5G</span>
+              <button type="button" class="btn-echo-close" id="btn-close-echo">✕</button>
+            </div>
+          </div>
+
+          <!-- Template Switcher Bar -->
+          <div class="echo-template-switcher" role="tablist">
+            <button class="echo-tab-btn active" data-template="DEEP_BRIEFING_VIEWER">
+              <span>📚 Deep Briefing</span>
+            </button>
+            <button class="echo-tab-btn" data-template="SOCIAL_PROFILE_CARD">
+              <span>👤 Social Profile</span>
+            </button>
+            <button class="echo-tab-btn" data-template="SOCIAL_COMMITMENTS_CARD">
+              <span>🤝 Commitments</span>
+            </button>
+            <button class="echo-tab-btn" data-template="ACTION_VERIFIED_BADGE">
+              <span>🛡️ Peace of Mind</span>
+            </button>
+            <button class="echo-tab-btn" data-template="DAILY_ACTIONS_RECAP">
+              <span>📋 Daily Recap</span>
+            </button>
+          </div>
+
+          <!-- Dynamic Echo Show Card Canvas -->
+          <div id="echo-card-canvas" class="echo-card-canvas">
+            <div class="echo-card-loading">Loading multi-modal card template...</div>
+          </div>
+
+          <!-- Alexa Spoken Audio Bar -->
+          <div class="echo-alexa-voice-bar">
+            <div class="voice-bar-left">
+              <div class="voice-wave-anim">
+                <span></span><span></span><span></span><span></span>
+              </div>
+              <span class="voice-label">Alexa Spoken Response:</span>
+            </div>
+            <div class="voice-text" id="echo-voice-text">"Loading spoken briefing..."</div>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 
   <!-- Toast Notification Container -->

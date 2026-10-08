@@ -3,7 +3,7 @@
 > **Document Status:** Active Execution Plan & Project Tracking Board  
 > **Source Documents:** [00_overview.md](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/docs/next_steps/00_overview.md) to [06_social_web_enrichment.md](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/docs/next_steps/06_social_web_enrichment.md)  
 > **Target Branch:** `Next_steps` / `main`  
-> **Current Baseline:** v1.1.0 (100/100 Pytest suites passing, FastMCP + Web UI with Realtime SSE live)
+> **Current Baseline:** v1.2.0 (117/117 Pytest suites passing 100% green, FastMCP + Echo Show Ext-Apps + Web UI live)
 
 ---
 
@@ -18,9 +18,9 @@
 │    ├─ M1.1: Contextual Deep Topic Synthesis        │ P1       │ Medium │ Doc 01      │ ✅ DONE   │
 │    ├─ M1.2: Ambient Scheduled Tasks (Voice)        │ P1       │ Medium │ Doc 04      │ ✅ DONE   │
 │    └─ M1.3: Bilateral Social Commitments           │ P1       │ Medium │ Doc 05      │ ✅ DONE   │
-│  Phase 2: Relational Enrichment & Multi-Modal UI   │ Medium   │ Medium │ Docs 06, UI │ ⏳ READY  │
-│    ├─ M2.1: Autonomous Social Web Profiler         │ P2       │ Medium │ Doc 06      │ ⏳ READY  │
-│    └─ M2.2: Echo Show & Web UI Card Upgrades       │ P2       │ Low    │ Docs 01,05,06│ ⏳ PLANNED│
+│  Phase 2: Relational Enrichment & Multi-Modal UI   │ Medium   │ Medium │ Docs 06, UI │ ✅ COMPLETED│
+│    ├─ M2.1: Autonomous Social Web Profiler         │ P2       │ Medium │ Doc 06      │ ✅ DONE   │
+│    └─ M2.2: Echo Show & Web UI Card Upgrades       │ P2       │ Low    │ Docs 01,05,06│ ✅ DONE   │
 │  Phase 3: Ingestion Stream & Macro Session Engine  │ Medium   │ High   │ Docs 02, 03 │ ⏳ PLANNED│
 │    ├─ M3.1: Context Ring Buffer & GPS Telemetry    │ P2       │ High   │ Doc 02      │ ⏳ PLANNED│
 │    └─ M3.2: Session Merging & Micro-Event Forking  │ P3       │ High   │ Doc 03      │ ⏳ PLANNED│
@@ -120,20 +120,59 @@
 
 #### 🎯 Milestone 2.1: Autonomous Social Web Profiler
 * **Reference Spec:** [`06_social_web_enrichment.md`](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/docs/next_steps/06_social_web_enrichment.md)
-* **Status:** ⏳ **PLANNED**
+* **Status:** ✅ **COMPLETED**
+* **Rationale:** During professional meetings and conferences, newly encountered peers often need authoritative background context without the user awkwardly typing into a phone. EXAMEN autonomously builds an executive dossier using public web intelligence while enforcing strict privacy and disambiguation guardrails.
 * **Work Breakdown:**
-  1. **Schema**: Add `SocialWebProfile` (headline, organization, bio_summary, expertise, linkedin_url).
-  2. **Profiling Node (`src/pipeline/nodes/social.py`)**:
-     * Async post-processing worker executing targeted web searches.
-     * **Strict 2-Anchor Disambiguation Guardrails** (Full Name + Company/Role/Location; exclude common first-name searches).
-  3. **MCP Tool & UI**:
-     * Expose `get_contact_profile(name)` delivering `SOCIAL_PROFILE_CARD` on Echo Show and Web UI.
+  1. [x] **Schema Extension (`src/core/schemas.py`, `src/core/__init__.py`)**:
+     * Added `SocialWebProfile` model with `headline`, `organization`, `current_role`, `bio_summary`, `areas_of_expertise`, `linkedin_url`, `website_url`, `github_url`, `confidence_score`, and `enriched_at`.
+     * Added `web_profile: Optional[SocialWebProfile]` to `SocialEntity`.
+  2. [x] **Storage & Non-Blocking Migration (`src/core/storage/sqlite_store.py`, `src/core/storage/base.py`)**:
+     * Added automatic migration for `web_profile_json TEXT` column in `social_contacts`.
+     * Implemented `get_social_contact(id_or_name)` and `update_contact_web_profile(id_or_name, profile)`.
+     * Guaranteed preservation of existing web profiles across entity deduplication and updates.
+  3. [x] **Autonomous Profiler Node (`src/pipeline/nodes/social_profiler.py`, `src/pipeline/nodes/social.py`)**:
+     * Implemented `verify_disambiguation_anchors` with strict 2-anchor guardrails (rejects standalone ambiguous first names like "Dave", requires Full Name + Company/Role/Topics or First Name + Strong Organization).
+     * Query builder `build_profiling_queries` scoping searches to public professional sources (LinkedIn, GitHub, corporate leadership, Wikipedia) and excluding personal networks (Instagram, TikTok).
+     * Dual-mode synthesizer: Bedrock structured output when online and deterministic heuristic synthesizer for offline / mock testing.
+     * Connected background enrichment hook in `node_extract_social`.
+  4. [x] **Serving Layer & FastMCP Tool (`src/serving/tools/social_tools.py`, `src/serving/mcp_server.py`)**:
+     * Implemented FastMCP `get_contact_profile` tool rendering `display_template: "SOCIAL_PROFILE_CARD"` formatted for Alexa+ / Echo Show with spoken bio and mutual commitments.
+     * Exposed REST endpoints: `GET /api/contacts/{id}/profile` and `POST /api/contacts/{id}/enrich`.
+     * Broadcast real-time SSE event `contact_enriched`.
+  5. [x] **Web UI Dashboard Presentation (`src/web_ui/`)**:
+     * Rendered executive web profile dossier with headline, bio summary, expertise pills, and verified links (LinkedIn, GitHub, Website).
+     * Added interactive `[⚡ Enrich Profile]` / `[🔄 Refresh Intelligence]` action with dynamic loading feedback.
+  6. [x] **Testing & Verification**:
+     * Comprehensive unit and integration test coverage across `tests/test_storage.py`, `tests/test_pipeline_nodes.py`, `tests/test_mcp_server.py`.
 
 #### 🎯 Milestone 2.2: Echo Show & Web UI Multi-Modal Card Upgrades
-* **Status:** ⏳ **PLANNED**
+* **Reference Spec:** [`01_deep_topic_contextual_synthesis.md`](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/docs/next_steps/01_deep_topic_contextual_synthesis.md), [`05_structured_social_commitments.md`](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/docs/next_steps/05_structured_social_commitments.md), [`06_social_web_enrichment.md`](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/docs/next_steps/06_social_web_enrichment.md), [`docs/03_alexa_mcp_serving.md`](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/docs/03_alexa_mcp_serving.md)
+* **Status:** ✅ **COMPLETED**
+* **Rationale:** Delivers executive-grade visual experiences across both desktop browsers and Alexa+ Echo Show smart screens (Ext-Apps touch canvas). Standardized multi-modal JSON templates across FastMCP tools and introduced a dedicated simulated Echo Show hardware previewer, bilateral commitments management board, and full executive dossier modals.
 * **Work Breakdown:**
-  1. **Web UI**: Add tabs/drawers for viewing Social Commitments (debts owed vs awaiting) and enriched LinkedIn profiles.
-  2. **Echo Show Ext-Apps**: Polish card JSON templates (`DEEP_BRIEFING_VIEWER`, `SOCIAL_PROFILE_CARD`).
+  1. [x] **FastMCP Serving Tools Multi-Modal Standardization (`src/serving/tools/`)**:
+     * Standardized dual template fields (`display_template` and legacy `ui_card_type`) plus structured `card_payload` across all FastMCP tools:
+       - `DEEP_BRIEFING_VIEWER`: topic title, executive bullets, contextual synthesis card, and online source links.
+       - `SOCIAL_PROFILE_CARD`: executive bio, match confidence, expertise chips, verified URLs, and active promises.
+       - `SOCIAL_COMMITMENTS_CARD`: split user debts (`📤 You Promised`) vs claims (`📥 Contact Promised`) with touch actions.
+       - `ACTION_VERIFIED_BADGE` / `ACTION_UNVERIFIED_BADGE`: high-contrast verified status badge with audio statement quote.
+       - `DAILY_ACTIONS_RECAP`: comprehensive daily summary of planned routines vs acoustic triggers.
+       - `UPCOMING_TASKS_VIEWER`: scheduled tasks timeline with touch status toggles.
+  2. [x] **Storage Layer Enhancements (`src/core/storage/base.py`, `src/core/storage/sqlite_store.py`)**:
+     * Implemented `delete_social_commitment(id)` with cascading clean-up of auto-provisioned agenda planned tasks.
+  3. [x] **Serving Layer Endpoints (`src/serving/mcp_server.py`)**:
+     * Added `GET /api/commitments/{id}` and `DELETE /api/commitments/{id}` with real-time SSE broadcasts.
+     * Added `GET /api/cards/preview` returning formatted card payloads and spoken summaries for Echo Show Ext-Apps with template switching.
+  4. [x] **Web UI Multi-Modal & Social Hub Upgrades (`src/web_ui/`)**:
+     * **Header**: Added `[📺 Echo Show Cards]` hardware previewer trigger with live device simulation.
+     * **Social Rolodex Sub-Navigation**: Seamless subtabs for `👥 All Contacts`, `🤝 Bilateral Commitments`, and `⚡ Executive Dossiers`.
+     * **Bilateral Commitments Board**: Filter pills (`All`, `📤 Debts I Owe`, `📥 Owed to Me`, `✓ Fulfilled`), 1-click status toggles, deletion, and linked routine tracking.
+     * **Interactive `+ New Commitment` Drawer**: Slide-down drawer with contact auto-complete datalist, debtor role picker, and date anchors.
+     * **Executive Dossier Modal (`#modal-executive-dossier`)**: Dedicated modal with avatar monogram, verified match score, biography narrative, expertise pills, and authenticated external links (LinkedIn, GitHub, Website).
+     * **Simulated Echo Show Device Modal (`#modal-echo-show`)**: 16:10 hardware bezel with camera notch, real-time clock, Alexa+ Ext-App system bar, 6-template interactive switcher, dynamic touch canvas, and Alexa spoken voice response wave.
+     * **Deep Linking**: Direct URL query parameter activation (`?card=...`, `?mode=ext-app`, `?contact=...`).
+  5. [x] **Testing & Verification**:
+     * 100% green verification: 40/40 tests passing on storage and MCP server, 117/117 passing across the entire repository.
 
 ---
 

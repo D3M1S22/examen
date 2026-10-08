@@ -28,6 +28,7 @@ from src.core.storage import get_storage_store
 from src.pipeline.app import agent_invocation
 from src.serving.tools import (
     create_planned_task,
+    get_contact_profile,
     get_daily_actions_recap,
     get_social_commitments,
     get_upcoming_tasks,
@@ -61,12 +62,13 @@ def broadcast_event(event_type: str, data: Optional[Dict[str, Any]] = None) -> N
             _sse_subscribers.discard(q)
 
 
-# Register the 7 core MCP tools for Alexa+
+# Register the 8 core MCP tools for Alexa+
 mcp.tool()(create_planned_task)
 mcp.tool()(get_upcoming_tasks)
 mcp.tool()(verify_action_status)
 mcp.tool()(get_daily_actions_recap)
 mcp.tool()(query_social_contact)
+mcp.tool()(get_contact_profile)
 mcp.tool()(get_social_commitments)
 mcp.tool()(get_topic_briefing)
 
@@ -382,16 +384,75 @@ async def api_contacts(request: Request) -> JSONResponse:
 
     result = []
     for c in contacts:
+        comms_list = []
+        for com in (c.commitments or []):
+            if hasattr(com, "model_dump"):
+                comms_list.append(com.model_dump())
+            elif isinstance(com, dict):
+                comms_list.append(com)
+            else:
+                comms_list.append(str(com))
+
         result.append({
             "id": c.id,
             "name": c.person_name,
             "company_or_role": c.company_or_role,
             "contact_info": c.contact_info,
             "key_topics": c.key_topics,
-            "commitments": c.commitments,
+            "commitments": comms_list,
+            "web_profile": c.web_profile.model_dump() if c.web_profile else None,
             "timestamp": c.timestamp,
         })
     return JSONResponse({"contacts": result, "count": len(result)})
+
+
+@mcp.custom_route("/api/contacts/{contact_id}/profile", methods=["GET"])
+async def api_contact_profile(request: Request) -> JSONResponse:
+    """Returns detailed dossier and web profile for a specific contact."""
+    contact_id = request.path_params["contact_id"]
+    from src.serving.tools.social_tools import execute_get_contact_profile
+    data = execute_get_contact_profile(name_or_query=contact_id)
+    if not data.get("found"):
+        return JSONResponse({"error": f"Contact '{contact_id}' not found", "found": False}, status_code=404)
+    return JSONResponse(data)
+
+
+@mcp.custom_route("/api/contacts/{contact_id}/enrich", methods=["POST"])
+async def api_enrich_contact(request: Request) -> JSONResponse:
+    """Manually or autonomously triggers web intelligence enrichment for a contact."""
+    contact_id = request.path_params["contact_id"]
+    store = get_storage_store()
+    contact = store.get_social_contact(contact_id)
+    if not contact:
+        matches = store.search_social_contact(query=contact_id)
+        if matches:
+            contact = matches[0]
+
+    if not contact:
+        return JSONResponse({"error": f"Contact '{contact_id}' not found", "found": False}, status_code=404)
+
+    from src.pipeline.nodes.social_profiler import enrich_social_contact_sync
+    profile = enrich_social_contact_sync(contact, store=store, force=True)
+    if not profile:
+        return JSONResponse({
+            "success": False,
+            "message": f"Unable to enrich profile for '{contact.person_name}': insufficient disambiguation anchors or no results.",
+            "contact_id": contact.id,
+        }, status_code=422)
+
+    contact_dict = {
+        "id": contact.id,
+        "name": contact.person_name,
+        "company_or_role": contact.company_or_role,
+        "web_profile": profile.model_dump(),
+    }
+    broadcast_event("contact_enriched", contact_dict)
+    return JSONResponse({
+        "success": True,
+        "message": f"Successfully enriched profile for '{contact.person_name}'.",
+        "web_profile": profile.model_dump(),
+        "contact": contact_dict,
+    })
 
 
 @mcp.custom_route("/api/commitments", methods=["GET"])
@@ -550,6 +611,192 @@ async def api_cancel_commitment(request: Request) -> JSONResponse:
     }
     broadcast_event("commitment_updated", com_dict)
     return JSONResponse({"success": True, "commitment": com_dict})
+
+
+@mcp.custom_route("/api/commitments/{commitment_id}", methods=["GET", "DELETE"])
+async def api_commitment_detail(request: Request) -> JSONResponse:
+    """Retrieves (GET) or deletes (DELETE) a bilateral commitment."""
+    store = get_storage_store()
+    commitment_id = request.path_params.get("commitment_id")
+    if not commitment_id:
+        return JSONResponse({"error": "Missing commitment_id"}, status_code=400)
+
+    com = store.get_social_commitment(commitment_id)
+    if not com:
+        return JSONResponse({"error": f"Commitment '{commitment_id}' not found"}, status_code=404)
+
+    if request.method == "DELETE":
+        deleted = store.delete_social_commitment(commitment_id)
+        if not deleted:
+            return JSONResponse({"error": "Failed to delete commitment"}, status_code=500)
+        broadcast_event("commitment_deleted", {"id": commitment_id, "contact_name": com.contact_name})
+        return JSONResponse({"success": True, "deleted_id": commitment_id})
+
+    # GET
+    com_dict = {
+        "id": com.id,
+        "contact_name": com.contact_name,
+        "debtor": com.debtor,
+        "description": com.description,
+        "due_date_raw": com.due_date_raw,
+        "normalized_deadline": com.normalized_deadline,
+        "status": com.status,
+        "auto_scheduled_task_id": com.auto_scheduled_task_id,
+        "created_at": com.created_at,
+    }
+    return JSONResponse({"commitment": com_dict})
+
+
+@mcp.custom_route("/api/cards/preview", methods=["GET"])
+async def api_cards_preview(request: Request) -> JSONResponse:
+    """Returns rich card payloads and spoken voice text for Echo Show Ext-App templates."""
+    store = get_storage_store()
+    template = request.query_params.get("template")
+
+    # 1. Briefing card
+    from src.serving.tools.topic_tools import execute_get_topic_briefing
+    briefing_card = execute_get_topic_briefing(store=store)
+    if not briefing_card.get("found"):
+        briefing_card = {
+            "found": True,
+            "topic_title": "AWS Bedrock AgentCore & Runtime Architecture",
+            "context_type": "tech_stack",
+            "created_at": datetime.now().isoformat(),
+            "executive_summary": [
+                "Serverless microVM execution runtime for autonomous LLM agents.",
+                "Sub-second state restoration and bidirectional audio streaming.",
+                "Built-in IAM credential isolation and automatic telemetry.",
+            ],
+            "explanatory_synthesis": "AWS Bedrock AgentCore provides high-performance microVM isolation tailored for ambient voice agents with strict low-latency requirements.",
+            "web_sources": ["https://aws.amazon.com/bedrock", "https://docs.aws.amazon.com/bedrock/agentcore"],
+            "action_items": ["Review IAM microVM execution policies", "Test audio chunking buffer"],
+            "display_template": "DEEP_BRIEFING_VIEWER",
+            "ui_card_type": "DEEP_BRIEFING_VIEWER",
+            "spoken_summary": "Here is the briefing on AWS Bedrock AgentCore Runtime. It provides serverless microVM execution for autonomous LLM agents.",
+            "card_payload": {
+                "template": "DEEP_BRIEFING_VIEWER",
+                "topic_title": "AWS Bedrock AgentCore & Runtime Architecture",
+                "title": "AWS Bedrock AgentCore & Runtime Architecture",
+                "context_type": "tech_stack",
+                "bullets": [
+                    "Serverless microVM execution runtime for autonomous LLM agents.",
+                    "Sub-second state restoration and bidirectional audio streaming.",
+                ],
+                "synthesis": "AWS Bedrock AgentCore provides high-performance microVM isolation tailored for ambient voice agents.",
+                "sources": ["https://aws.amazon.com/bedrock"],
+            },
+        }
+
+    # 2. Social profile card
+    from src.serving.tools.social_tools import execute_get_contact_profile
+    contacts_with_wp = [c for c in store.search_social_contact("") if c.web_profile]
+    if contacts_with_wp:
+        profile_card = execute_get_contact_profile(contacts_with_wp[0].person_name, force_enrich=False, store=store)
+    else:
+        profile_card = {
+            "found": True,
+            "display_template": "SOCIAL_PROFILE_CARD",
+            "ui_card_type": "SOCIAL_PROFILE_CARD",
+            "contact": {
+                "name": "Luca Bianchi",
+                "company_or_role": "VP of Infrastructure @ CloudScale",
+                "key_topics": ["Distributed Systems", "AWS Architecture"],
+            },
+            "web_profile": {
+                "headline": "VP of Infrastructure @ CloudScale | ex-AWS DynamoDB",
+                "organization": "CloudScale",
+                "current_role": "VP of Infrastructure",
+                "bio_summary": "Luca leads the distributed systems and cloud reliability team at CloudScale. Prior to CloudScale, he spent 6 years at AWS working on DynamoDB storage engines.",
+                "areas_of_expertise": ["Distributed Systems", "Kubernetes", "AWS Architecture"],
+                "linkedin_url": "https://www.linkedin.com/in/luca-bianchi-cloud",
+                "github_url": "https://github.com/lbianchi-infra",
+                "website_url": "https://cloudscale.io",
+                "confidence_score": 0.98,
+            },
+            "commitments": [
+                {
+                    "contact_name": "Luca Bianchi",
+                    "debtor": "user",
+                    "description": "Send architecture whitepaper by Friday 5 PM",
+                    "status": "open",
+                }
+            ],
+            "open_commitments_count": 1,
+            "spoken_summary": "Luca Bianchi is VP of Infrastructure at CloudScale. You have 1 open bilateral commitment.",
+            "card_payload": {
+                "template": "SOCIAL_PROFILE_CARD",
+                "name": "Luca Bianchi",
+                "headline": "VP of Infrastructure @ CloudScale | ex-AWS DynamoDB",
+                "organization": "CloudScale",
+                "bio_summary": "Luca leads the distributed systems and cloud reliability team at CloudScale.",
+                "bio": "Luca leads the distributed systems and cloud reliability team at CloudScale.",
+                "areas_of_expertise": ["Distributed Systems", "Kubernetes", "AWS Architecture"],
+                "expertise": ["Distributed Systems", "Kubernetes", "AWS Architecture"],
+                "linkedin": "https://www.linkedin.com/in/luca-bianchi-cloud",
+                "github": "https://github.com/lbianchi-infra",
+                "website": "https://cloudscale.io",
+                "confidence": 0.98,
+                "commitments": [
+                    {"description": "Send architecture whitepaper by Friday 5 PM", "debtor": "user"}
+                ],
+                "spoken_summary": "Luca Bianchi is VP of Infrastructure at CloudScale. You have 1 open bilateral commitment.",
+            },
+        }
+
+    # 3. Commitments card
+    from src.serving.tools.social_tools import execute_get_social_commitments
+    commitments_card = execute_get_social_commitments(store=store)
+
+    # 4. Action verified badge
+    from src.serving.tools.action_tools import execute_verify_action_status, execute_get_daily_actions_recap, execute_get_upcoming_tasks
+    actions = store.list_recent_actions(limit=1)
+    if actions:
+        action_card = execute_verify_action_status(action_query=actions[0].action_type, store=store)
+    else:
+        action_card = {
+            "status": "verified",
+            "action_type": "unplug_clothes_iron",
+            "domain": "safety",
+            "timestamp": datetime.now().isoformat(),
+            "raw_statement": "Ho appena staccato il ferro da stiro prima di uscire.",
+            "confidence": 0.98,
+            "elapsed_time_human": "just now",
+            "display_template": "ACTION_VERIFIED_BADGE",
+            "ui_card_type": "ACTION_VERIFIED_BADGE",
+            "spoken_summary": "Yes, you confirmed unplugging the clothes iron: 'Ho appena staccato il ferro da stiro prima di uscire' just now.",
+            "card_payload": {
+                "template": "ACTION_VERIFIED_BADGE",
+                "status": "verified",
+                "action_type": "unplug_clothes_iron",
+                "domain": "safety",
+                "raw_statement": "Ho appena staccato il ferro da stiro prima di uscire.",
+                "confidence": 0.98,
+                "elapsed_time": "just now",
+                "elapsed_time_human": "just now",
+                "spoken_summary": "Yes, you confirmed unplugging the clothes iron: 'Ho appena staccato il ferro da stiro prima di uscire' just now.",
+            },
+        }
+
+    # 5. Daily recap
+    daily_card = execute_get_daily_actions_recap(store=store)
+
+    # 6. Upcoming tasks
+    upcoming_card = execute_get_upcoming_tasks(store=store)
+
+    cards = {
+        "DEEP_BRIEFING_VIEWER": briefing_card,
+        "SOCIAL_PROFILE_CARD": profile_card,
+        "SOCIAL_COMMITMENTS_CARD": commitments_card,
+        "ACTION_VERIFIED_BADGE": action_card,
+        "DAILY_ACTIONS_RECAP": daily_card,
+        "UPCOMING_TASKS_VIEWER": upcoming_card,
+    }
+
+    if template:
+        selected = cards.get(template, briefing_card)
+        return JSONResponse(selected)
+
+    return JSONResponse({"cards": cards})
 
 
 @mcp.custom_route("/api/topics", methods=["GET"])

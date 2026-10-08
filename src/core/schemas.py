@@ -64,6 +64,25 @@ class SocialCommitment(BaseModel):
         return item in self.description
 
 
+class SocialWebProfile(BaseModel):
+    headline: Optional[str] = Field(default=None, description="e.g. 'VP of Infrastructure at CloudScale | ex-AWS'")
+    organization: Optional[str] = Field(default=None, description="Current company, lab, or institution.")
+    current_role: Optional[str] = Field(default=None, description="Specific professional title or role.")
+    bio_summary: Optional[str] = Field(
+        default=None,
+        description="Concise 2-3 sentence authoritative executive summary of professional background."
+    )
+    areas_of_expertise: List[str] = Field(default_factory=list, description="Top 3-5 technical or business domains.")
+    linkedin_url: Optional[str] = Field(default=None, description="Canonical public LinkedIn URL if verified.")
+    website_url: Optional[str] = Field(default=None, description="Company, academic, or personal homepage URL.")
+    github_url: Optional[str] = Field(default=None, description="Public GitHub URL or handle if verified.")
+    confidence_score: float = Field(default=1.0, ge=0.0, le=1.0, description="Verification confidence score.")
+    enriched_at: str = Field(
+        default_factory=lambda: datetime.now().isoformat(),
+        description="ISO timestamp when the web profile was synthesized."
+    )
+
+
 class SocialEntity(BaseModel):
     id: Optional[str] = Field(default=None, description="Unique record identifier.")
     person_name: str = Field(description="Full name of person encountered.")
@@ -76,6 +95,10 @@ class SocialEntity(BaseModel):
     key_topics: List[str] = Field(
         default_factory=list,
         description="Salient topic tags discussed during interaction."
+    )
+    web_profile: Optional[SocialWebProfile] = Field(
+        default=None,
+        description="Autonomously synthesized executive web dossier."
     )
     timestamp: str = Field(
         default_factory=lambda: datetime.now().isoformat(),

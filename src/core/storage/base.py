@@ -7,6 +7,7 @@ from src.core.schemas import (
     PlannedTask,
     SocialCommitment,
     SocialEntity,
+    SocialWebProfile,
     VerifiedAction,
 )
 
@@ -82,6 +83,18 @@ class AbstractContextStore(ABC):
         pass
 
     @abstractmethod
+    def get_social_contact(self, contact_id_or_name: str) -> Optional[SocialEntity]:
+        """Fetch a social contact by ID or exact name."""
+        pass
+
+    @abstractmethod
+    def update_contact_web_profile(
+        self, contact_id_or_name: str, profile: SocialWebProfile
+    ) -> bool:
+        """Update or attach an autonomous web profile to an existing contact. Returns True if updated."""
+        pass
+
+    @abstractmethod
     def search_social_contact(self, query: str) -> List[SocialEntity]:
         """Search contacts by name, company, or key topics."""
         pass
@@ -112,6 +125,11 @@ class AbstractContextStore(ABC):
         self, commitment_id: str, status: str
     ) -> bool:
         """Update status of a commitment ('open', 'fulfilled', 'cancelled'). Returns True if updated."""
+        pass
+
+    @abstractmethod
+    def delete_social_commitment(self, commitment_id: str) -> bool:
+        """Delete a commitment by ID. Returns True if deleted."""
         pass
 
     # --- Topic Intelligence ---

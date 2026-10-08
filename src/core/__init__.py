@@ -4,6 +4,7 @@ from src.core.config import settings
 from src.core.schemas import (
     ChunkClassification,
     SocialCommitment,
+    SocialWebProfile,
     SocialEntity,
     VerifiedAction,
     PlannedTask,
@@ -27,6 +28,7 @@ __all__ = [
     "has_active_model_credentials",
     "ChunkClassification",
     "SocialCommitment",
+    "SocialWebProfile",
     "SocialEntity",
     "VerifiedAction",
     "PlannedTask",

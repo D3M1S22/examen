@@ -123,6 +123,22 @@ def execute_verify_action_status(
 
     if action:
         elapsed = _format_elapsed_time(action.timestamp)
+        spoken = (
+            f"Yes, you confirmed {action.action_type.replace('_', ' ')}: "
+            f"'{action.raw_statement}' approximately {elapsed}."
+        )
+        card_payload = {
+            "template": "ACTION_VERIFIED_BADGE",
+            "status": "verified",
+            "action_type": action.action_type,
+            "domain": action.domain,
+            "timestamp": action.timestamp,
+            "raw_statement": action.raw_statement,
+            "confidence": round(action.confidence, 2),
+            "elapsed_time_human": elapsed,
+            "matched_task_id": action.matched_task_id,
+            "spoken_summary": spoken,
+        }
         return {
             "status": "verified",
             "action_type": action.action_type,
@@ -132,20 +148,31 @@ def execute_verify_action_status(
             "confidence": round(action.confidence, 2),
             "elapsed_time_human": elapsed,
             "matched_task_id": action.matched_task_id,
+            "display_template": "ACTION_VERIFIED_BADGE",
             "ui_card_type": "ACTION_VERIFIED_BADGE",
-            "spoken_summary": (
-                f"Yes, you confirmed {action.action_type.replace('_', ' ')}: "
-                f"'{action.raw_statement}' approximately {elapsed}."
-            ),
+            "spoken_summary": spoken,
+            "card_payload": card_payload,
         }
 
+    target_d = target_date or datetime.now().strftime("%Y-%m-%d")
+    spoken = f"I have no record of you completing '{action_query}' yet."
+    card_payload = {
+        "template": "ACTION_UNVERIFIED_BADGE",
+        "status": "unverified",
+        "action_query": action_query,
+        "target_date": target_d,
+        "message": f"No verified completion recorded for '{action_query}'.",
+        "spoken_summary": spoken,
+    }
     return {
         "status": "unverified",
         "action_query": action_query,
-        "target_date": target_date or datetime.now().strftime("%Y-%m-%d"),
+        "target_date": target_d,
         "message": f"No verified completion recorded for '{action_query}'.",
+        "display_template": "ACTION_UNVERIFIED_BADGE",
         "ui_card_type": "ACTION_UNVERIFIED_BADGE",
-        "spoken_summary": f"I have no record of you completing '{action_query}' yet.",
+        "spoken_summary": spoken,
+        "card_payload": card_payload,
     }
 
 
@@ -214,6 +241,28 @@ def execute_get_daily_actions_recap(
         })
 
     today_str = datetime.now().strftime("%Y-%m-%d")
+    spoken = (
+        f"Today you have {len(completed_tasks)} of {len(planned_tasks)} planned routine(s) completed, "
+        f"and {len(spontaneous_formatted)} spontaneous action(s) recorded."
+    )
+    card_payload = {
+        "template": "DAILY_ACTIONS_RECAP",
+        "date": today_str,
+        "summary": {
+            "planned_total": len(planned_tasks),
+            "planned_completed": len(completed_tasks),
+            "planned_pending": len(pending_tasks),
+            "spontaneous_actions": len(spontaneous_formatted),
+        },
+        "total_actions": len(spontaneous_formatted) + len(completed_tasks),
+        "tasks_count": len(planned_tasks),
+        "completed_tasks_count": len(completed_tasks),
+        "recent_actions": spontaneous_formatted,
+        "planned_routines": planned_formatted,
+        "spontaneous_actions": spontaneous_formatted,
+        "spoken_summary": spoken,
+    }
+
     return {
         "date": today_str,
         "summary": {
@@ -224,7 +273,10 @@ def execute_get_daily_actions_recap(
         },
         "planned_routines": planned_formatted,
         "spontaneous_actions": spontaneous_formatted,
+        "display_template": "DAILY_ACTIONS_RECAP",
         "ui_card_type": "DAILY_ACTIONS_RECAP",
+        "spoken_summary": spoken,
+        "card_payload": card_payload,
     }
 
 
@@ -272,11 +324,21 @@ def execute_get_upcoming_tasks(
         if formatted else "You have no upcoming scheduled tasks."
     )
 
+    card_payload = {
+        "template": "UPCOMING_TASKS_VIEWER",
+        "tasks": formatted,
+        "count": len(formatted),
+        "domain_filter": domain,
+        "spoken_summary": spoken_summary,
+    }
+
     return {
         "tasks": formatted,
         "count": len(formatted),
         "spoken_summary": spoken_summary,
+        "display_template": "UPCOMING_TASKS_VIEWER",
         "ui_card_type": "UPCOMING_TASKS_VIEWER",
+        "card_payload": card_payload,
     }
 
 
