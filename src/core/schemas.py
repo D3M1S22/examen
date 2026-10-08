@@ -1,7 +1,6 @@
-"""Data contracts and schemas for EXAMEN."""
-
+import re
 from datetime import datetime
-from typing import Annotated, List, Literal, Optional
+from typing import Annotated, List, Literal, Optional, Union
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
@@ -26,14 +25,53 @@ class ChunkClassification(BaseModel):
 # ============================================================================
 # 2. Social Recall Channel (Stage 3A)
 # ============================================================================
+class SocialCommitment(BaseModel):
+    id: Optional[str] = Field(default=None, description="Unique commitment ID.")
+    contact_name: str = Field(description="Full name or identifier of the contact involved.")
+    debtor: Literal["user", "contact"] = Field(
+        default="user",
+        description="Whether the user promised the contact ('user'), or the contact promised the user ('contact')."
+    )
+    description: str = Field(description="Concrete action or deliverable promised.")
+    due_date_raw: Optional[str] = Field(
+        default=None,
+        description="Spoken deadline phrase (e.g. 'by Monday 10 AM', 'tomorrow afternoon')."
+    )
+    normalized_deadline: Optional[str] = Field(
+        default=None,
+        description="Normalized ISO-8601 UTC timestamp computed relative to current reference time."
+    )
+    status: Literal["open", "fulfilled", "cancelled"] = Field(
+        default="open",
+        description="Current commitment status."
+    )
+    auto_scheduled_task_id: Optional[str] = Field(
+        default=None,
+        description="Linked PlannedTask ID if debtor == 'user'."
+    )
+    created_at: str = Field(
+        default_factory=lambda: datetime.now().isoformat(),
+        description="Creation ISO timestamp."
+    )
+
+    def __str__(self) -> str:
+        return self.description
+
+    def lower(self) -> str:
+        return self.description.lower()
+
+    def __contains__(self, item: str) -> bool:
+        return item in self.description
+
+
 class SocialEntity(BaseModel):
     id: Optional[str] = Field(default=None, description="Unique record identifier.")
     person_name: str = Field(description="Full name of person encountered.")
     company_or_role: Optional[str] = Field(default=None, description="Company, title, or professional context.")
     contact_info: Optional[str] = Field(default=None, description="Email, social handle, phone if mentioned.")
-    commitments: List[str] = Field(
+    commitments: List[Union[SocialCommitment, str]] = Field(
         default_factory=list,
-        description="Promises made to or by the interlocutor."
+        description="Bilateral commitments made to or by the interlocutor (structured SocialCommitment or raw string)."
     )
     key_topics: List[str] = Field(
         default_factory=list,
@@ -43,6 +81,24 @@ class SocialEntity(BaseModel):
         default_factory=lambda: datetime.now().isoformat(),
         description="ISO timestamp of the encounter."
     )
+
+    def get_commitments_as_objects(self) -> List[SocialCommitment]:
+        """Returns all commitments normalized as SocialCommitment models."""
+        result: List[SocialCommitment] = []
+        for c in self.commitments:
+            if isinstance(c, SocialCommitment):
+                result.append(c)
+            elif isinstance(c, dict):
+                result.append(SocialCommitment(**c))
+            elif isinstance(c, str):
+                is_user = bool(re.search(r"^(i\s|i'll\s|i\s+will\s|let\s+me\s|ti\s+mando|ti\s+invio)", c.strip(), re.I))
+                result.append(SocialCommitment(
+                    contact_name=self.person_name,
+                    debtor="user" if is_user else "contact",
+                    description=c.strip(),
+                    status="open",
+                ))
+        return result
 
 
 # ============================================================================

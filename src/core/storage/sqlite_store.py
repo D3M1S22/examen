@@ -5,7 +5,13 @@ import sqlite3
 import uuid
 from typing import List, Optional
 
-from src.core.schemas import BriefingReport, SocialEntity, VerifiedAction, PlannedTask
+from src.core.schemas import (
+    BriefingReport,
+    PlannedTask,
+    SocialCommitment,
+    SocialEntity,
+    VerifiedAction,
+)
 from src.core.storage.base import AbstractContextStore
 
 
@@ -88,6 +94,24 @@ class SQLiteContextStore(AbstractContextStore):
                 )
             """)
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_social_name ON social_contacts (person_name);")
+
+            # 2b. Social Commitments Table (Bilateral Promises - Milestone 1.3)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS social_commitments (
+                    id TEXT PRIMARY KEY,
+                    contact_name TEXT NOT NULL,
+                    debtor TEXT NOT NULL CHECK(debtor IN ('user', 'contact')),
+                    description TEXT NOT NULL,
+                    due_date_raw TEXT,
+                    normalized_deadline TEXT,
+                    status TEXT NOT NULL DEFAULT 'open',
+                    auto_scheduled_task_id TEXT,
+                    created_at TEXT NOT NULL
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_commitments_contact ON social_commitments (contact_name);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_commitments_debtor ON social_commitments (debtor);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_commitments_status ON social_commitments (status);")
 
             # 3. Topic Briefings Table
             cursor.execute("""
@@ -299,7 +323,27 @@ class SQLiteContextStore(AbstractContextStore):
                 task.status = "completed"
                 task.completed_at = action.timestamp
                 task.verified_action_id = action.id
+
+                # Closed-Loop Reconciliation: fulfill linked commitment if task originated from a commitment
+                if task.origin == "social_commitment":
+                    with self._get_connection() as conn:
+                        cursor = conn.cursor()
+                        cursor.execute(
+                            "UPDATE social_commitments SET status = 'fulfilled' WHERE auto_scheduled_task_id = ?",
+                            (task.id,)
+                        )
+                        conn.commit()
+
                 return task
+
+        # Also check open user commitments directly
+        open_commitments = self.list_social_commitments(debtor="user", status="open")
+        for com in open_commitments:
+            stop_words = {"the", "and", "for", "with", "this", "that", "from", "into", "over", "take", "make", "turn", "out"}
+            com_words = [w for w in re.findall(r"\b[a-zA-Z]{3,}\b", com.description.lower()) if w not in stop_words]
+            contact_words = [w for w in re.findall(r"\b[a-zA-Z]{3,}\b", com.contact_name.lower()) if w not in stop_words]
+            if com_words and any(w in action_text for w in com_words) and (not contact_words or any(cw in action_text for cw in contact_words)):
+                self.update_social_commitment_status(com.id, "fulfilled")
 
         return None
 
@@ -415,7 +459,19 @@ class SQLiteContextStore(AbstractContextStore):
         rec_id = contact.id or str(uuid.uuid4())
         contact.id = rec_id
 
-        commitments_str = json.dumps(contact.commitments, ensure_ascii=False)
+        # Normalize commitments and persist structured bilateral commitments
+        structured_commitments = contact.get_commitments_as_objects()
+        for com in structured_commitments:
+            if not com.contact_name:
+                com.contact_name = contact.person_name
+            self.save_social_commitment(com)
+
+        # Retain json representation in contact record for fast retrieval/backward compatibility
+        commitments_payload = [
+            c.model_dump() if hasattr(c, "model_dump") else c
+            for c in structured_commitments
+        ]
+        commitments_str = json.dumps(commitments_payload, ensure_ascii=False)
         topics_str = json.dumps(contact.key_topics, ensure_ascii=False)
 
         with self._get_connection() as conn:
@@ -455,7 +511,14 @@ class SQLiteContextStore(AbstractContextStore):
             cursor = conn.cursor()
             rows = cursor.execute(sql, (clean_query, clean_query, clean_query)).fetchall()
             for row in rows:
-                commitments = json.loads(row["commitments_json"]) if row["commitments_json"] else []
+                person_name = row["person_name"]
+                commitments = self.list_social_commitments(contact_name=person_name)
+                if not commitments and row["commitments_json"]:
+                    try:
+                        raw_c = json.loads(row["commitments_json"])
+                        commitments = raw_c
+                    except Exception:
+                        commitments = []
                 topics = json.loads(row["key_topics_json"]) if row["key_topics_json"] else []
                 results.append(
                     SocialEntity(
@@ -469,6 +532,137 @@ class SQLiteContextStore(AbstractContextStore):
                     )
                 )
         return results
+
+    def save_social_commitment(self, commitment: SocialCommitment) -> str:
+        rec_id = commitment.id or str(uuid.uuid4())
+        commitment.id = rec_id
+        if not commitment.created_at:
+            commitment.created_at = datetime.now().isoformat()
+
+        # Milestone 1.3: Automatic Agenda Provisioning if debtor == 'user'
+        if commitment.debtor == "user" and not commitment.auto_scheduled_task_id and commitment.status == "open":
+            task_title = f"{commitment.description} (Promise to {commitment.contact_name})"
+            planned_task = PlannedTask(
+                title=task_title,
+                domain="personal",
+                scheduled_time=commitment.normalized_deadline or None,
+                recurrence="none",
+                status="pending",
+                origin="social_commitment",
+                raw_statement=commitment.description,
+                confidence=1.0,
+            )
+            task_id = self.save_planned_task(planned_task)
+            commitment.auto_scheduled_task_id = task_id
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT OR REPLACE INTO social_commitments
+                (id, contact_name, debtor, description, due_date_raw, normalized_deadline, status, auto_scheduled_task_id, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                rec_id,
+                commitment.contact_name,
+                commitment.debtor,
+                commitment.description,
+                commitment.due_date_raw,
+                commitment.normalized_deadline,
+                commitment.status,
+                commitment.auto_scheduled_task_id,
+                commitment.created_at,
+            ))
+            conn.commit()
+        return rec_id
+
+    def get_social_commitment(self, commitment_id: str) -> Optional[SocialCommitment]:
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            row = cursor.execute("SELECT * FROM social_commitments WHERE id = ?", (commitment_id,)).fetchone()
+            if row:
+                return SocialCommitment(
+                    id=row["id"],
+                    contact_name=row["contact_name"],
+                    debtor=row["debtor"],
+                    description=row["description"],
+                    due_date_raw=row["due_date_raw"],
+                    normalized_deadline=row["normalized_deadline"],
+                    status=row["status"],
+                    auto_scheduled_task_id=row["auto_scheduled_task_id"],
+                    created_at=row["created_at"],
+                )
+        return None
+
+    def list_social_commitments(
+        self,
+        contact_name: Optional[str] = None,
+        debtor: Optional[str] = None,
+        status: Optional[str] = None,
+        limit: int = 50,
+    ) -> List[SocialCommitment]:
+        sql = "SELECT * FROM social_commitments WHERE 1=1"
+        params = []
+        if contact_name:
+            sql += " AND LOWER(contact_name) = LOWER(?)"
+            params.append(contact_name.strip())
+        if debtor:
+            sql += " AND debtor = ?"
+            params.append(debtor)
+        if status:
+            sql += " AND status = ?"
+            params.append(status)
+        sql += " ORDER BY created_at DESC LIMIT ?"
+        params.append(limit)
+
+        results = []
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            rows = cursor.execute(sql, params).fetchall()
+            for r in rows:
+                results.append(
+                    SocialCommitment(
+                        id=r["id"],
+                        contact_name=r["contact_name"],
+                        debtor=r["debtor"],
+                        description=r["description"],
+                        due_date_raw=r["due_date_raw"],
+                        normalized_deadline=r["normalized_deadline"],
+                        status=r["status"],
+                        auto_scheduled_task_id=r["auto_scheduled_task_id"],
+                        created_at=r["created_at"],
+                    )
+                )
+        return results
+
+    def update_social_commitment_status(
+        self, commitment_id: str, status: str
+    ) -> bool:
+        commitment = self.get_social_commitment(commitment_id)
+        if not commitment:
+            return False
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE social_commitments SET status = ? WHERE id = ?",
+                (status, commitment_id),
+            )
+            conn.commit()
+
+        # If fulfilling, complete linked planned task if one exists
+        if status == "fulfilled" and commitment.auto_scheduled_task_id:
+            self.complete_planned_task(
+                task_id=commitment.auto_scheduled_task_id,
+                verified_action_id="commitment_fulfilled",
+                completed_at=datetime.now().isoformat(),
+            )
+        elif status == "cancelled" and commitment.auto_scheduled_task_id:
+            task = self.get_planned_task(commitment.auto_scheduled_task_id)
+            if task:
+                task.status = "cancelled"
+                self.update_planned_task(task)
+
+        return True
 
     # =========================================================================
     # Topic Intelligence

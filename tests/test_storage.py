@@ -200,3 +200,93 @@ def test_planned_task_ambient_voice_fields(temp_store):
     manual_tasks = temp_store.list_planned_tasks(origin="manual")
     assert len(manual_tasks) == 0
 
+
+def test_social_commitments_lifecycle(temp_store):
+    from src.core.schemas import SocialCommitment
+
+    # 1. User commitment -> should auto-provision a PlannedTask
+    user_com = SocialCommitment(
+        contact_name="Sara Bianchi",
+        debtor="user",
+        description="Send pitch deck",
+        due_date_raw="tomorrow at 10 AM",
+        normalized_deadline="2026-10-09T10:00:00",
+        status="open"
+    )
+    user_id = temp_store.save_social_commitment(user_com)
+    assert user_id is not None
+    assert user_com.auto_scheduled_task_id is not None
+
+    # Verify PlannedTask was auto-created with origin="social_commitment"
+    task = temp_store.get_planned_task(user_com.auto_scheduled_task_id)
+    assert task is not None
+    assert task.origin == "social_commitment"
+    assert "Send pitch deck" in task.title
+    assert "Sara Bianchi" in task.title
+    assert task.scheduled_time == "2026-10-09T10:00:00"
+    assert task.status == "pending"
+
+    # 2. Contact commitment -> should NOT auto-provision a PlannedTask
+    contact_com = SocialCommitment(
+        contact_name="Sara Bianchi",
+        debtor="contact",
+        description="Review security architecture proposal",
+        status="open"
+    )
+    contact_id = temp_store.save_social_commitment(contact_com)
+    assert contact_id is not None
+    assert contact_com.auto_scheduled_task_id is None
+
+    # 3. Filtering by debtor and contact
+    user_list = temp_store.list_social_commitments(debtor="user")
+    assert len(user_list) == 1
+    assert user_list[0].id == user_id
+
+    contact_list = temp_store.list_social_commitments(debtor="contact")
+    assert len(contact_list) == 1
+    assert contact_list[0].id == contact_id
+
+    all_sara = temp_store.list_social_commitments(contact_name="Sara Bianchi")
+    assert len(all_sara) == 2
+
+    # 4. Update status to fulfilled -> linked PlannedTask should be completed
+    updated = temp_store.update_social_commitment_status(user_id, "fulfilled")
+    assert updated is True
+    com_fetched = temp_store.get_social_commitment(user_id)
+    assert com_fetched.status == "fulfilled"
+
+    task_updated = temp_store.get_planned_task(user_com.auto_scheduled_task_id)
+    assert task_updated.status == "completed"
+
+
+def test_social_commitments_closed_loop_fulfillment(temp_store):
+    from src.core.schemas import SocialCommitment
+
+    com = SocialCommitment(
+        contact_name="Luca Nardi",
+        debtor="user",
+        description="Deliver API documentation",
+        status="open"
+    )
+    com_id = temp_store.save_social_commitment(com)
+    assert com.auto_scheduled_task_id is not None
+
+    # User verifies action matching the commitment
+    action = VerifiedAction(
+        action_type="documentation_delivered",
+        domain="work_task",
+        raw_statement="I just finished and delivered API documentation to Luca Nardi",
+        confidence=0.97,
+        timestamp="2026-10-08T18:00:00"
+    )
+    temp_store.save_action(action)
+
+    # Commitment should now be automatically marked fulfilled
+    com_updated = temp_store.get_social_commitment(com_id)
+    assert com_updated.status == "fulfilled"
+
+    # And the planned task is marked completed
+    task = temp_store.get_planned_task(com.auto_scheduled_task_id)
+    assert task.status == "completed"
+
+

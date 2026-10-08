@@ -2,7 +2,13 @@
 
 from abc import ABC, abstractmethod
 from typing import List, Optional
-from src.core.schemas import VerifiedAction, SocialEntity, BriefingReport, PlannedTask
+from src.core.schemas import (
+    BriefingReport,
+    PlannedTask,
+    SocialCommitment,
+    SocialEntity,
+    VerifiedAction,
+)
 
 
 class AbstractContextStore(ABC):
@@ -78,6 +84,34 @@ class AbstractContextStore(ABC):
     @abstractmethod
     def search_social_contact(self, query: str) -> List[SocialEntity]:
         """Search contacts by name, company, or key topics."""
+        pass
+
+    @abstractmethod
+    def save_social_commitment(self, commitment: SocialCommitment) -> str:
+        """Save or update a structured bilateral commitment. Returns record ID."""
+        pass
+
+    @abstractmethod
+    def get_social_commitment(self, commitment_id: str) -> Optional[SocialCommitment]:
+        """Fetch a social commitment by its ID."""
+        pass
+
+    @abstractmethod
+    def list_social_commitments(
+        self,
+        contact_name: Optional[str] = None,
+        debtor: Optional[str] = None,
+        status: Optional[str] = None,
+        limit: int = 50,
+    ) -> List[SocialCommitment]:
+        """List social commitments with optional filters."""
+        pass
+
+    @abstractmethod
+    def update_social_commitment_status(
+        self, commitment_id: str, status: str
+    ) -> bool:
+        """Update status of a commitment ('open', 'fulfilled', 'cancelled'). Returns True if updated."""
         pass
 
     # --- Topic Intelligence ---

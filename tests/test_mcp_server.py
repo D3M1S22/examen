@@ -13,7 +13,7 @@ import pytest
 from datetime import datetime
 from starlette.testclient import TestClient
 
-from src.core.schemas import BriefingReport, PlannedTask, SocialEntity, VerifiedAction
+from src.core.schemas import BriefingReport, PlannedTask, SocialCommitment, SocialEntity, VerifiedAction
 from src.core.storage.sqlite_store import SQLiteContextStore
 from src.serving.mcp_server import create_app
 from src.serving.tools.action_tools import (
@@ -23,7 +23,10 @@ from src.serving.tools.action_tools import (
     execute_verify_action_status,
     _format_elapsed_time,
 )
-from src.serving.tools.social_tools import execute_query_social_contact
+from src.serving.tools.social_tools import (
+    execute_get_social_commitments,
+    execute_query_social_contact,
+)
 from src.serving.tools.topic_tools import execute_get_topic_briefing
 from src.core.storage import get_storage_store
 
@@ -192,6 +195,45 @@ class TestSocialServingTools:
         assert res["found"] is False
         assert res["ui_card_type"] == "SOCIAL_NOT_FOUND"
         assert "No social contact found" in res["message"]
+
+    def test_get_social_commitments_tool(self, temp_store):
+        # Seed user commitment
+        c1 = SocialCommitment(
+            contact_name="Sara Bianchi",
+            debtor="user",
+            description="Send product brochure",
+            due_date_raw="tomorrow morning",
+            status="open",
+        )
+        temp_store.save_social_commitment(c1)
+
+        # Seed contact commitment
+        c2 = SocialCommitment(
+            contact_name="Sara Bianchi",
+            debtor="contact",
+            description="Introduce technical co-founder",
+            status="open",
+        )
+        temp_store.save_social_commitment(c2)
+
+        # Query all
+        res = execute_get_social_commitments(contact_name="Sara Bianchi", store=temp_store)
+        assert res["found"] is True
+        assert res["total"] == 2
+        assert res["user_promises_count"] == 1
+        assert res["contact_promises_count"] == 1
+        assert res["ui_card_type"] == "SOCIAL_COMMITMENTS_CARD"
+        assert "Sara Bianchi" in res["spoken_summary"]
+        assert "brochure" in res["spoken_summary"]
+
+        # Filter by debtor='user'
+        user_res = execute_get_social_commitments(debtor="user", store=temp_store)
+        assert user_res["total"] == 1
+        assert user_res["commitments"][0]["debtor"] == "user"
+
+        # Filter by non-existent status
+        empty_res = execute_get_social_commitments(status="cancelled", store=temp_store)
+        assert empty_res["found"] is False
 
 
 class TestTopicServingTools:
@@ -437,3 +479,44 @@ class TestServerRestApiAndWebUi:
         assert res.status_code == 200
         assert "text/event-stream" in res.headers["content-type"]
         assert "connected" in res.text
+
+    def test_api_commitments_lifecycle(self, client):
+        # 1. Create a commitment via API
+        create_res = client.post("/api/commitments", json={
+            "contact_name": "Elena Rostova",
+            "debtor": "user",
+            "description": "Send architecture diagram",
+            "due_date_raw": "tomorrow at 10 AM",
+            "normalized_deadline": "2026-10-09T10:00:00",
+        })
+        assert create_res.status_code == 201
+        data = create_res.json()["commitment"]
+        com_id = data["id"]
+        assert data["contact_name"] == "Elena Rostova"
+        assert data["debtor"] == "user"
+        assert data["status"] == "open"
+        assert data["auto_scheduled_task_id"] is not None
+
+        # 2. Query commitments via GET
+        list_res = client.get(f"/api/commitments?contact_name=Elena Rostova")
+        assert list_res.status_code == 200
+        comms = list_res.json()["commitments"]
+        assert len(comms) >= 1
+        assert comms[0]["id"] == com_id
+
+        # 3. Fulfill commitment
+        fulfill_res = client.post(f"/api/commitments/{com_id}/fulfill")
+        assert fulfill_res.status_code == 200
+        assert fulfill_res.json()["commitment"]["status"] == "fulfilled"
+
+        # 4. Cancel commitment
+        cancel_res = client.post(f"/api/commitments/{com_id}/cancel")
+        assert cancel_res.status_code == 200
+        assert cancel_res.json()["commitment"]["status"] == "cancelled"
+
+        # 5. Verify system status reflects commitment stats
+        status_res = client.get("/api/status")
+        assert status_res.status_code == 200
+        stats = status_res.json()["stats"]
+        assert "total_commitments" in stats
+        assert "open_commitments" in stats

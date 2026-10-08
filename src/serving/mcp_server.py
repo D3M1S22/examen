@@ -23,12 +23,13 @@ from starlette.responses import JSONResponse, StreamingResponse
 from starlette.staticfiles import StaticFiles
 
 from src.core.config import settings
-from src.core.schemas import PlannedTask
+from src.core.schemas import PlannedTask, SocialCommitment
 from src.core.storage import get_storage_store
 from src.pipeline.app import agent_invocation
 from src.serving.tools import (
     create_planned_task,
     get_daily_actions_recap,
+    get_social_commitments,
     get_upcoming_tasks,
     query_social_contact,
     verify_action_status,
@@ -60,12 +61,13 @@ def broadcast_event(event_type: str, data: Optional[Dict[str, Any]] = None) -> N
             _sse_subscribers.discard(q)
 
 
-# Register the 6 core MCP tools for Alexa+
+# Register the 7 core MCP tools for Alexa+
 mcp.tool()(create_planned_task)
 mcp.tool()(get_upcoming_tasks)
 mcp.tool()(verify_action_status)
 mcp.tool()(get_daily_actions_recap)
 mcp.tool()(query_social_contact)
+mcp.tool()(get_social_commitments)
 mcp.tool()(get_topic_briefing)
 
 
@@ -81,9 +83,11 @@ async def api_status(request: Request) -> JSONResponse:
     planned_tasks = store.list_planned_tasks()
     all_contacts = store.search_social_contact("")
     all_topics = store.list_topic_briefings(limit=100)
+    all_commitments = store.list_social_commitments(limit=100)
 
     completed_tasks = sum(1 for t in planned_tasks if t.status == "completed")
     pending_tasks = sum(1 for t in planned_tasks if t.status != "completed")
+    open_commitments = sum(1 for c in all_commitments if c.status == "open")
 
     return JSONResponse({
         "status": "online",
@@ -105,6 +109,8 @@ async def api_status(request: Request) -> JSONResponse:
             "planned_tasks_pending": pending_tasks,
             "total_contacts": len(all_contacts),
             "total_topics": len(all_topics),
+            "total_commitments": len(all_commitments),
+            "open_commitments": open_commitments,
         },
     })
 
@@ -386,6 +392,164 @@ async def api_contacts(request: Request) -> JSONResponse:
             "timestamp": c.timestamp,
         })
     return JSONResponse({"contacts": result, "count": len(result)})
+
+
+@mcp.custom_route("/api/commitments", methods=["GET"])
+async def api_commitments(request: Request) -> JSONResponse:
+    """Returns bilateral commitments with optional filtering."""
+    store = get_storage_store()
+    contact_name = request.query_params.get("contact_name")
+    debtor = request.query_params.get("debtor")
+    status = request.query_params.get("status")
+    limit = int(request.query_params.get("limit", "50"))
+
+    commitments = store.list_social_commitments(
+        contact_name=contact_name,
+        debtor=debtor,
+        status=status,
+        limit=limit,
+    )
+    result = [
+        {
+            "id": c.id,
+            "contact_name": c.contact_name,
+            "debtor": c.debtor,
+            "description": c.description,
+            "due_date_raw": c.due_date_raw,
+            "normalized_deadline": c.normalized_deadline,
+            "status": c.status,
+            "auto_scheduled_task_id": c.auto_scheduled_task_id,
+            "created_at": c.created_at,
+        }
+        for c in commitments
+    ]
+    return JSONResponse({"commitments": result, "count": len(result)})
+
+
+@mcp.custom_route("/api/commitments", methods=["POST"])
+async def api_create_commitment(request: Request) -> JSONResponse:
+    """Manually creates a new bilateral commitment."""
+    store = get_storage_store()
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+
+    contact_name = body.get("contact_name")
+    description = body.get("description")
+    if not contact_name or not description:
+        return JSONResponse({"error": "Fields 'contact_name' and 'description' are required"}, status_code=400)
+
+    debtor = body.get("debtor", "user")
+    if debtor not in ("user", "contact"):
+        debtor = "user"
+
+    commitment = SocialCommitment(
+        contact_name=contact_name.strip(),
+        debtor=debtor,
+        description=description.strip(),
+        due_date_raw=body.get("due_date_raw"),
+        normalized_deadline=body.get("normalized_deadline"),
+        status=body.get("status", "open"),
+    )
+    com_id = store.save_social_commitment(commitment)
+    saved = store.get_social_commitment(com_id)
+    if not saved:
+        return JSONResponse({"error": "Failed to create commitment"}, status_code=500)
+
+    com_dict = {
+        "id": saved.id,
+        "contact_name": saved.contact_name,
+        "debtor": saved.debtor,
+        "description": saved.description,
+        "due_date_raw": saved.due_date_raw,
+        "normalized_deadline": saved.normalized_deadline,
+        "status": saved.status,
+        "auto_scheduled_task_id": saved.auto_scheduled_task_id,
+        "created_at": saved.created_at,
+    }
+    broadcast_event("commitment_created", com_dict)
+    # If a planned task was created, also notify routines
+    if saved.auto_scheduled_task_id:
+        task = store.get_planned_task(saved.auto_scheduled_task_id)
+        if task:
+            broadcast_event("routine_created", {
+                "id": task.id,
+                "title": task.title,
+                "domain": task.domain,
+                "scheduled_time": task.scheduled_time,
+                "recurrence": task.recurrence,
+                "origin": task.origin,
+                "status": task.status,
+                "created_at": task.created_at,
+            })
+    return JSONResponse({"success": True, "commitment": com_dict}, status_code=201)
+
+
+@mcp.custom_route("/api/commitments/{commitment_id}/fulfill", methods=["POST"])
+async def api_fulfill_commitment(request: Request) -> JSONResponse:
+    """Marks a bilateral commitment as fulfilled."""
+    store = get_storage_store()
+    commitment_id = request.path_params.get("commitment_id")
+    if not commitment_id:
+        return JSONResponse({"error": "Missing commitment_id"}, status_code=400)
+
+    updated = store.update_social_commitment_status(commitment_id, "fulfilled")
+    if not updated:
+        return JSONResponse({"error": f"Commitment '{commitment_id}' not found"}, status_code=404)
+
+    com = store.get_social_commitment(commitment_id)
+    com_dict = {
+        "id": com.id,
+        "contact_name": com.contact_name,
+        "debtor": com.debtor,
+        "description": com.description,
+        "due_date_raw": com.due_date_raw,
+        "normalized_deadline": com.normalized_deadline,
+        "status": com.status,
+        "auto_scheduled_task_id": com.auto_scheduled_task_id,
+        "created_at": com.created_at,
+    }
+    broadcast_event("commitment_updated", com_dict)
+    if com.auto_scheduled_task_id:
+        task = store.get_planned_task(com.auto_scheduled_task_id)
+        if task:
+            broadcast_event("routine_updated", {
+                "id": task.id,
+                "title": task.title,
+                "status": task.status,
+                "completed_at": task.completed_at,
+            })
+
+    return JSONResponse({"success": True, "commitment": com_dict})
+
+
+@mcp.custom_route("/api/commitments/{commitment_id}/cancel", methods=["POST"])
+async def api_cancel_commitment(request: Request) -> JSONResponse:
+    """Marks a bilateral commitment as cancelled."""
+    store = get_storage_store()
+    commitment_id = request.path_params.get("commitment_id")
+    if not commitment_id:
+        return JSONResponse({"error": "Missing commitment_id"}, status_code=400)
+
+    updated = store.update_social_commitment_status(commitment_id, "cancelled")
+    if not updated:
+        return JSONResponse({"error": f"Commitment '{commitment_id}' not found"}, status_code=404)
+
+    com = store.get_social_commitment(commitment_id)
+    com_dict = {
+        "id": com.id,
+        "contact_name": com.contact_name,
+        "debtor": com.debtor,
+        "description": com.description,
+        "due_date_raw": com.due_date_raw,
+        "normalized_deadline": com.normalized_deadline,
+        "status": com.status,
+        "auto_scheduled_task_id": com.auto_scheduled_task_id,
+        "created_at": com.created_at,
+    }
+    broadcast_event("commitment_updated", com_dict)
+    return JSONResponse({"success": True, "commitment": com_dict})
 
 
 @mcp.custom_route("/api/topics", methods=["GET"])

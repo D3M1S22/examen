@@ -206,6 +206,38 @@ class TestSocialNode:
         res = node_extract_social(state)
         assert res.get("social_data") is None
 
+    def test_extract_bilateral_commitments_debtor_and_timing(self, temp_store):
+        # 1. Contact promises user
+        state_contact: ExamenState = {
+            "raw_transcript": "Hi, I'm Luca Rossi from AWS. I will send you the whitepaper tomorrow at 10 AM.",
+            "session_id": "test_session",
+            "categories": ["social"],
+        }
+        res_contact = node_extract_social(state_contact)
+        social_contact: SocialEntity = res_contact.get("social_data")
+        assert social_contact is not None
+        comms = social_contact.get_commitments_as_objects()
+        assert len(comms) >= 1
+        c = comms[0]
+        assert c.debtor in ("contact", "user")
+        assert "tomorrow at 10 am" in (c.due_date_raw or "").lower()
+        assert c.normalized_deadline is not None
+
+        # 2. User explicitly promises contact
+        state_user: ExamenState = {
+            "raw_transcript": "Nice to meet you Giulia Verdi from Datadog. I will send you our pitch deck tomorrow at 10 AM.",
+            "session_id": "test_session",
+            "categories": ["social"],
+        }
+        res_user = node_extract_social(state_user)
+        social_user: SocialEntity = res_user.get("social_data")
+        assert social_user is not None
+        user_comms = social_user.get_commitments_as_objects()
+        assert len(user_comms) >= 1
+        user_c = user_comms[0]
+        assert user_c.debtor == "user"
+        assert "pitch deck" in user_c.description.lower() or "send" in user_c.description.lower()
+
 
 class TestTopicResearchNode:
     """Tests for Stage 3C Deep Research & Briefing Synthesizer."""

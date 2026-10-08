@@ -3,8 +3,10 @@
 from src.core.config import settings
 from src.core.schemas import (
     ChunkClassification,
+    SocialCommitment,
     SocialEntity,
     VerifiedAction,
+    PlannedTask,
     TopicExtraction,
     BriefingReport,
     ExamenState,
@@ -24,8 +26,10 @@ __all__ = [
     "get_reasoner_model",
     "has_active_model_credentials",
     "ChunkClassification",
+    "SocialCommitment",
     "SocialEntity",
     "VerifiedAction",
+    "PlannedTask",
     "TopicExtraction",
     "BriefingReport",
     "ExamenState",

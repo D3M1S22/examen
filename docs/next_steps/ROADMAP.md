@@ -14,12 +14,12 @@
 │  Phase / Milestone                                 │ Priority │ Effort │ Target Docs │ Status    │
 ├────────────────────────────────────────────────────┼──────────┼────────┼─────────────┼───────────┤
 │  Baseline v1.0: Foundation Pipeline & Web UI       │ Critical │ High   │ docs/01-07  │ ✅ DONE   │
-│  Phase 1: High-Impact Core Intelligence            │ High     │ Medium │ Docs 01,04,05│ 🔄 IN PROGRESS│
+│  Phase 1: High-Impact Core Intelligence            │ High     │ Medium │ Docs 01,04,05│ ✅ COMPLETED│
 │    ├─ M1.1: Contextual Deep Topic Synthesis        │ P1       │ Medium │ Doc 01      │ ✅ DONE   │
 │    ├─ M1.2: Ambient Scheduled Tasks (Voice)        │ P1       │ Medium │ Doc 04      │ ✅ DONE   │
-│    └─ M1.3: Bilateral Social Commitments           │ P1       │ Medium │ Doc 05      │ ⏳ READY  │
-│  Phase 2: Relational Enrichment & Multi-Modal UI   │ Medium   │ Medium │ Docs 06, UI │ ⏳ PLANNED│
-│    ├─ M2.1: Autonomous Social Web Profiler         │ P2       │ Medium │ Doc 06      │ ⏳ PLANNED│
+│    └─ M1.3: Bilateral Social Commitments           │ P1       │ Medium │ Doc 05      │ ✅ DONE   │
+│  Phase 2: Relational Enrichment & Multi-Modal UI   │ Medium   │ Medium │ Docs 06, UI │ ⏳ READY  │
+│    ├─ M2.1: Autonomous Social Web Profiler         │ P2       │ Medium │ Doc 06      │ ⏳ READY  │
 │    └─ M2.2: Echo Show & Web UI Card Upgrades       │ P2       │ Low    │ Docs 01,05,06│ ⏳ PLANNED│
 │  Phase 3: Ingestion Stream & Macro Session Engine  │ Medium   │ High   │ Docs 02, 03 │ ⏳ PLANNED│
 │    ├─ M3.1: Context Ring Buffer & GPS Telemetry    │ P2       │ High   │ Doc 02      │ ⏳ PLANNED│
@@ -91,22 +91,27 @@
 
 #### 🎯 Milestone 1.3: Structured Bilateral Social Commitments
 * **Reference Spec:** [`05_structured_social_commitments.md`](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/docs/next_steps/05_structured_social_commitments.md)
-* **Status:** ⏳ **READY TO IMPLEMENT**
-* **Rationale:** Current commitments are raw string arrays without debtor clarity (*who owes whom?*) or due dates.
+* **Status:** ✅ **COMPLETED**
+* **Rationale:** Current commitments are raw string arrays without debtor clarity (*who owes whom?*) or due dates. Upgraded to structured bilateral promises with automatic agenda provisioning, closed-loop reconciliation, FastMCP tools, and interactive Web UI management.
 * **Work Breakdown:**
-  1. **Schema Extension (`src/core/schemas.py`)**:
-     * Define `SocialCommitment` with `debtor: Literal["user", "contact"]`, `description`, `due_date_raw`, `normalized_deadline`, `status`, and `auto_scheduled_task_id`.
-     * Update `SocialEntity.commitments` to use `List[SocialCommitment]`.
-  2. **Extraction Engine (`src/pipeline/nodes/social.py`)**:
-     * Parse grammatical subject and dialogue turn to classify debtor role (`user` vs `contact`).
-     * Auto-spawn a `PlannedTask` with `origin="social_commitment"` when `debtor == "user"`.
-  3. **Database Migration (`src/core/storage/sqlite_store.py`)**:
-     * Create relational table `social_commitments` with foreign keys to `social_entities` and `planned_tasks`.
-  4. **Serving & Reconciliation**:
-     * Add FastMCP tool `get_social_commitments(contact_name, debtor)`.
-     * Auto-fulfill commitment when user verifies the promised action.
-  5. **Testing**:
-     * Test debtor classification, task auto-spawning, and fulfillment cycle.
+  1. [x] **Schema Extension (`src/core/schemas.py`)**:
+     * Defined `SocialCommitment` model with `debtor: Literal["user", "contact"]`, `description`, `due_date_raw`, `normalized_deadline`, `status`, and `auto_scheduled_task_id`.
+     * Added string backward compatibility methods (`__str__`, `lower`, `__contains__`) and `SocialEntity.get_commitments_as_objects()`.
+  2. [x] **Extraction Engine (`src/pipeline/nodes/social.py`)**:
+     * Upgraded Stage 3A prompt and heuristic extractor to capture bilateral commitments with relative time parsing via `parse_relative_time_expression`.
+     * Automatically populated `contact_name` and normalized timestamps.
+  3. [x] **Database & Agenda Provisioning (`src/core/storage/sqlite_store.py`)**:
+     * Created `social_commitments` relational table with indexed columns (`contact_name`, `debtor`, `status`).
+     * Auto-provisions a `PlannedTask` with `origin="social_commitment"` when `debtor == "user"`.
+     * Implemented closed-loop reconciliation in `match_and_resolve_task`: verified actions automatically mark linked commitments as `fulfilled`.
+  4. [x] **Serving Layer & FastMCP Tool (`src/serving/tools/social_tools.py`, `src/serving/mcp_server.py`)**:
+     * Added FastMCP `get_social_commitments` tool with debtor and status filtering for Alexa+.
+     * Added REST endpoints: `GET /api/commitments`, `POST /api/commitments`, `POST /api/commitments/{id}/fulfill`, `POST /api/commitments/{id}/cancel`.
+     * Real-time SSE broadcast of `commitment_created` and `commitment_updated`.
+  5. [x] **Web UI Dashboard (`src/web_ui/`)**:
+     * Rendered debtor badges (`📤 You Promised` vs `📥 Contact Promised`), deadline pill (`⏱️`), and instant fulfillment button (`✓ Done`).
+  6. [x] **Testing & Verification**:
+     * Comprehensive unit and integration test coverage (`tests/test_storage.py`, `tests/test_pipeline_nodes.py`, `tests/test_mcp_server.py`).
 
 ---
 

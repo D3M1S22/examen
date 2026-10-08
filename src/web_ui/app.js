@@ -411,16 +411,67 @@ document.addEventListener("DOMContentLoaded", () => {
         .map((t) => `<span class="topic-tag">#${escapeHtml(t)}</span>`)
         .join("");
 
-      const commitmentsHtml = (c.commitments && c.commitments.length > 0)
-        ? `
+      let commitmentsHtml = "";
+      if (c.commitments && c.commitments.length > 0) {
+        const itemsHtml = c.commitments.map((item) => {
+          let desc = "";
+          let debtor = "user";
+          let status = "open";
+          let deadline = "";
+          let id = "";
+
+          if (typeof item === "string") {
+            desc = item;
+            const isUser = /^(i\s|i'll\s|i\s+will\s|let\s+me\s|ti\s+mando|ti\s+invio)/i.test(item.trim());
+            debtor = isUser ? "user" : "contact";
+          } else if (typeof item === "object" && item !== null) {
+            desc = item.description || "";
+            debtor = item.debtor || "user";
+            status = item.status || "open";
+            deadline = item.due_date_raw || "";
+            id = item.id || "";
+          }
+
+          const debtorBadge = debtor === "user"
+            ? `<span class="debtor-badge debtor-user">📤 You Promised</span>`
+            : `<span class="debtor-badge debtor-contact">📥 Contact Promised</span>`;
+
+          const deadlineBadge = deadline
+            ? `<span class="commitment-deadline">⏱️ ${escapeHtml(deadline)}</span>`
+            : "";
+
+          const isDone = status === "fulfilled";
+          const actionBtn = (!isDone && id)
+            ? `<button class="btn-fulfill-commitment" data-id="${escapeHtml(id)}">✓ Done</button>`
+            : (isDone ? `<span style="font-size:0.75rem; color:#34d399; font-weight:600;">✓ Done</span>` : "");
+
+          return `
+            <li class="commitment-item ${isDone ? 'status-fulfilled' : ''}">
+              <div class="commitment-main">
+                <div class="commitment-tags-row">
+                  ${debtorBadge}
+                  ${deadlineBadge}
+                </div>
+                <div class="commitment-desc ${isDone ? 'strikethrough' : ''}">${escapeHtml(desc)}</div>
+              </div>
+              <div>
+                ${actionBtn}
+              </div>
+            </li>
+          `;
+        }).join("");
+
+        commitmentsHtml = `
           <div class="social-commitments-box">
-            <div class="commitments-header">📌 Bilateral Commitments (${c.commitments.length})</div>
+            <div class="commitments-header">
+              <span>📌 Bilateral Commitments (${c.commitments.length})</span>
+            </div>
             <ul class="commitments-list">
-              ${c.commitments.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}
+              ${itemsHtml}
             </ul>
           </div>
-        `
-        : "";
+        `;
+      }
 
       return `
         <div class="social-card">
@@ -741,6 +792,35 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   // -------------------------------------------------------------------------
+  // Social Commitment Fulfill Handler
+  // -------------------------------------------------------------------------
+  socialGrid?.addEventListener("click", async (e) => {
+    const btn = e.target.closest(".btn-fulfill-commitment");
+    if (!btn) return;
+    const comId = btn.dataset.id;
+    if (!comId) return;
+    btn.disabled = true;
+    btn.textContent = "...";
+    try {
+      const res = await fetch(`/api/commitments/${comId}/fulfill`, { method: "POST" });
+      if (res.ok) {
+        showToast("Commitment marked fulfilled!", "success");
+        await fetchSocial();
+        await fetchRoutines();
+      } else {
+        showToast("Failed to fulfill commitment", "error");
+        btn.disabled = false;
+        btn.textContent = "✓ Done";
+      }
+    } catch (err) {
+      console.error(err);
+      showToast("Network error", "error");
+      btn.disabled = false;
+      btn.textContent = "✓ Done";
+    }
+  });
+
+  // -------------------------------------------------------------------------
   // Real-Time Server-Sent Events (SSE)
   // -------------------------------------------------------------------------
   function initSSE() {
@@ -771,7 +851,7 @@ document.addEventListener("DOMContentLoaded", () => {
             if (payload.type === "pipeline_invoked") {
               showToast("New ambient audio verified by AgentCore!", "info");
               refreshAll();
-            } else if (payload.type && payload.type.startsWith("routine_")) {
+            } else if (payload.type && (payload.type.startsWith("routine_") || payload.type.startsWith("commitment_"))) {
               refreshAll();
             }
           } catch (err) {
