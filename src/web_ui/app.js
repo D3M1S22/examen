@@ -1660,6 +1660,9 @@ document.addEventListener("DOMContentLoaded", () => {
               </ul>
             </div>
           `;
+          break;
+        }
+
         case "SESSION_DOSSIER_VIEWER": {
           const actions = (p.actions || []).map((a) => `
             <div style="font-size:0.82rem; color:#34d399; margin-bottom:0.25rem;">

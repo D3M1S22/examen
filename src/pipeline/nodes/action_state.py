@@ -84,6 +84,12 @@ def _heuristic_extract_action(
     if not text:
         return None
 
+    if isinstance(historical_context, list):
+        historical_context = " ".join(
+            (item.get("text", "") if isinstance(item, dict) else str(item))
+            for item in historical_context
+        )
+
     # Strict doubt & future intention filter
     doubt_patterns = [
         r"\b(should remember|need to remember|need to|have to|did i|wonder if)\b",
@@ -127,8 +133,8 @@ def _heuristic_extract_action(
         if re.search(r"\b(unplugged it|disconnected it)\b", text):
             if any(w in ctx_lower for w in ["iron", "clothes iron"]):
                 return VerifiedAction(action_type="iron_unplugged", domain="safety", raw_statement=transcript.strip(), confidence=0.95, timestamp=datetime.now().isoformat(), is_revoked=False)
-        if re.search(r"\b(locked it|closed it|bolted it)\b", text):
-            if any(w in ctx_lower for w in ["door", "front door", "gate"]):
+        if re.search(r"\b(locked it|closed it|bolted it|i just did|just did|did that)\b", text):
+            if any(w in ctx_lower for w in ["door", "front door", "gate", "entrance", "lock"]):
                 return VerifiedAction(action_type="door_locked", domain="safety", raw_statement=transcript.strip(), confidence=0.95, timestamp=datetime.now().isoformat(), is_revoked=False)
 
     # 2. Standard completed action rules (unplanned)
@@ -142,7 +148,7 @@ def _heuristic_extract_action(
         (r"\b(took|taken|swallowed|preso|presa|assunto)\s+.*?\b(medication|medicine|pill|pills|vitamins|pastiglia|farmaco)\b", "medication_taken", "routine"),
         (r"\b(merged|closed)\s+.*?\b(pr|pull request)\b", "pr_merged", "work_task"),
         (r"\b(deployed|released)\s+.*?\b(service|staging|production|app|build)\b", "service_deployed", "work_task"),
-        (r"\b(sent|inviato|spedito)\s+.*?\b(email|report|message|slides)\b", "email_sent", "work_task"),
+        (r"\b(sent|emailed|inviato|spedito)\s+.*?\b(email|report|message|slides|pitch deck|deck|document)\b", "email_sent", "work_task"),
     ]
 
     for pattern, action_type, domain in action_rules:

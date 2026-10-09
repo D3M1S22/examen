@@ -130,8 +130,8 @@ def _heuristic_classify(
 
     # 1. Action completed check: focus strictly on English first-person completed action verbs
     action_patterns = [
-        r"\b(i|we)\s+(just\s+)?(turned off|switched off|unplugged|locked|shut|closed|verified|checked|completed|finished|merged|deployed|sent|confirmed|took|taken)\b",
-        r"\bi('ve| have)\s+(just\s+)?(turned off|switched off|unplugged|locked|shut|closed|verified|checked|completed|finished|merged|deployed|sent|confirmed|took|taken)\b"
+        r"\b(i|we)\s+(just\s+)?(turned off|switched off|unplugged|locked|shut|closed|verified|checked|completed|finished|merged|deployed|sent|emailed|submitted|confirmed|took|taken)\b",
+        r"\bi('ve| have)\s+(just\s+)?(turned off|switched off|unplugged|locked|shut|closed|verified|checked|completed|finished|merged|deployed|sent|emailed|submitted|confirmed|took|taken)\b"
     ]
     if any(re.search(pat, text) for pat in action_patterns):
         categories.append("action")
@@ -162,13 +162,14 @@ def _heuristic_classify(
 
     # 2. Social interaction check: strictly explicit introductions, professional roles, or follow-up commitments
     social_patterns = [
-        # Explicit meeting introductions
+        # Explicit meeting introductions & identity
         r"\b(nice to meet you|pleased to meet you|great to meet you)\b",
         r"\b(nice to meet you|pleased to meet you|great to meet you)\s+[a-z]+",
         r"\b(nice to meet you|pleased to meet you)\b.*?\b(i'm|my name is)\b",
         r"\b(my name is)\s+[a-z]+",
+        r"\b(i'm|i am)\s+[a-z]+(?:\s+[a-z]+)?,?\s+.*?\b(at|for|from|presso|di)\b",
         # Professional role exchange
-        r"\b(tech lead|cto|founder|chief|head of|lead engineer)\s+(at|for|in)\b",
+        r"\b(tech lead|cto|ceo|founder|chief|head of|lead engineer|architect|partner architect|director|manager|vp|researcher|scientist)\s+(at|for|in|from)\b",
         r"\b(i work as|i'm the|i am the)\s+[a-z\s]+(at|for)\b",
         # Explicit meeting follow-up commitments
         r"\b(let's keep in touch|let's stay in touch)\b",
@@ -183,9 +184,12 @@ def _heuristic_classify(
         r"\b(in today's meeting|agenda for today|during this meeting|sprint review|sprint retrospective|daily standup)\b",
         r"\b(architecture review|system design discussion|evaluating the architecture|architectural tradeoff)\b",
         # Academic & lecture contexts
-        r"\b(today's lecture|lecture on|theorem of|distributed systems|distributed consensus|cap theorem)\b",
-        # Specific engineering investigations
-        r"\b(investigating the memory leak|debugging the race condition|root cause analysis|performance bottleneck)\b"
+        r"\b(today's lecture|lecture on|theorem of|distributed systems|distributed consensus|cap theorem|raft leader election)\b",
+        # Specific engineering investigations & incidents
+        r"\b(investigating the memory leak|debugging the race condition|root cause analysis|performance bottleneck)\b",
+        r"\b(production incident|critical bug|system incident|socket timeout|gateway error|timeout error|critical incident)\b",
+        # Architecture & technology transitions
+        r"\b(migration strategy|event streaming|event bus|apache kafka|kafka|rabbitmq|message broker)\b",
     ]
     if any(re.search(pat, text) for pat in topic_patterns):
         categories.append("deep_topic")

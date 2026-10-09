@@ -55,13 +55,20 @@ def _heuristic_extract_social(
     if not text:
         return None
 
+    if isinstance(historical_context, list):
+        historical_context = " ".join(
+            (item.get("text", "") if isinstance(item, dict) else str(item))
+            for item in historical_context
+        )
+
     # Name and role patterns
     # e.g. "Hi, I'm Luca Rossi, Cloud Architect at AWS. I'll send you the whitepaper tomorrow."
     # e.g. "Nice to meet you, my name is Sarah Connor from Cyberdyne Systems."
     # e.g. "Piacere, sono Marco Bianchi, CTO di Acme."
     name_patterns = [
-        r"(?:i am|i['’]m|my name is|this is|sono|mi chiamo)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)",
-        r"(?:meet|with|incontrato)\s+(?!you\b|me\b|us\b|them\b|him\b|her\b)([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)",
+        r"(?:i am|i['’]m|my name is|this is|sono|mi chiamo)\s+(?:(?:dr\.|prof\.|mr\.|ms\.|mrs\.)\s+)?([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)",
+        r"(?:nice to meet you|pleased to meet you|great to meet you|piacere di conoscerti|piacere),?\s+(?:(?:dr\.|prof\.|mr\.|ms\.|mrs\.)\s+)?([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)",
+        r"(?:meet|with|incontrato)\s+(?!you\b|me\b|us\b|them\b|him\b|her\b)(?:(?:dr\.|prof\.|mr\.|ms\.|mrs\.)\s+)?([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)",
     ]
 
     person_name = None

@@ -28,8 +28,9 @@ logger = logging.getLogger("examen.ingestion.session_manager")
 
 CLOSING_PHRASE_PATTERNS = [
     r"\bthat\s+concludes\b",
-    r"\bconclude(?:s|d|ing)?\s+(?:the|our|this|today'?s)?\s*(?:meeting|session|call|discussion)\b",
-    r"\bwrap(?:ping)?\s+up\s+(?:the|our|this|today'?s)?\s*(?:meeting|session|call|discussion)\b",
+    r"\bconclude(?:s|d|ing)?\s+(?:the|our|this|today'?s)?\s*(?:meeting|session|call|discussion|review)?\b",
+    r"\bwrap(?:s|ped|ping)?\s+up\s+(?:the|our|this|today'?s)?\s*(?:meeting|session|call|discussion|review)?\b",
+    r"\bclose\s+(?:the|our|this)?\s*(?:meeting|session|call)\b",
     r"\badjourn(?:ed|ing)?\b",
     r"\bmeeting\s+is\s+adjourned\b",
     r"\blet'?s\s+call\s+it\s+a\s+day\b",
