@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { BriefingReport } from "@/types/schemas";
 import { ScreenHeader } from "../ui/ScreenHeader";
 import { FilterButton } from "../ui/FilterButton";
@@ -9,13 +10,26 @@ interface TopicDossiersProps {
 }
 
 export function TopicDossiers({ topicsData }: TopicDossiersProps) {
+  const [activeFilter, setActiveFilter] = useState<string>("ALL");
+  const [searchQuery, setSearchQuery] = useState("");
+
+  const topics = topicsData?.topics || [];
+  const uniqueContexts = Array.from(new Set(topics.map(t => t.context_type))).filter(Boolean);
+
+  const filteredTopics = topics.filter(t => {
+    const matchesFilter = activeFilter === "ALL" || t.context_type === activeFilter;
+    const matchesSearch = t.topic_title.toLowerCase().includes(searchQuery.toLowerCase()) || 
+                          (t.executive_summary?.some(s => s.toLowerCase().includes(searchQuery.toLowerCase())));
+    return matchesFilter && matchesSearch;
+  });
+
   return (
     <div className="space-y-space-lg animate-in fade-in max-w-[1400px] mx-auto">
       <ScreenHeader 
         icon={<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M12 2a9 9 0 0 0-9 9c0 4.97 4 9 9 9s9-4.03 9-9a9 9 0 0 0-9-9z"/><path d="M9 16v2"/><path d="M15 16v2"/><path d="M12 12v6"/><path d="M8 12a4 4 0 0 1 8 0"/></svg>}
         directive={<>COGNITIVE TELEMETRY SUBSYSTEM <span className="mx-2 opacity-50">•</span> <Badge variant="outline" className="!py-0.5 !px-2 border-white/10 opacity-70">AWS BEDROCK ZERO-SHOT AGENT</Badge></>}
         title="SCREEN PURPOSE: AUTONOMOUS TOPIC RESEARCH & ENRICHED DOSSIERS"
-        description={<>When intellectual curiosities, published works, architecture models, or clinical protocols are casually surfaced in ambient dialogue, EXAMEN's background agent initiates asynchronous deep ingestion. Synthesized into distilled, citation-backed dossiers, every entry is structured for rapid glanceability on ambient consoles or 2-minute executive acoustic briefings over Alexa.</>}
+        description={<>Topic Dossiers act as your automated research organizer. When the Bee wearable listens to university class lectures, dense work calls, or technical discussions, EXAMEN's background agent automatically initiates deep research on the subjects mentioned. It synthesizes the ambient arguments into organized, citation-backed dossiers, perfect for reviewing study notes or catching up on complex meeting topics.</>}
         rightElement={
           <div className="flex flex-col items-end gap-1">
             <Badge variant="outline" dot="active" className="border-white/10 opacity-70 mb-1">
@@ -30,18 +44,30 @@ export function TopicDossiers({ topicsData }: TopicDossiersProps) {
       <div className="flex flex-col md:flex-row items-center gap-space-md mb-space-xl">
         <div className="flex-1 w-full relative">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="absolute left-4 top-1/2 -translate-y-1/2 text-secondary"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-          <input type="text" placeholder="Filter dossiers by thesis, author, protocol, or runtime token..." className="w-full bg-surface-container-low border border-surface-container-highest rounded-md py-3 pl-12 pr-4 text-body-sm font-sans text-primary placeholder-secondary focus:outline-none focus:border-outline-variant" />
+          <input 
+            type="text" 
+            placeholder="Filter dossiers by thesis, author, protocol, or runtime token..." 
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="w-full bg-surface-container-low border border-surface-container-highest rounded-md py-3 pl-12 pr-4 text-body-sm font-sans text-primary placeholder-secondary focus:outline-none focus:border-outline-variant" 
+          />
         </div>
         <div className="flex flex-wrap items-center gap-2 shrink-0">
-          <FilterButton active>ALL (12)</FilterButton>
-          <FilterButton>LITERATURE & SOCIETY (4)</FilterButton>
-          <FilterButton>SYSTEMS ARCHITECTURE (5)</FilterButton>
-          <FilterButton>HEALTH PROTOCOLS (3)</FilterButton>
+          <FilterButton active={activeFilter === "ALL"} onClick={() => setActiveFilter("ALL")}>
+            ALL ({topics.length})
+          </FilterButton>
+          {uniqueContexts.map(ctx => (
+            <FilterButton key={ctx} active={activeFilter === ctx} onClick={() => setActiveFilter(ctx as string)}>
+              {ctx?.replace(/_/g, ' ').toUpperCase()} ({topics.filter(t => t.context_type === ctx).length})
+            </FilterButton>
+          ))}
         </div>
       </div>
 
       <div className="space-y-space-lg">
-        {/* Mock Card */}
+        {/* 
+          // MOCK CARDS COMMENTED OUT
+          Mock Card 
         <div className="card-elevated p-space-xl bg-surface-container-low border-surface-container-highest flex flex-col gap-6">
           <div className="flex items-start justify-between">
              <div className="flex flex-col">
@@ -74,7 +100,6 @@ export function TopicDossiers({ topicsData }: TopicDossiersProps) {
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-space-md mt-4">
-             {/* Col 1 */}
              <div className="bg-[#121316] border border-surface-container-highest rounded-lg p-space-lg flex flex-col">
                <div className="flex items-center justify-between mb-6 font-mono text-[9px] text-secondary tracking-[0.2em] uppercase">
                  <span>THESIS 01</span>
@@ -90,7 +115,6 @@ export function TopicDossiers({ topicsData }: TopicDossiersProps) {
                </div>
              </div>
 
-             {/* Col 2 */}
              <div className="bg-[#121316] border border-surface-container-highest rounded-lg p-space-lg flex flex-col">
                <div className="flex items-center justify-between mb-6 font-mono text-[9px] text-secondary tracking-[0.2em] uppercase">
                  <span>THESIS 02</span>
@@ -109,7 +133,6 @@ export function TopicDossiers({ topicsData }: TopicDossiersProps) {
                </div>
              </div>
 
-             {/* Col 3 */}
              <div className="bg-[#121316] border border-surface-container-highest rounded-lg p-space-lg flex flex-col">
                <div className="flex items-center justify-between mb-6 font-mono text-[9px] text-secondary tracking-[0.2em] uppercase">
                  <span>EXAMEN SYNTHESIS</span>
@@ -126,9 +149,10 @@ export function TopicDossiers({ topicsData }: TopicDossiersProps) {
              </div>
           </div>
         </div>
+        */}
 
         {/* Dynamic Mapping from topicsData */}
-        {topicsData?.topics?.map(topic => (
+        {filteredTopics.map(topic => (
           <div key={topic.id} className="card-elevated p-space-xl bg-surface-container-low border-surface-container-highest flex flex-col gap-6">
             <div className="flex items-start justify-between">
                <div className="flex flex-col">

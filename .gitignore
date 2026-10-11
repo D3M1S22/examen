@@ -34,3 +34,4 @@ bee-sync/
 
 **/node_modules/
 **/.next/
+**/out/

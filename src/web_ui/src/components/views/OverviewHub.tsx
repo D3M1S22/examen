@@ -1,14 +1,17 @@
-import { PlannedTask } from "@/types/schemas";
+import { PlannedTask, VerifiedAction, SocialEntity, BriefingReport } from "@/types/schemas";
 import { MockAsterisk } from "../ui/MockAsterisk";
 
 interface OverviewHubProps {
   routinesData: { tasks: PlannedTask[] } | undefined;
+  actionsData: { actions: VerifiedAction[] } | undefined;
+  socialData: { contacts: SocialEntity[] } | undefined;
+  topicsData: { topics: BriefingReport[] } | undefined;
   setActiveTab: (tab: string) => void;
   setSimText: (text: string) => void;
   handleToggleRoutine: (task: PlannedTask) => void;
 }
 
-export function OverviewHub({ routinesData, setActiveTab, setSimText, handleToggleRoutine }: OverviewHubProps) {
+export function OverviewHub({ routinesData, actionsData, socialData, topicsData, setActiveTab, setSimText, handleToggleRoutine }: OverviewHubProps) {
   return (
     <div className="space-y-space-xl animate-in fade-in max-w-[1400px] mx-auto">
       {/* Top Status Panel */}
@@ -55,30 +58,35 @@ export function OverviewHub({ routinesData, setActiveTab, setSimText, handleTogg
           </div>
           
           <div className="grid grid-cols-1 md:grid-cols-2 gap-space-md flex-1">
-            {/* Mock Anchors for Dashboard */}
-            {[
+            {/* 
+              // MOCK CARDS COMMENTED OUT
+              {[
               { title: "Iron & Styling Wand", badge: "UNPLUGGED", label: "APPLIANCE SENSOR", time: "07:42:11 CET", desc: "Dual-channel verification: Wall receptacle detent snap + vocal self-affirmation.", conf: "99.4%" },
               { title: "Stove & Cooktop", badge: "COLD / OFF", label: "RANGE & HEATING", time: "07:55:04 CET", desc: "Rotary switch hard detent latching corroborated with induction cooling slope.", conf: "98.9%" },
               { title: "Front Deadbolt", badge: "SECURED", label: "PERIMETER ACCESS", time: "08:14:30 CET", desc: "Tumbler throw click and frame acoustic contact cycle confirmed via Bee wearable.", conf: "99.8%" },
               { title: "Morning Medications", badge: "COMPLETED", label: "HEALTH PROTOCOL", time: "08:02:45 CET", desc: "Pill organizer chamber hatch click and water glass draw acoustic profile.", conf: "97.5%" }
-            ].map(item => (
-              <div key={item.title} className="bg-[#121316] border border-surface-container-highest rounded-lg p-space-lg flex flex-col justify-between">
+            ].map(item => ( ... ))}
+            */}
+
+            {/* Dynamic Actions */}
+            {actionsData?.actions?.slice(0, 4).map(action => (
+              <div key={action.id} className="bg-[#121316] border border-surface-container-highest rounded-lg p-space-lg flex flex-col justify-between">
                 <div>
                   <div className="flex items-center justify-between mb-2">
-                    <div className="font-mono text-[8px] text-secondary tracking-[0.2em] uppercase">{item.label}</div>
+                    <div className="font-mono text-[8px] text-secondary tracking-[0.2em] uppercase">{action.domain.replace(/_/g, ' ')}</div>
                     <div className="font-mono text-[8px] text-primary tracking-[0.2em] flex items-center gap-1.5 px-2 py-1 rounded bg-surface-container-highest">
-                      <div className="w-1 h-1 rounded-full bg-primary"></div> {item.badge}
+                      <div className="w-1 h-1 rounded-full bg-primary"></div> VERIFIED
                     </div>
                   </div>
-                  <div className="font-serif text-[20px] text-primary mb-4">{item.title}<MockAsterisk /></div>
+                  <div className="font-serif text-[20px] text-primary mb-4 capitalize">{action.action_type.replace(/_/g, ' ')}</div>
                   
                   <div className="bg-surface-container-low border border-surface-container-highest rounded p-3 mb-6">
-                    <div className="font-mono text-[9px] text-secondary tracking-[0.2em] mb-2">Verified {item.time}</div>
-                    <div className="font-sans text-body-sm text-secondary leading-relaxed">{item.desc}</div>
+                    <div className="font-mono text-[9px] text-secondary tracking-[0.2em] mb-2">Verified {action.timestamp?.split('T')[1]?.substring(0,8) || action.timestamp}</div>
+                    <div className="font-sans text-body-sm text-secondary leading-relaxed italic">"{action.raw_statement}"</div>
                   </div>
                 </div>
                 <div className="flex items-center justify-between">
-                   <div className="font-mono text-[9px] text-secondary tracking-[0.2em] uppercase">CONFIDENCE {item.conf}</div>
+                   <div className="font-mono text-[9px] text-secondary tracking-[0.2em] uppercase">CONFIDENCE {(action.confidence * 100).toFixed(1)}%</div>
                    <button className="flex items-center gap-2 font-mono text-[9px] tracking-[0.2em] text-secondary hover:text-primary transition-colors">
                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
                      ECHO REASSURANCE
@@ -95,30 +103,38 @@ export function OverviewHub({ routinesData, setActiveTab, setSimText, handleTogg
             <div className="font-mono text-[10px] text-primary tracking-[0.2em] uppercase">
               <span className="text-secondary opacity-50">SECTOR 02 //</span> Daily Routines
             </div>
-            <div className="font-mono text-[9px] text-primary tracking-[0.2em] uppercase font-bold">4 / 4 COMPLETE</div>
+            <div className="font-mono text-[9px] text-primary tracking-[0.2em] uppercase font-bold">
+              {routinesData?.tasks?.filter(t => t.status === "completed").length || 0} / {routinesData?.tasks?.length || 0} COMPLETE
+            </div>
           </div>
           
           <div className="h-1 bg-surface-container-highest rounded-full mb-6 overflow-hidden">
-            <div className="w-full h-full bg-primary"></div>
+            <div 
+              className="h-full bg-primary transition-all" 
+              style={{ width: `${routinesData?.tasks?.length ? (routinesData.tasks.filter(t => t.status === "completed").length / routinesData.tasks.length) * 100 : 0}%` }}
+            ></div>
           </div>
           
           <div className="space-y-4 flex-1">
-            {[
-              { title: "Morning Window Ventilation", desc: "Latched closed after 20m", time: "07:15" },
-              { title: "Espresso Boiler Isolated", desc: "Thermal pressure released", time: "07:38" },
-              { title: "Pet Feeder Gate Verification", desc: "Dispenser solenoid engaged", time: "08:00" },
-              { title: "Balcony Door Interlock", desc: "Deadlatch seal registered", time: "08:12" }
-            ].map(task => (
-              <div key={task.title} className="flex items-start gap-4 p-3 rounded hover:bg-surface-container-highest transition-colors">
-                 <div className="w-5 h-5 rounded bg-primary text-background flex items-center justify-center shrink-0 mt-0.5">
-                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>
+            {/*
+              // MOCK CARDS COMMENTED OUT
+            */}
+
+            {routinesData?.tasks?.slice(0, 4).map(task => (
+              <div 
+                key={task.id} 
+                onClick={() => handleToggleRoutine(task)}
+                className="flex items-start gap-4 p-3 rounded hover:bg-surface-container-highest transition-colors cursor-pointer"
+              >
+                 <div className={`w-5 h-5 rounded flex items-center justify-center shrink-0 mt-0.5 ${task.status === 'completed' ? 'bg-primary text-background' : 'border border-surface-container-highest text-surface-container-highest'}`}>
+                   {task.status === 'completed' && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>}
                  </div>
                  <div className="flex-1">
-                   <div className="font-sans text-body-sm text-primary mb-1 flex items-center justify-between">
-                     {task.title}<MockAsterisk />
-                     <span className="font-mono text-[8px] text-secondary">{task.time}</span>
+                   <div className={`font-sans text-body-sm mb-1 flex items-center justify-between ${task.status === 'completed' ? 'text-secondary line-through opacity-70' : 'text-primary'}`}>
+                     {task.title}
+                     <span className="font-mono text-[8px] text-secondary no-underline">{task.scheduled_time || 'PENDING'}</span>
                    </div>
-                   <div className="font-sans text-[11px] text-secondary opacity-60">{task.desc}</div>
+                   <div className="font-sans text-[11px] text-secondary opacity-60">Domain: {task.domain}</div>
                  </div>
               </div>
             ))}

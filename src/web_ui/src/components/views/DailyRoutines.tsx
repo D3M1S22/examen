@@ -1,14 +1,94 @@
+import { useState } from "react";
 import { PlannedTask } from "@/types/schemas";
 import { MockAsterisk } from "../ui/MockAsterisk";
 
 interface DailyRoutinesProps {
   routinesData: { tasks: PlannedTask[] } | undefined;
   handleToggleRoutine: (task: PlannedTask) => void;
+  handleAddRoutine: (title: string, domain: string, scheduled_time: string) => Promise<void>;
 }
 
-export function DailyRoutines({ routinesData, handleToggleRoutine }: DailyRoutinesProps) {
+export function DailyRoutines({ routinesData, handleToggleRoutine, handleAddRoutine }: DailyRoutinesProps) {
+  const [activeFilter, setActiveFilter] = useState<string>("ALL");
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [newTitle, setNewTitle] = useState("");
+  const [newDomain, setNewDomain] = useState("routine");
+  const [newTime, setNewTime] = useState("");
+
+  const tasks = routinesData?.tasks || [];
+  const uniqueDomains = Array.from(new Set(tasks.map(t => t.domain))).filter(Boolean);
+
+  const filteredTasks = activeFilter === "ALL" 
+    ? tasks 
+    : tasks.filter(t => t.domain === activeFilter);
+
+  const submitAdd = async () => {
+    if (!newTitle.trim()) return;
+    await handleAddRoutine(newTitle, newDomain, newTime);
+    setNewTitle("");
+    setNewDomain("routine");
+    setNewTime("");
+    setShowAddModal(false);
+  };
+
   return (
-    <div className="space-y-space-lg animate-in fade-in max-w-[1200px] mx-auto">
+    <div className="space-y-space-lg animate-in fade-in max-w-[1200px] mx-auto relative">
+      {/* ADD MODAL */}
+      {showAddModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="w-full max-w-md card-elevated p-space-xl bg-surface-container border-outline-variant animate-in zoom-in-95">
+            <h3 className="font-serif text-[24px] text-primary mb-6 uppercase">Add Monitored Routine</h3>
+            
+            <div className="space-y-4 mb-8">
+              <div>
+                <label className="block font-mono text-[9px] text-secondary tracking-widest uppercase mb-2">Routine Title</label>
+                <input 
+                  type="text" 
+                  value={newTitle}
+                  onChange={e => setNewTitle(e.target.value)}
+                  className="w-full bg-[#121316] border border-surface-container-highest rounded-md py-3 px-4 text-body-sm font-sans text-primary focus:outline-none focus:border-primary"
+                  placeholder="e.g. Iron Unplugged"
+                />
+              </div>
+              <div>
+                <label className="block font-mono text-[9px] text-secondary tracking-widest uppercase mb-2">Domain Category</label>
+                <input 
+                  type="text" 
+                  value={newDomain}
+                  onChange={e => setNewDomain(e.target.value)}
+                  className="w-full bg-[#121316] border border-surface-container-highest rounded-md py-3 px-4 text-body-sm font-sans text-primary focus:outline-none focus:border-primary"
+                  placeholder="e.g. safety"
+                />
+              </div>
+              <div>
+                <label className="block font-mono text-[9px] text-secondary tracking-widest uppercase mb-2">Scheduled Time</label>
+                <input 
+                  type="time" 
+                  value={newTime}
+                  onChange={e => setNewTime(e.target.value)}
+                  className="w-full bg-[#121316] border border-surface-container-highest rounded-md py-3 px-4 text-body-sm font-sans text-primary focus:outline-none focus:border-primary [color-scheme:dark]"
+                />
+              </div>
+            </div>
+            
+            <div className="flex justify-end gap-4">
+              <button 
+                onClick={() => setShowAddModal(false)}
+                className="px-6 py-3 rounded-md border border-surface-container-highest font-mono text-[10px] tracking-widest hover:bg-surface-container-highest transition-colors text-secondary"
+              >
+                CANCEL
+              </button>
+              <button 
+                onClick={submitAdd}
+                className="btn-primary bg-primary text-background font-mono text-[10px] tracking-widest rounded-md px-6 py-3 hover:bg-surface-tint transition-colors"
+              >
+                CREATE ROUTINE
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Header section matching the mockup */}
       <div className="card-elevated p-space-xl flex flex-col md:flex-row justify-between items-start md:items-center gap-space-lg mb-space-lg bg-surface-container border-outline-variant">
         <div className="max-w-3xl">
@@ -44,11 +124,11 @@ export function DailyRoutines({ routinesData, handleToggleRoutine }: DailyRoutin
           </div>
           <div className="mt-auto">
             <div className="flex items-baseline gap-2 mb-4">
-              <span className="font-serif text-[40px] text-primary">4 / 4</span>
-              <span className="font-mono text-[9px] text-secondary uppercase tracking-widest">100% VERIFIED</span>
+              <span className="font-serif text-[40px] text-primary">{tasks.filter(t => t.status === "completed").length} / {tasks.length}</span>
+              <span className="font-mono text-[9px] text-secondary uppercase tracking-widest">VERIFIED</span>
             </div>
             <div className="h-1.5 bg-surface-container-highest rounded-full overflow-hidden">
-              <div className="h-full bg-primary w-full"></div>
+              <div className="h-full bg-primary" style={{ width: `${tasks.length ? (tasks.filter(t => t.status === "completed").length / tasks.length) * 100 : 0}%` }}></div>
             </div>
           </div>
         </div>
@@ -93,7 +173,10 @@ export function DailyRoutines({ routinesData, handleToggleRoutine }: DailyRoutin
               Track recurring mechanical steps via acoustic signature profiling.
             </div>
           </div>
-          <button className="w-full btn-primary bg-primary text-background hover:bg-surface-tint py-3 font-mono text-[11px] tracking-widest rounded-md mt-auto">
+          <button 
+            onClick={() => setShowAddModal(true)}
+            className="w-full btn-primary bg-primary text-background hover:bg-surface-tint py-3 font-mono text-[11px] tracking-widest rounded-md mt-auto transition-colors"
+          >
             + ADD MONITORED ROUTINE
           </button>
         </div>
@@ -102,20 +185,19 @@ export function DailyRoutines({ routinesData, handleToggleRoutine }: DailyRoutin
       {/* Filter Row */}
       <div className="flex flex-wrap items-center justify-between gap-4 mb-space-lg border-b border-surface-container-highest pb-6">
         <div className="flex flex-wrap items-center gap-2">
-          <button className="px-5 py-2.5 rounded-full bg-primary text-background font-mono text-[10px] font-bold tracking-widest">
-            MORNING DEPARTURE (ACTIVE)
+          <button onClick={() => setActiveFilter("ALL")} className={`px-5 py-2.5 rounded-full font-mono text-[10px] font-bold tracking-widest transition-colors ${activeFilter === "ALL" ? 'bg-primary text-background' : 'text-secondary hover:bg-surface-container hover:text-primary'}`}>
+            ALL DOMAINS
           </button>
-          <button className="px-5 py-2.5 rounded-full text-secondary hover:bg-surface-container hover:text-primary transition-colors font-mono text-[10px] tracking-widest">
-            EVENING WIND-DOWN
-          </button>
-          <button className="px-5 py-2.5 rounded-full text-secondary hover:bg-surface-container hover:text-primary transition-colors font-mono text-[10px] tracking-widest">
-            WEEKLY DOMESTIC MAINTENANCE
-          </button>
+          {uniqueDomains.map(domain => (
+            <button key={domain} onClick={() => setActiveFilter(domain)} className={`px-5 py-2.5 rounded-full font-mono text-[10px] font-bold tracking-widest transition-colors ${activeFilter === domain ? 'bg-primary text-background' : 'text-secondary hover:bg-surface-container hover:text-primary'}`}>
+              {domain.replace(/_/g, ' ').toUpperCase()}
+            </button>
+          ))}
         </div>
         <div className="flex items-center gap-3">
           <div className="px-4 py-2.5 rounded-full bg-surface-container-low border border-surface-container-highest font-mono text-[10px] text-secondary tracking-widest flex items-center gap-2">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></svg>
-            4 ANCHORS ACTIVE
+            {tasks.filter(t => t.status === "pending").length} ANCHORS ACTIVE
           </div>
           <div className="px-4 py-2.5 rounded-full bg-surface-container-low border border-surface-container-highest font-mono text-[10px] text-secondary tracking-widest">
             SORT: SEQUENCE CHRONO
@@ -126,7 +208,9 @@ export function DailyRoutines({ routinesData, handleToggleRoutine }: DailyRoutin
       {/* Action Cards Grid (2 cols) */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-space-lg">
         
-        {/* Task 1 */}
+        {/* 
+          // MOCK CARDS COMMENTED OUT 
+          Task 1 
         <div className="card-elevated p-space-xl flex flex-col bg-surface-container-low border-surface-container-highest">
           <div className="flex items-center justify-between mb-8">
             <div className="font-mono text-[10px] text-secondary tracking-[0.2em] uppercase">STEP 01 • 07:15 UTC</div>
@@ -153,7 +237,6 @@ export function DailyRoutines({ routinesData, handleToggleRoutine }: DailyRoutin
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
               Double-hung sash lock engagement • 1.2 kHz resonant spike
             </div>
-            {/* Waveform placeholder */}
             <svg width="100%" height="40" viewBox="0 0 400 40" preserveAspectRatio="none" className="text-secondary stroke-current" fill="none" strokeWidth="1.5">
                <path d="M0,20 L150,20 L160,10 L170,30 L180,5 L190,20 L400,20"/>
             </svg>
@@ -165,7 +248,7 @@ export function DailyRoutines({ routinesData, handleToggleRoutine }: DailyRoutin
           </div>
         </div>
 
-        {/* Task 2 */}
+        Task 2 
         <div className="card-elevated p-space-xl flex flex-col bg-surface-container-low border-surface-container-highest">
           <div className="flex items-center justify-between mb-8">
             <div className="font-mono text-[10px] text-secondary tracking-[0.2em] uppercase">STEP 02 • 07:38 UTC</div>
@@ -192,7 +275,6 @@ export function DailyRoutines({ routinesData, handleToggleRoutine }: DailyRoutin
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
               Machine toggle click + solenoid cooling hiss decay
             </div>
-            {/* Waveform placeholder */}
             <svg width="100%" height="40" viewBox="0 0 400 40" preserveAspectRatio="none" className="text-secondary stroke-current" fill="none" strokeWidth="1.5">
                <path d="M0,20 L180,20 L190,35 L200,5 L210,20 L400,20"/>
             </svg>
@@ -203,9 +285,10 @@ export function DailyRoutines({ routinesData, handleToggleRoutine }: DailyRoutin
             <span className="text-primary font-bold">THERMAL: SAFE (21.4°C)</span>
           </div>
         </div>
+        */}
 
         {/* Dynamic Mapping for additional routines from DB */}
-        {routinesData?.tasks?.map((task, idx) => (
+        {filteredTasks.map((task, idx) => (
           <div key={task.id} className="card-elevated p-space-xl flex flex-col bg-surface-container-low border-surface-container-highest">
             <div className="flex items-center justify-between mb-8">
               <div className="font-mono text-[10px] text-secondary tracking-[0.2em] uppercase">STEP 0{3 + idx} • {task.scheduled_time || 'PENDING'}</div>

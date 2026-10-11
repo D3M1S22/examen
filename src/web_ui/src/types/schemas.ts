@@ -16,6 +16,8 @@ export interface VerifiedAction {
   domain: "safety" | "routine" | "work_task";
   raw_statement: string;
   confidence: number;
+  elapsed_time_human?: string;
+  matched_task_id?: string;
 }
 
 export interface PlannedTask {
@@ -27,7 +29,7 @@ export interface PlannedTask {
   recurrence: string;
   verified_action_id?: string;
   created_at: string;
-  updated_at: string;
+  completed_at?: string;
 }
 
 export interface SocialEntity {
@@ -48,6 +50,7 @@ export interface BriefingReport {
   executive_summary: string[];
   action_items: string[];
   web_sources: string[];
+  deep_dive_markdown?: string;
   created_at: string;
 }
 

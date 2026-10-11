@@ -52,7 +52,7 @@ export function AmbientSimulator({ simText, setSimText, simRunning, runSimulatio
       <ScreenHeader 
         directive="DIAGNOSTIC TESTBENCH // SECTOR 06"
         title="SCREEN PURPOSE: AMBIENT AUDIO STREAM SIMULATOR & PIPELINE TESTING"
-        description={<>This instrument allows system architects and operators to benchmark EXAMEN's continuous AgentCore ingest pipeline by injecting synthetic speech tokens, simulated wearable mic packets, and acoustic signature events. It validates how raw 48kHz audio streams are parsed, scrubbed of PII via localized filters, categorized into domestic Peace of Mind corroborations, Social rolodex dossiers, or long-form research indices—completely bypassing the need for physical wearable trigger cycles.</>}
+        description={<>Welcome, Hackathon Judges and Testers! This Ambient Simulator provides a direct interface to test EXAMEN's AgentCore pipeline without needing the physical Bee hardware. Simulate a wearable conversation by typing or pasting a transcript below. The system will process your text as if it were ambient audio, extracting tasks, creating contacts, or generating topic dossiers in real-time.</>}
         rightElement={
           <div className="bg-surface-container-highest rounded-lg p-4 font-mono">
             <div className="text-[9px] text-secondary tracking-[0.2em] uppercase mb-1">INSPECTION CADENCE</div>

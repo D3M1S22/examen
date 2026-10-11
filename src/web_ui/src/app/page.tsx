@@ -77,6 +77,19 @@ export default function Dashboard() {
     }
   };
 
+  const handleAddRoutine = async (title: string, domain: string, scheduled_time: string) => {
+    try {
+      await fetch(`${API_URL}/api/routines`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title, domain, scheduled_time, recurrence: "daily" })
+      });
+      mutateRoutines();
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-background">
       <SystemBar 
@@ -90,6 +103,9 @@ export default function Dashboard() {
         {activeTab === "overview" && (
           <OverviewHub 
             routinesData={routinesData} 
+            actionsData={actionsData}
+            socialData={socialData}
+            topicsData={topicsData}
             setActiveTab={setActiveTab}
             setSimText={setSimText}
             handleToggleRoutine={handleToggleRoutine}
@@ -114,6 +130,7 @@ export default function Dashboard() {
           <DailyRoutines 
             routinesData={routinesData} 
             handleToggleRoutine={handleToggleRoutine} 
+            handleAddRoutine={handleAddRoutine}
           />
         )}
 
