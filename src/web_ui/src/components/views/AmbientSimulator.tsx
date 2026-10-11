@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { ScreenHeader } from "../ui/ScreenHeader";
-import { StatusBadge } from "../ui/StatusBadge";
+import { StatusBadge, DomainBadge } from "../ui/StatusBadge";
 import { playAcousticVerificationTone } from "@/utils/audioEffects";
 
 interface AmbientSimulatorProps {
@@ -31,33 +31,41 @@ export function AmbientSimulator({
     },
     {
       id: "02",
-      title: "Social Networking & Promises",
-      desc: "Simulates dialogue meeting Andrea from Almaviva, extracting contact commitments & follow-up.",
-      badge: "CONTACT_ROLODEX",
-      icon: "🤝",
-      text: "Hi! I'm Andrea Valenti, DevOps Lead at Almaviva. Great to meet you at AWS re:Invent. I will send you the fastmcp schema on Slack by Thursday.",
+      title: "Ambient Voice Task Scheduler",
+      desc: "Passively extracts a future domestic reminder with ISO-8601 relative time calculation.",
+      badge: "AMBIENT_SCHEDULER",
+      icon: "⏱️",
+      text: "Remind me to turn off the garden irrigation valve in an hour before leaving for dinner.",
     },
     {
       id: "03",
-      title: "Ambient Voice Task Scheduler",
-      desc: "Passively extracts a scheduled reminder to inspect an appliance later in the day.",
-      badge: "AMBIENT_SCHEDULER",
-      icon: "⏱️",
-      text: "Remind me to check the garage freezer and seal the basement window at 6:30 PM.",
+      title: "Bilateral Social Commitments",
+      desc: "Extracts contact identity and mutual promise with debtor tracking (user vs contact).",
+      badge: "BILATERAL_PROMISE",
+      icon: "🤝",
+      text: "Nice to meet you Giulia Verdi, Senior Director at CloudOps. I will send you our architecture pitch deck tomorrow at 10 AM.",
     },
     {
       id: "04",
-      title: "AWS Bedrock AgentCore Tech",
-      desc: "Engineering deep-dive on Bedrock Mantle and FastMCP architecture, drafting synthetic topic notes.",
-      badge: "TOPIC_DOSSIER",
-      icon: "📚",
-      text: "We spent the morning discussing how to route FastMCP streams directly into Bedrock AgentCore. The main action item is for Sarah to test the latency overhead.",
+      title: "Executive Web Profiling",
+      desc: "Passes strict 2-anchor disambiguation guardrails to trigger autonomous AI dossier.",
+      badge: "EXECUTIVE_CRM",
+      icon: "👤",
+      text: "Pleased to meet you, I'm Dr. Elena Rostova, VP of AI Research at CloudScale. Let's discuss Raft consensus algorithms and distributed systems.",
     },
     {
       id: "05",
-      title: "Casual Banter (Drop >90%)",
-      desc: "Small talk concerning drizzle; verifies PII scrubber drops low-entropy ephemeral small talk.",
-      badge: "NOOP_DROP_FILTER",
+      title: "Contextual Topic Synthesis",
+      desc: "Initiates deep background research and explanatory academic synthesis with citation grounding.",
+      badge: "TOPIC_DOSSIER",
+      icon: "📚",
+      text: "In today's systems seminar we study distributed consensus algorithms and the Raft leader election theorem compared to Multi-Paxos.",
+    },
+    {
+      id: "06",
+      title: "Casual Banter (Privacy Drop)",
+      desc: "Demonstrates Nemotron Gatekeeper filtering low-entropy small talk to protect user privacy.",
+      badge: "PRIVACY_SCRUBBER",
       icon: "☕",
       text: "Man, it's really raining outside today. I should have brought my umbrella. Oh well, the coffee here is good.",
     },
@@ -76,9 +84,50 @@ export function AmbientSimulator({
     { id: 5, title: "FastMCP Alexa+ Server Broadcast", desc: "Publish entity state for immediate ambient recall query." },
   ];
 
-  const extractedActions = simResult?.result?.actions || simResult?.result?.state?.identified_actions || [];
-  const extractedSocial = simResult?.result?.social || simResult?.result?.state?.social_observations || [];
-  const extractedTopics = simResult?.result?.topics || simResult?.result?.state?.topic_briefings || [];
+  // Robust extraction from FastMCP / Bedrock AgentCore response
+  const res = simResult?.result;
+  const elapsed = simResult?.elapsed_seconds || 0.4;
+  const summary = res?.summary || simResult?.summary || "";
+  const categories: string[] = res?.categories || [];
+  const isNoop = categories.includes("noop") || categories.length === 0;
+
+  // Extracted Actions
+  const rawActionData = res?.action_data;
+  const extractedActions: any[] = Array.isArray(rawActionData?.actions)
+    ? rawActionData.actions
+    : rawActionData?.action_type
+    ? [rawActionData]
+    : Array.isArray(res?.actions)
+    ? res.actions
+    : Array.isArray(res?.state?.identified_actions)
+    ? res.state.identified_actions
+    : [];
+
+  // Extracted Social
+  const rawSocialData = res?.social_data;
+  const extractedContacts: any[] = Array.isArray(rawSocialData?.contacts)
+    ? rawSocialData.contacts
+    : rawSocialData?.name
+    ? [rawSocialData]
+    : Array.isArray(res?.social)
+    ? res.social
+    : Array.isArray(res?.state?.social_observations)
+    ? res.state.social_observations
+    : [];
+
+  const extractedCommitments: any[] = Array.isArray(rawSocialData?.commitments)
+    ? rawSocialData.commitments
+    : extractedContacts.flatMap((c) => c.commitments || []);
+
+  // Extracted Topic Dossier
+  const extractedTopic =
+    res?.briefing_report ||
+    (Array.isArray(res?.topics) ? res.topics[0] : null) ||
+    (Array.isArray(res?.state?.topic_briefings) ? res.state.topic_briefings[0] : null) ||
+    null;
+
+  // Extracted Ambient Scheduled Task (Milestone 1.2)
+  const extractedTask = res?.scheduled_task || null;
 
   return (
     <div className="space-y-space-lg animate-in fade-in max-w-[1400px] mx-auto">
@@ -180,7 +229,7 @@ export function AmbientSimulator({
             <div className="flex items-center justify-between pt-2">
               <button
                 onClick={() => setSimText("")}
-                className="text-secondary hover:text-primary font-mono text-[10px] tracking-widest uppercase"
+                className="text-secondary hover:text-primary font-mono text-[10px] tracking-widest uppercase transition-colors"
               >
                 Clear Buffer
               </button>
@@ -250,16 +299,16 @@ export function AmbientSimulator({
                 <div className="flex items-center gap-2">
                   <button
                     onClick={() => setActiveResultTab("parsed")}
-                    className={`px-3 py-1 rounded font-mono text-[9px] uppercase tracking-wider ${
-                      activeResultTab === "parsed" ? "bg-primary text-background font-bold" : "text-secondary"
+                    className={`px-3 py-1 rounded font-mono text-[9px] uppercase tracking-wider transition-colors ${
+                      activeResultTab === "parsed" ? "bg-primary text-background font-bold" : "text-secondary hover:text-white"
                     }`}
                   >
                     Summary
                   </button>
                   <button
                     onClick={() => setActiveResultTab("raw")}
-                    className={`px-3 py-1 rounded font-mono text-[9px] uppercase tracking-wider ${
-                      activeResultTab === "raw" ? "bg-primary text-background font-bold" : "text-secondary"
+                    className={`px-3 py-1 rounded font-mono text-[9px] uppercase tracking-wider transition-colors ${
+                      activeResultTab === "raw" ? "bg-primary text-background font-bold" : "text-secondary hover:text-white"
                     }`}
                   >
                     Raw JSON
@@ -269,58 +318,198 @@ export function AmbientSimulator({
 
               {simResult ? (
                 activeResultTab === "parsed" ? (
-                  <div className="space-y-4 max-h-[300px] overflow-y-auto">
-                    <div className="font-mono text-[9px] text-emerald-400 tracking-widest uppercase">
-                      ✅ Pipeline completed in {simResult.elapsed_seconds || "0.4"}s
+                  <div className="space-y-4 max-h-[380px] overflow-y-auto pr-1">
+                    {/* Status & Latency Banner */}
+                    <div className="flex items-center justify-between bg-black/40 border border-white/5 rounded-xl px-3.5 py-2">
+                      <div className="flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+                        <span className="font-mono text-[10px] text-emerald-400 uppercase font-bold tracking-wider">
+                          Pipeline Executed Nominal
+                        </span>
+                      </div>
+                      <span className="font-mono text-[10px] text-secondary">
+                        ⏱️ {elapsed}s
+                      </span>
                     </div>
 
+                    {/* Gatekeeper Classification Categories */}
+                    {categories.length > 0 && (
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-mono text-[9px] text-secondary tracking-widest uppercase">
+                          Gatekeeper Route:
+                        </span>
+                        {categories.map((cat, idx) => (
+                          <span
+                            key={idx}
+                            className="px-2 py-0.5 rounded-full bg-amber-950/50 border border-amber-500/40 text-amber-300 font-mono text-[9px] uppercase font-bold tracking-wider"
+                          >
+                            {cat.replace(/_/g, " ")}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Explanatory Pipeline Summary */}
+                    {summary && (
+                      <div className="bg-[#121419] p-3 rounded-xl border border-white/5">
+                        <div className="font-mono text-[9px] text-secondary uppercase tracking-widest mb-1">
+                          Pipeline Synthesis
+                        </div>
+                        <div className="text-xs text-zinc-200 font-sans italic">
+                          "{summary}"
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Extracted Ambient Task (Milestone 1.2) */}
+                    {extractedTask && (
+                      <div className="bg-[#121419] p-3.5 rounded-xl border border-amber-500/30 bg-amber-950/10">
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="font-mono text-[9px] text-amber-400 uppercase font-bold flex items-center gap-1.5">
+                            <span>⏱️</span>
+                            <span>Ambient Task Scheduled</span>
+                          </div>
+                          <DomainBadge domain={extractedTask.domain || "routine"} />
+                        </div>
+                        <div className="font-serif text-sm text-primary font-bold mb-1">
+                          {extractedTask.task_title || extractedTask.title}
+                        </div>
+                        <div className="font-mono text-[9px] text-secondary flex items-center gap-3">
+                          <span>Target: {extractedTask.scheduled_time || "Pending"}</span>
+                          <span>•</span>
+                          <span>Recurrence: {extractedTask.recurrence || "daily"}</span>
+                          <span>•</span>
+                          <span className="text-amber-400">Origin: {extractedTask.origin || "ambient_voice"}</span>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Extracted Actions */}
                     {extractedActions.length > 0 && (
-                      <div className="bg-[#121419] p-3 rounded-xl border border-white/5">
-                        <div className="font-mono text-[9px] text-amber-400 uppercase font-bold mb-1">
-                          Extracted Actions ({extractedActions.length})
-                        </div>
-                        {extractedActions.map((a: any, i: number) => (
-                          <div key={i} className="text-xs text-primary font-sans">
-                            • {a.action_type || a.raw_statement} ({(a.confidence * 100).toFixed(0)}%)
+                      <div className="bg-[#121419] p-3 rounded-xl border border-emerald-500/30 bg-emerald-950/10">
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="font-mono text-[9px] text-emerald-400 uppercase font-bold flex items-center gap-1.5">
+                            <span>🛡️</span>
+                            <span>Verified Actions ({extractedActions.length})</span>
                           </div>
-                        ))}
+                          <StatusBadge status="verified" label="VERIFIED" />
+                        </div>
+                        <div className="space-y-2">
+                          {extractedActions.map((a: any, i: number) => (
+                            <div key={i} className="text-xs text-zinc-200 font-sans border-l-2 border-emerald-500/60 pl-2">
+                              <div className="font-bold text-white capitalize">
+                                {a.action_type ? a.action_type.replace(/_/g, " ") : "Action Registered"}
+                              </div>
+                              <div className="text-[11px] text-zinc-400 italic">
+                                "{a.raw_statement || a.notes || "Acoustic detent confirmed."}"
+                              </div>
+                              <div className="font-mono text-[8px] text-secondary mt-0.5">
+                                Confidence: {((a.confidence ?? 1.0) * 100).toFixed(1)}% • Domain: {a.domain || "safety"}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
                       </div>
                     )}
 
-                    {extractedSocial.length > 0 && (
-                      <div className="bg-[#121419] p-3 rounded-xl border border-white/5">
-                        <div className="font-mono text-[9px] text-cyan-400 uppercase font-bold mb-1">
-                          Extracted Social ({extractedSocial.length})
+                    {/* Extracted Social Contacts & Commitments */}
+                    {(extractedContacts.length > 0 || extractedCommitments.length > 0) && (
+                      <div className="bg-[#121419] p-3 rounded-xl border border-cyan-500/30 bg-cyan-950/10">
+                        <div className="font-mono text-[9px] text-cyan-400 uppercase font-bold mb-2 flex items-center gap-1.5">
+                          <span>🤝</span>
+                          <span>Social Memory & Bilateral Promises</span>
                         </div>
-                        {extractedSocial.map((s: any, i: number) => (
-                          <div key={i} className="text-xs text-primary font-sans">
-                            • {s.person_name || s.name} ({s.company_or_role || "Contact"})
+                        {extractedContacts.map((c: any, i: number) => (
+                          <div key={i} className="mb-2 last:mb-0">
+                            <div className="text-xs font-bold text-white">
+                              {c.name || c.person_name}
+                              <span className="font-normal text-secondary text-[11px] ml-1.5">
+                                ({c.company_or_role || "Interlocutor"})
+                              </span>
+                            </div>
+                            {c.contact_info && (
+                              <div className="font-mono text-[8px] text-cyan-300">
+                                📬 {c.contact_info}
+                              </div>
+                            )}
                           </div>
                         ))}
+                        {extractedCommitments.length > 0 && (
+                          <div className="mt-2 pt-2 border-t border-white/5 space-y-1">
+                            <div className="font-mono text-[8px] text-amber-300 uppercase tracking-widest font-bold">
+                              Tracked Commitments:
+                            </div>
+                            {extractedCommitments.map((cmt: any, idx: number) => {
+                              const desc = typeof cmt === "object" ? cmt.description : String(cmt);
+                              const debtor = typeof cmt === "object" ? cmt.debtor : "contact";
+                              return (
+                                <div key={idx} className="text-[11px] text-zinc-300 flex items-start gap-1.5">
+                                  <span className="font-mono text-[8px] px-1.5 py-0.5 rounded bg-black/60 border border-white/10 uppercase text-amber-300 font-bold">
+                                    {debtor === "user" ? "I PROMISED" : "PROMISED TO ME"}
+                                  </span>
+                                  <span>{desc}</span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
                       </div>
                     )}
 
-                    {extractedTopics.length > 0 && (
-                      <div className="bg-[#121419] p-3 rounded-xl border border-white/5">
-                        <div className="font-mono text-[9px] text-purple-400 uppercase font-bold mb-1">
-                          Extracted Topic Dossier ({extractedTopics.length})
-                        </div>
-                        {extractedTopics.map((t: any, i: number) => (
-                          <div key={i} className="text-xs text-primary font-sans">
-                            • {t.topic_title}
+                    {/* Extracted Topic Dossier */}
+                    {extractedTopic && (
+                      <div className="bg-[#121419] p-3 rounded-xl border border-purple-500/30 bg-purple-950/10">
+                        <div className="flex items-center justify-between mb-1.5">
+                          <div className="font-mono text-[9px] text-purple-400 uppercase font-bold flex items-center gap-1.5">
+                            <span>📚</span>
+                            <span>Topic Dossier Synthesized</span>
                           </div>
-                        ))}
+                          <span className="px-2 py-0.5 rounded bg-purple-950 text-purple-300 font-mono text-[8px] uppercase">
+                            {extractedTopic.context_type || "RESEARCH"}
+                          </span>
+                        </div>
+                        <div className="font-serif text-sm font-bold text-white mb-1">
+                          {extractedTopic.topic_title}
+                        </div>
+                        <div className="text-xs text-zinc-300 font-sans line-clamp-3 leading-relaxed mb-2">
+                          {extractedTopic.explanatory_synthesis || extractedTopic.summary || (extractedTopic.executive_summary || [])[0]}
+                        </div>
+                        {Array.isArray(extractedTopic.sources) && extractedTopic.sources.length > 0 && (
+                          <div className="font-mono text-[8px] text-secondary">
+                            📚 {extractedTopic.sources.length} authoritative web citations referenced
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Fallback for Noop / Ephemeral Dropped */}
+                    {isNoop && extractedActions.length === 0 && extractedContacts.length === 0 && !extractedTopic && !extractedTask && (
+                      <div className="bg-[#121419] p-3.5 rounded-xl border border-zinc-800 text-center">
+                        <div className="text-lg mb-1">☕</div>
+                        <div className="font-mono text-[10px] text-zinc-300 uppercase font-bold tracking-wider mb-1">
+                          Ephemeral Small Talk Filtered
+                        </div>
+                        <div className="font-sans text-xs text-zinc-500 leading-relaxed max-w-sm mx-auto">
+                          Gatekeeper classified utterance as NOOP with 0 action entropy. Dropped to preserve user privacy and prevent memory pollution.
+                        </div>
                       </div>
                     )}
                   </div>
                 ) : (
-                  <pre className="p-4 bg-[#0a0b0e] border border-white/5 rounded-xl font-mono text-[10px] text-emerald-300 max-h-[300px] overflow-y-auto whitespace-pre-wrap">
+                  <pre className="p-4 bg-[#0a0b0e] border border-white/5 rounded-xl font-mono text-[10px] text-emerald-300 max-h-[380px] overflow-y-auto whitespace-pre-wrap">
                     {JSON.stringify(simResult, null, 2)}
                   </pre>
                 )
               ) : (
-                <div className="py-12 text-center text-secondary font-mono text-xs">
-                  {simRunning ? "Executing LangGraph pipeline..." : "Run a simulation above to view live execution telemetry."}
+                <div className="py-16 text-center text-secondary font-mono text-xs">
+                  {simRunning ? (
+                    <div className="flex flex-col items-center gap-2">
+                      <span className="w-5 h-5 border-2 border-amber-400 border-t-transparent rounded-full animate-spin" />
+                      <span>Executing LangGraph AgentCore pipeline...</span>
+                    </div>
+                  ) : (
+                    "Select a preset or click 'Inject Stream to AgentCore' above."
+                  )}
                 </div>
               )}
             </div>

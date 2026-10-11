@@ -29,7 +29,7 @@ export default function Dashboard() {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   // SWR Data Fetching
-  const { data: statusData } = useSWR("/api/status", fetcher, { refreshInterval: 10000 });
+  const { data: statusData, mutate: mutateStatus } = useSWR("/api/status", fetcher, { refreshInterval: 10000 });
   const { data: routinesData, mutate: mutateRoutines } = useSWR<{ tasks: PlannedTask[] }>(
     "/api/routines",
     fetcher
@@ -81,11 +81,23 @@ export default function Dashboard() {
       es.onmessage = (e) => {
         try {
           const data = JSON.parse(e.data);
-          // Auto-revalidate relevant caches
-          if (data.type === "action" || data.event === "action") mutateActions();
-          if (data.type === "routine" || data.event === "routine") mutateRoutines();
-          if (data.type === "social" || data.event === "social") mutateSocial();
-          if (data.type === "topic" || data.event === "topic") mutateTopics();
+          const eventType = (data.type || data.event || "").toLowerCase();
+          
+          // Revalidate status on any backend change
+          mutateStatus();
+
+          // Intelligent routing of SSE cache invalidation
+          if (eventType.includes("action")) mutateActions();
+          if (eventType.includes("routine") || eventType.includes("task")) mutateRoutines();
+          if (eventType.includes("contact") || eventType.includes("commitment") || eventType.includes("social")) mutateSocial();
+          if (eventType.includes("topic") || eventType.includes("briefing")) mutateTopics();
+          if (eventType.includes("pipeline") || eventType.includes("session")) {
+            mutateActions();
+            mutateRoutines();
+            mutateSocial();
+            mutateTopics();
+            mutateStatus();
+          }
         } catch {
           // heartbeat or raw text
         }
@@ -101,7 +113,7 @@ export default function Dashboard() {
     } catch (err) {
       console.warn("SSE connection error:", err);
     }
-  }, [mutateActions, mutateRoutines, mutateSocial, mutateTopics]);
+  }, [mutateActions, mutateRoutines, mutateSocial, mutateTopics, mutateStatus]);
 
   // Simulator Execution
   const runSimulation = async () => {
@@ -121,6 +133,7 @@ export default function Dashboard() {
       mutateActions();
       mutateSocial();
       mutateTopics();
+      mutateStatus();
       showToast("Simulation pipeline executed successfully!");
     } catch (e: any) {
       console.error(e);
@@ -144,6 +157,7 @@ export default function Dashboard() {
     try {
       await fetch(`${API_URL}/api/routines/${task.id}/toggle`, { method: "POST" });
       mutateRoutines();
+      mutateStatus();
       showToast(`Routine marked ${newStatus.toUpperCase()}`);
     } catch (err) {
       mutateRoutines({ tasks: prevTasks }, false);
@@ -166,6 +180,7 @@ export default function Dashboard() {
       });
       if (!res.ok) throw new Error("Failed to create routine");
       await mutateRoutines();
+      await mutateStatus();
       showToast("New monitored routine activated!");
     } catch (err: any) {
       console.error(err);
@@ -182,6 +197,7 @@ export default function Dashboard() {
       });
       if (!res.ok) throw new Error("Failed to delete routine");
       await mutateRoutines();
+      await mutateStatus();
       showToast("Routine deleted successfully.");
     } catch (err: any) {
       console.error(err);
@@ -200,6 +216,7 @@ export default function Dashboard() {
       if (!res.ok) throw new Error("Failed to verify action");
       await mutateActions();
       await mutateRoutines();
+      await mutateStatus();
       showToast("Action verified & ingested into acoustic ledger!");
     } catch (err: any) {
       console.error(err);
@@ -216,6 +233,7 @@ export default function Dashboard() {
       });
       if (!res.ok) throw new Error("Enrichment failed");
       await mutateSocial();
+      await mutateStatus();
       showToast("Executive AI web enrichment completed!");
     } catch (err: any) {
       console.error(err);
@@ -232,6 +250,7 @@ export default function Dashboard() {
       });
       if (!res.ok) throw new Error(`Failed to ${action} commitment`);
       await mutateSocial();
+      await mutateStatus();
       showToast(`Commitment marked ${action === "fulfill" ? "FULFILLED" : "CANCELLED"}!`);
     } catch (err: any) {
       console.error(err);
@@ -268,6 +287,7 @@ export default function Dashboard() {
         <main className="max-w-[1600px] mx-auto px-gutter-desktop pt-8 pb-16">
           {activeTab === "overview" && (
             <OverviewHub
+              statusData={statusData}
               routinesData={routinesData}
               actionsData={actionsData}
               socialData={socialData}

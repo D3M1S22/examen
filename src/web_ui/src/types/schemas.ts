@@ -104,14 +104,20 @@ export interface SessionDossier {
 }
 
 export interface EchoShowCardResponse {
-  card_type: string;
-  template: string;
-  title: string;
+  card_type?: string;
+  ui_card_type?: string;
+  display_template?: string;
+  template?: string;
+  title?: string;
+  topic_title?: string;
   header_badge?: string;
-  timestamp: string;
-  display_data: Record<string, any>;
-  voice_summary: string;
+  timestamp?: string;
+  display_data?: Record<string, any>;
+  card_payload?: Record<string, any>;
+  spoken_summary?: string;
+  voice_summary?: string;
   suggested_prompts?: string[];
+  [key: string]: any;
 }
 
 export interface ExamenStatusResponse {

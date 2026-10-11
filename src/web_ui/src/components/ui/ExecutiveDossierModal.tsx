@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { createPortal } from "react-dom";
 import { SocialEntity, SocialCommitment } from "@/types/schemas";
 import { StatusBadge } from "./StatusBadge";
 
@@ -17,8 +18,13 @@ export function ExecutiveDossierModal({
   onEnrich,
   onToggleCommitment,
 }: ExecutiveDossierModalProps) {
+  const [mounted, setMounted] = useState(false);
   const [isEnriching, setIsEnriching] = useState(false);
   const [enrichSuccess, setEnrichSuccess] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   useEffect(() => {
     if (isOpen) {
@@ -36,7 +42,7 @@ export function ExecutiveDossierModal({
     }
   }, [isOpen, onClose]);
 
-  if (!isOpen || !contact) return null;
+  if (!isOpen || !mounted || !contact) return null;
 
   const webProfile = contact.web_profile;
   const rawCommitments = contact.commitments || [];
@@ -56,7 +62,9 @@ export function ExecutiveDossierModal({
     }
   };
 
-  return (
+  const contactName = contact.name || contact.person_name || "Contact";
+
+  return createPortal(
     <div
       className="fixed inset-0 z-[9999] overflow-y-auto bg-black/85 backdrop-blur-md flex items-center justify-center p-4 sm:p-6"
       onClick={onClose}
@@ -79,12 +87,12 @@ export function ExecutiveDossierModal({
 
           <div className="flex items-start gap-5">
             <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-amber-500/20 to-amber-700/30 border border-amber-500/40 flex items-center justify-center text-primary font-serif text-2xl font-bold shrink-0 shadow-lg">
-              {contact.name.substring(0, 2).toUpperCase()}
+              {contactName.substring(0, 2).toUpperCase()}
             </div>
             <div className="flex-1 pr-10">
               <div className="flex flex-wrap items-center gap-3 mb-1">
                 <h2 className="font-serif text-[28px] text-primary leading-tight">
-                  {contact.name}
+                  {contactName}
                 </h2>
                 <StatusBadge status="verified" label="⚡ 98% MATCH" />
               </div>
@@ -199,7 +207,7 @@ export function ExecutiveDossierModal({
                         </span>
                         <div>
                           <div className="font-mono text-[8px] text-secondary tracking-widest uppercase mb-1">
-                            {debtor === "user" ? "YOU PROMISED" : `${contact.name.toUpperCase()} PROMISED`}
+                            {debtor === "user" ? "YOU PROMISED" : `${contactName.toUpperCase()} PROMISED`}
                           </div>
                           <p className="font-sans text-body-sm text-primary leading-snug">
                             "{desc}"
@@ -266,6 +274,7 @@ export function ExecutiveDossierModal({
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

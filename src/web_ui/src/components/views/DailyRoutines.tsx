@@ -17,37 +17,41 @@ export function DailyRoutines({
   handleAddRoutine,
   handleDeleteRoutine,
 }: DailyRoutinesProps) {
-  const [activeFilter, setActiveFilter] = useState<string>("ALL");
+  const [statusFilter, setStatusFilter] = useState<"ALL" | "PENDING" | "COMPLETED">("ALL");
+  const [domainFilter, setDomainFilter] = useState<string>("ALL");
   const [searchQuery, setSearchQuery] = useState("");
   const [showAddModal, setShowAddModal] = useState(false);
   const [activeAudioIndex, setActiveAudioIndex] = useState<number | null>(null);
 
   const tasks = routinesData?.tasks || [];
-  const uniqueDomains = Array.from(new Set(tasks.map((t) => t.domain))).filter(Boolean);
 
   const completedCount = tasks.filter((t) => t.status === "completed").length;
   const pendingCount = tasks.filter((t) => t.status === "pending").length;
 
-  const filteredTasks = tasks.filter((t) => {
-    // Filter by category / status
-    let matchesCategory = true;
-    if (activeFilter === "COMPLETED") {
-      matchesCategory = t.status === "completed";
-    } else if (activeFilter === "PENDING") {
-      matchesCategory = t.status === "pending";
-    } else if (activeFilter !== "ALL") {
-      matchesCategory = t.domain === activeFilter;
-    }
+  const safetyCount = tasks.filter((t) => (t.domain || "").toLowerCase() === "safety").length;
+  const routineCount = tasks.filter((t) => (t.domain || "").toLowerCase() === "routine").length;
+  const workCount = tasks.filter((t) => ["work_task", "work"].includes((t.domain || "").toLowerCase())).length;
 
-    // Filter by search query
-    const searchLower = searchQuery.toLowerCase();
+  const filteredTasks = tasks.filter((t) => {
+    const matchesStatus =
+      statusFilter === "ALL" ||
+      (statusFilter === "PENDING" && t.status === "pending") ||
+      (statusFilter === "COMPLETED" && t.status === "completed");
+
+    const tDomain = (t.domain || "").toLowerCase();
+    const matchesDomain =
+      domainFilter === "ALL" ||
+      tDomain === domainFilter.toLowerCase() ||
+      (domainFilter === "work_task" && (tDomain === "work_task" || tDomain === "work"));
+
+    const searchLower = searchQuery.toLowerCase().trim();
     const matchesSearch =
-      !searchQuery ||
+      !searchLower ||
       t.title.toLowerCase().includes(searchLower) ||
-      t.domain.toLowerCase().includes(searchLower) ||
+      (t.domain || "").toLowerCase().includes(searchLower) ||
       (t.scheduled_time || "").toLowerCase().includes(searchLower);
 
-    return matchesCategory && matchesSearch;
+    return matchesStatus && matchesDomain && matchesSearch;
   });
 
   const handleSimulateCheck = (idx: number) => {
@@ -182,64 +186,113 @@ export function DailyRoutines({
       </div>
 
       {/* Search & Filter Row */}
-      <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4 mb-space-lg border-b border-surface-container-highest pb-6">
-        {/* Search input */}
-        <div className="flex-1 max-w-md relative">
-          <span className="absolute left-4 top-1/2 -translate-y-1/2 text-secondary text-sm">🔍</span>
-          <input
-            type="text"
-            placeholder="Search routines by title, domain, or time..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full bg-[#121419] border border-surface-container-highest rounded-full py-2.5 pl-10 pr-4 text-body-sm font-sans text-primary placeholder-zinc-500 focus:outline-none focus:border-primary transition-colors"
-          />
-        </div>
+      <div className="flex flex-col gap-4 mb-space-lg border-b border-surface-container-highest pb-6">
+        <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4">
+          {/* Search input */}
+          <div className="flex-1 max-w-md relative">
+            <span className="absolute left-4 top-1/2 -translate-y-1/2 text-secondary text-sm">🔍</span>
+            <input
+              type="text"
+              placeholder="Search routines by title, domain, or time..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full bg-[#121419] border border-surface-container-highest rounded-full py-2.5 pl-10 pr-10 text-body-sm font-sans text-primary placeholder-zinc-500 focus:outline-none focus:border-primary transition-colors"
+            />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery("")}
+                className="absolute right-3.5 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-white font-mono text-xs w-5 h-5 rounded-full flex items-center justify-center bg-white/5 hover:bg-white/10 transition-colors"
+                title="Clear search"
+              >
+                ✕
+              </button>
+            )}
+          </div>
 
-        {/* Category Filters */}
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            onClick={() => setActiveFilter("ALL")}
-            className={`px-4 py-2 rounded-full font-mono text-[10px] font-bold tracking-widest transition-colors ${
-              activeFilter === "ALL"
-                ? "bg-primary text-background shadow"
-                : "text-secondary hover:bg-surface-container hover:text-primary"
-            }`}
-          >
-            ALL ({tasks.length})
-          </button>
-          <button
-            onClick={() => setActiveFilter("PENDING")}
-            className={`px-4 py-2 rounded-full font-mono text-[10px] font-bold tracking-widest transition-colors ${
-              activeFilter === "PENDING"
-                ? "bg-amber-500 text-black shadow"
-                : "text-secondary hover:bg-surface-container hover:text-primary"
-            }`}
-          >
-            PENDING ({pendingCount})
-          </button>
-          <button
-            onClick={() => setActiveFilter("COMPLETED")}
-            className={`px-4 py-2 rounded-full font-mono text-[10px] font-bold tracking-widest transition-colors ${
-              activeFilter === "COMPLETED"
-                ? "bg-emerald-500 text-black shadow"
-                : "text-secondary hover:bg-surface-container hover:text-primary"
-            }`}
-          >
-            COMPLETED ({completedCount})
-          </button>
-          {uniqueDomains.map((domain) => (
+          {/* Status Filters */}
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="font-mono text-[9px] text-secondary uppercase tracking-widest mr-1">Status:</span>
             <button
-              key={domain}
-              onClick={() => setActiveFilter(domain)}
-              className={`px-4 py-2 rounded-full font-mono text-[10px] font-bold tracking-widest transition-colors ${
-                activeFilter === domain
+              onClick={() => setStatusFilter("ALL")}
+              className={`px-3.5 py-1.5 rounded-full font-mono text-[10px] font-bold tracking-widest transition-colors ${
+                statusFilter === "ALL"
                   ? "bg-primary text-background shadow"
                   : "text-secondary hover:bg-surface-container hover:text-primary"
               }`}
             >
-              {domain.replace(/_/g, " ").toUpperCase()}
+              ALL ({tasks.length})
             </button>
-          ))}
+            <button
+              onClick={() => setStatusFilter("PENDING")}
+              className={`px-3.5 py-1.5 rounded-full font-mono text-[10px] font-bold tracking-widest transition-colors flex items-center gap-1.5 ${
+                statusFilter === "PENDING"
+                  ? "bg-amber-500 text-black shadow"
+                  : "text-amber-400/80 bg-amber-950/20 border border-amber-500/20 hover:bg-amber-950/40"
+              }`}
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+              <span>PENDING ({pendingCount})</span>
+            </button>
+            <button
+              onClick={() => setStatusFilter("COMPLETED")}
+              className={`px-3.5 py-1.5 rounded-full font-mono text-[10px] font-bold tracking-widest transition-colors flex items-center gap-1.5 ${
+                statusFilter === "COMPLETED"
+                  ? "bg-emerald-500 text-black shadow"
+                  : "text-emerald-400/80 bg-emerald-950/20 border border-emerald-500/20 hover:bg-emerald-950/40"
+              }`}
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+              <span>COMPLETED ({completedCount})</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Domain Filters Row */}
+        <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-white/5">
+          <span className="font-mono text-[9px] text-secondary uppercase tracking-widest mr-1">Domain:</span>
+          <button
+            onClick={() => setDomainFilter("ALL")}
+            className={`px-3 py-1 rounded-lg font-mono text-[9px] font-bold tracking-wider uppercase transition-colors ${
+              domainFilter === "ALL"
+                ? "bg-zinc-700 text-white font-bold"
+                : "text-zinc-400 hover:text-white hover:bg-white/5"
+            }`}
+          >
+            All Domains
+          </button>
+          <button
+            onClick={() => setDomainFilter("safety")}
+            className={`px-3 py-1 rounded-lg font-mono text-[9px] font-bold tracking-wider uppercase transition-colors flex items-center gap-1.5 ${
+              domainFilter.toLowerCase() === "safety"
+                ? "bg-amber-500 text-black shadow font-bold"
+                : "text-amber-300 bg-amber-950/40 border border-amber-500/30 hover:bg-amber-950/70"
+            }`}
+          >
+            <span>🛡️</span>
+            <span>Safety ({safetyCount})</span>
+          </button>
+          <button
+            onClick={() => setDomainFilter("routine")}
+            className={`px-3 py-1 rounded-lg font-mono text-[9px] font-bold tracking-wider uppercase transition-colors flex items-center gap-1.5 ${
+              domainFilter.toLowerCase() === "routine"
+                ? "bg-sky-500 text-black shadow font-bold"
+                : "text-sky-300 bg-sky-950/40 border border-sky-500/30 hover:bg-sky-950/70"
+            }`}
+          >
+            <span>📋</span>
+            <span>Routine ({routineCount})</span>
+          </button>
+          <button
+            onClick={() => setDomainFilter("work_task")}
+            className={`px-3 py-1 rounded-lg font-mono text-[9px] font-bold tracking-wider uppercase transition-colors flex items-center gap-1.5 ${
+              ["work_task", "work"].includes(domainFilter.toLowerCase())
+                ? "bg-indigo-500 text-white shadow font-bold"
+                : "text-indigo-300 bg-indigo-950/40 border border-indigo-500/30 hover:bg-indigo-950/70"
+            }`}
+          >
+            <span>💼</span>
+            <span>Work Task ({workCount})</span>
+          </button>
         </div>
       </div>
 

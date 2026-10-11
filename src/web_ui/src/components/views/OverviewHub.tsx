@@ -5,6 +5,7 @@ import { EchoShowModal } from "../ui/EchoShowModal";
 import { speakAlexaReassurance } from "@/utils/audioEffects";
 
 interface OverviewHubProps {
+  statusData?: any;
   routinesData: { tasks: PlannedTask[] } | undefined;
   actionsData: { actions: VerifiedAction[] } | undefined;
   socialData: { contacts: SocialEntity[] } | undefined;
@@ -15,6 +16,7 @@ interface OverviewHubProps {
 }
 
 export function OverviewHub({
+  statusData,
   routinesData,
   actionsData,
   socialData,
@@ -31,8 +33,11 @@ export function OverviewHub({
   const contacts = socialData?.contacts || [];
   const topics = topicsData?.topics || [];
 
-  const completedTasks = tasks.filter((t) => t.status === "completed").length;
-  const pendingTasks = tasks.filter((t) => t.status === "pending").length;
+  const completedTasks = statusData?.stats?.planned_tasks_completed ?? tasks.filter((t) => t.status === "completed").length;
+  const pendingTasks = statusData?.stats?.planned_tasks_pending ?? tasks.filter((t) => t.status !== "completed").length;
+  const totalActionsCount = statusData?.stats?.total_actions ?? actions.length;
+  const totalContactsCount = statusData?.stats?.total_contacts ?? contacts.length;
+  const totalTopicsCount = statusData?.stats?.total_topics ?? topics.length;
 
   const handleOpenEchoModal = (template: string) => {
     setActiveEchoTemplate(template);
@@ -40,7 +45,7 @@ export function OverviewHub({
   };
 
   const handleAlexaVoiceQuery = () => {
-    const text = `EXAMEN Ambient Status: Domestic posture is all clear. You have ${actions.length} verified acoustic actions, ${completedTasks} of ${tasks.length} routines completed, and ${contacts.length} social contacts indexed.`;
+    const text = `EXAMEN Ambient Status: Domestic posture is all clear. You have ${totalActionsCount} verified acoustic actions, ${completedTasks} of ${tasks.length} routines completed, and ${totalContactsCount} social contacts indexed.`;
     speakAlexaReassurance(text);
     handleOpenEchoModal("ACTION_VERIFIED_BADGE");
   };

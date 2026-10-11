@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { createPortal } from "react-dom";
 
 interface CreateActionModalProps {
   isOpen: boolean;
@@ -7,9 +8,14 @@ interface CreateActionModalProps {
 }
 
 export function CreateActionModal({ isOpen, onClose, onSubmit }: CreateActionModalProps) {
+  const [mounted, setMounted] = useState(false);
   const [statement, setStatement] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   useEffect(() => {
     if (isOpen) {
@@ -27,7 +33,7 @@ export function CreateActionModal({ isOpen, onClose, onSubmit }: CreateActionMod
     }
   }, [isOpen, onClose]);
 
-  if (!isOpen) return null;
+  if (!isOpen || !mounted) return null;
 
   const quickUtterances = [
     "I just unplugged the clothes iron from the bedroom wall.",
@@ -56,9 +62,9 @@ export function CreateActionModal({ isOpen, onClose, onSubmit }: CreateActionMod
     }
   };
 
-  return (
+  return createPortal(
     <div
-      className="fixed inset-0 z-[9999] overflow-y-auto bg-black/80 backdrop-blur-md flex items-center justify-center p-4 sm:p-6"
+      className="fixed inset-0 z-[9999] overflow-y-auto bg-black/85 backdrop-blur-md flex items-center justify-center p-4 sm:p-6"
       onClick={onClose}
       aria-modal="true"
       role="dialog"
@@ -151,6 +157,7 @@ export function CreateActionModal({ isOpen, onClose, onSubmit }: CreateActionMod
           </div>
         </form>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

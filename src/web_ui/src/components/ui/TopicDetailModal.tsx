@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { BriefingReport } from "@/types/schemas";
 import { speakAlexaReassurance } from "@/utils/audioEffects";
 
@@ -9,8 +10,13 @@ interface TopicDetailModalProps {
 }
 
 export function TopicDetailModal({ topic, isOpen, onClose }: TopicDetailModalProps) {
+  const [mounted, setMounted] = useState(false);
   const [copied, setCopied] = useState(false);
   const [broadcasting, setBroadcasting] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   useEffect(() => {
     if (isOpen) {
@@ -28,10 +34,10 @@ export function TopicDetailModal({ topic, isOpen, onClose }: TopicDetailModalPro
     }
   }, [isOpen, onClose]);
 
-  if (!isOpen || !topic) return null;
+  if (!isOpen || !mounted || !topic) return null;
 
   const handleCopy = () => {
-    const text = `# ${topic.topic_title}\n\n${topic.explanatory_synthesis || ""}\n\n## Executive Summary\n${(topic.executive_summary || []).map(s => `- ${s}`).join("\n")}\n\n## Action Items\n${(topic.action_items || []).map(a => `- ${a}`).join("\n")}`;
+    const text = `# ${topic.topic_title || "Topic Briefing"}\n\n${topic.explanatory_synthesis || ""}\n\n## Executive Summary\n${(topic.executive_summary || []).map(s => `- ${s}`).join("\n")}\n\n## Action Items\n${(topic.action_items || []).map(a => `- ${a}`).join("\n")}`;
     navigator.clipboard.writeText(text);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
@@ -39,12 +45,12 @@ export function TopicDetailModal({ topic, isOpen, onClose }: TopicDetailModalPro
 
   const handleBroadcast = () => {
     setBroadcasting(true);
-    const speech = `Topic briefing for ${topic.topic_title}: ${topic.explanatory_synthesis || (topic.executive_summary?.[0] || "Synthesized analysis completed.")}`;
+    const speech = `Topic briefing for ${topic.topic_title || "this topic"}: ${topic.explanatory_synthesis || (topic.executive_summary?.[0] || "Synthesized analysis completed.")}`;
     speakAlexaReassurance(speech);
     setTimeout(() => setBroadcasting(false), 3000);
   };
 
-  return (
+  return createPortal(
     <div
       className="fixed inset-0 z-[9999] overflow-y-auto bg-black/85 backdrop-blur-md flex items-center justify-center p-4 sm:p-6"
       onClick={onClose}
@@ -198,6 +204,7 @@ export function TopicDetailModal({ topic, isOpen, onClose }: TopicDetailModalPro
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

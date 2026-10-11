@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { createPortal } from "react-dom";
 
 interface CreateTaskModalProps {
   isOpen: boolean;
@@ -7,12 +8,17 @@ interface CreateTaskModalProps {
 }
 
 export function CreateTaskModal({ isOpen, onClose, onSubmit }: CreateTaskModalProps) {
+  const [mounted, setMounted] = useState(false);
   const [title, setTitle] = useState("");
   const [domain, setDomain] = useState<"safety" | "routine" | "work_task">("safety");
   const [scheduledTime, setScheduledTime] = useState("08:00");
   const [recurrence, setRecurrence] = useState("daily");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   // Lock scroll on background body when modal is mounted
   useEffect(() => {
@@ -31,7 +37,7 @@ export function CreateTaskModal({ isOpen, onClose, onSubmit }: CreateTaskModalPr
     }
   }, [isOpen, onClose]);
 
-  if (!isOpen) return null;
+  if (!isOpen || !mounted) return null;
 
   const quickSuggestions = [
     { title: "Iron Unplugged", domain: "safety" as const, time: "07:45" },
@@ -61,9 +67,9 @@ export function CreateTaskModal({ isOpen, onClose, onSubmit }: CreateTaskModalPr
     }
   };
 
-  return (
+  return createPortal(
     <div 
-      className="fixed inset-0 z-[9999] overflow-y-auto bg-black/80 backdrop-blur-md flex items-center justify-center p-4 sm:p-6"
+      className="fixed inset-0 z-[9999] overflow-y-auto bg-black/85 backdrop-blur-md flex items-center justify-center p-4 sm:p-6"
       onClick={onClose}
       aria-modal="true"
       role="dialog"
@@ -240,6 +246,7 @@ export function CreateTaskModal({ isOpen, onClose, onSubmit }: CreateTaskModalPr
           </div>
         </form>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

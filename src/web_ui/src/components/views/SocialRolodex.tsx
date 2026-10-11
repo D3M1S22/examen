@@ -152,8 +152,17 @@ export function SocialRolodex({
             placeholder="Search contacts, roles, tags, or commitments..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full bg-[#121419] border border-surface-container-highest rounded-full py-2.5 pl-10 pr-4 text-body-sm font-sans text-primary placeholder-zinc-500 focus:outline-none focus:border-primary transition-colors"
+            className="w-full bg-[#121419] border border-surface-container-highest rounded-full py-2.5 pl-10 pr-10 text-body-sm font-sans text-primary placeholder-zinc-500 focus:outline-none focus:border-primary transition-colors"
           />
+          {searchQuery && (
+            <button
+              onClick={() => setSearchQuery("")}
+              className="absolute right-3.5 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-white font-mono text-xs w-5 h-5 rounded-full flex items-center justify-center bg-white/5 hover:bg-white/10 transition-colors"
+              title="Clear search"
+            >
+              ✕
+            </button>
+          )}
         </div>
 
         {/* Filter Buttons */}
@@ -170,33 +179,36 @@ export function SocialRolodex({
           </button>
           <button
             onClick={() => setActiveFilter("NEEDS_ACTION")}
-            className={`px-4 py-2 rounded-full font-mono text-[10px] font-bold tracking-widest transition-colors ${
+            className={`px-4 py-2 rounded-full font-mono text-[10px] font-bold tracking-widest transition-colors flex items-center gap-1.5 ${
               activeFilter === "NEEDS_ACTION"
                 ? "bg-amber-500 text-black shadow"
-                : "text-secondary hover:bg-surface-container hover:text-primary"
+                : "text-amber-400/80 bg-amber-950/20 border border-amber-500/20 hover:bg-amber-950/40"
             }`}
           >
-            COMMITMENTS DUE ({needsActionCount})
+            <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+            <span>COMMITMENTS DUE ({needsActionCount})</span>
           </button>
           <button
             onClick={() => setActiveFilter("ENRICHED")}
-            className={`px-4 py-2 rounded-full font-mono text-[10px] font-bold tracking-widest transition-colors ${
+            className={`px-4 py-2 rounded-full font-mono text-[10px] font-bold tracking-widest transition-colors flex items-center gap-1.5 ${
               activeFilter === "ENRICHED"
                 ? "bg-cyan-500 text-black shadow"
-                : "text-secondary hover:bg-surface-container hover:text-primary"
+                : "text-cyan-400/80 bg-cyan-950/20 border border-cyan-500/20 hover:bg-cyan-950/40"
             }`}
           >
-            AI ENRICHED ({enrichedCount})
+            <span className="w-1.5 h-1.5 rounded-full bg-cyan-400" />
+            <span>AI ENRICHED ({enrichedCount})</span>
           </button>
           <button
             onClick={() => setActiveFilter("TODAY")}
-            className={`px-4 py-2 rounded-full font-mono text-[10px] font-bold tracking-widest transition-colors ${
+            className={`px-4 py-2 rounded-full font-mono text-[10px] font-bold tracking-widest transition-colors flex items-center gap-1.5 ${
               activeFilter === "TODAY"
                 ? "bg-emerald-500 text-black shadow"
-                : "text-secondary hover:bg-surface-container hover:text-primary"
+                : "text-emerald-400/80 bg-emerald-950/20 border border-emerald-500/20 hover:bg-emerald-950/40"
             }`}
           >
-            NEW TODAY
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+            <span>NEW TODAY</span>
           </button>
         </div>
       </div>

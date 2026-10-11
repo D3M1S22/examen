@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { createPortal } from "react-dom";
 import { SocialEntity } from "@/types/schemas";
 
 interface FollowUpModalProps {
@@ -8,8 +9,13 @@ interface FollowUpModalProps {
 }
 
 export function FollowUpModal({ contact, isOpen, onClose }: FollowUpModalProps) {
+  const [mounted, setMounted] = useState(false);
   const [copied, setCopied] = useState(false);
   const [draftText, setDraftText] = useState("");
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   useEffect(() => {
     if (isOpen) {
@@ -27,19 +33,22 @@ export function FollowUpModal({ contact, isOpen, onClose }: FollowUpModalProps) 
     }
   }, [isOpen, onClose]);
 
+  const contactName = contact ? (contact.name || contact.person_name || "there") : "there";
+
   useEffect(() => {
     if (contact) {
       const commitmentsStr = (contact.commitments || [])
         .map((c: any) => typeof c === "object" ? c.description : String(c))
         .join("; ");
       const topicsStr = (contact.key_topics || []).slice(0, 3).join(", ");
+      const firstName = contactName.split(" ")[0];
 
-      const draft = `Hi ${contact.name.split(" ")[0]},\n\nGreat connecting with you earlier! I really enjoyed our discussion around ${topicsStr || "our recent collaboration"}.\n\nAs promised, I wanted to follow up regarding: ${commitmentsStr || "our next steps and scheduling time to sync"}.\n\nLet me know if you have some availability this week.\n\nBest regards,\n[Your Name]`;
+      const draft = `Hi ${firstName},\n\nGreat connecting with you earlier! I really enjoyed our discussion around ${topicsStr || "our recent collaboration"}.\n\nAs promised, I wanted to follow up regarding: ${commitmentsStr || "our next steps and scheduling time to sync"}.\n\nLet me know if you have some availability this week.\n\nBest regards,\n[Your Name]`;
       setDraftText(draft);
     }
-  }, [contact]);
+  }, [contact, contactName]);
 
-  if (!isOpen || !contact) return null;
+  if (!isOpen || !mounted || !contact) return null;
 
   const handleCopy = () => {
     navigator.clipboard.writeText(draftText);
@@ -47,7 +56,7 @@ export function FollowUpModal({ contact, isOpen, onClose }: FollowUpModalProps) 
     setTimeout(() => setCopied(false), 2000);
   };
 
-  return (
+  return createPortal(
     <div
       className="fixed inset-0 z-[9999] overflow-y-auto bg-black/85 backdrop-blur-md flex items-center justify-center p-4 sm:p-6"
       onClick={onClose}
@@ -112,6 +121,7 @@ export function FollowUpModal({ contact, isOpen, onClose }: FollowUpModalProps) 
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
