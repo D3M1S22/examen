@@ -28,7 +28,15 @@ amazon_challenge/
 │   ├── 04_hackathon_strategy_demo.md     # 3-min video demo script & roadmap
 │   ├── 05_tech_stack_resources.md        # Tech stack, frameworks, and submodule references
 │   ├── 06_aws_cloud_deployment_architecture.md # AWS cloud topology and hosting
-│   └── 07_repository_structure_modules.md      # This document
+│   ├── 07_repository_structure_modules.md      # This document
+│   └── next_steps/                       # 🚀 Pipeline Refinements Roadmap (Next_steps.txt)
+│       ├── 00_overview.md                # High-level architecture, roadmap, & schema evolution
+│       ├── 01_deep_topic_contextual_synthesis.md # Adaptive explanatory post-meeting/lecture briefing
+│       ├── 02_gatekeeper_context_and_multimodal_telemetry.md # Ring buffer context & Bee GPS/diarization
+│       ├── 03_session_merging_and_micro_event_splitting.md # Session continuity & micro-event forking
+│       ├── 04_ambient_scheduled_tasks.md # Spoken future task extraction & verification loop
+│       ├── 05_structured_social_commitments.md # Bilateral promise tracking (debtor/deadlines)
+│       └── 06_social_web_enrichment.md   # Autonomous LinkedIn/public bio enrichment
 │
 ├── resources/                            # 📦 External Git submodules for offline reference
 │   ├── agentcore-samples/                # Official AWS Labs reference architectures

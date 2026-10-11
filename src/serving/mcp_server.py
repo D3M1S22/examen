@@ -23,12 +23,17 @@ from starlette.responses import JSONResponse, StreamingResponse
 from starlette.staticfiles import StaticFiles
 
 from src.core.config import settings
-from src.core.schemas import PlannedTask
+from src.core.schemas import PlannedTask, SocialCommitment
 from src.core.storage import get_storage_store
 from src.pipeline.app import agent_invocation
 from src.serving.tools import (
     create_planned_task,
+    get_contact_profile,
     get_daily_actions_recap,
+    get_session_dossier,
+    get_social_commitments,
+    get_upcoming_tasks,
+    list_session_dossiers,
     query_social_contact,
     verify_action_status,
 )
@@ -59,12 +64,17 @@ def broadcast_event(event_type: str, data: Optional[Dict[str, Any]] = None) -> N
             _sse_subscribers.discard(q)
 
 
-# Register the 5 core MCP tools for Alexa+
+# Register the 10 core MCP tools for Alexa+
 mcp.tool()(create_planned_task)
+mcp.tool()(get_upcoming_tasks)
 mcp.tool()(verify_action_status)
 mcp.tool()(get_daily_actions_recap)
 mcp.tool()(query_social_contact)
+mcp.tool()(get_contact_profile)
+mcp.tool()(get_social_commitments)
 mcp.tool()(get_topic_briefing)
+mcp.tool()(get_session_dossier)
+mcp.tool()(list_session_dossiers)
 
 
 # ---------------------------------------------------------------------------
@@ -79,9 +89,11 @@ async def api_status(request: Request) -> JSONResponse:
     planned_tasks = store.list_planned_tasks()
     all_contacts = store.search_social_contact("")
     all_topics = store.list_topic_briefings(limit=100)
+    all_commitments = store.list_social_commitments(limit=100)
 
     completed_tasks = sum(1 for t in planned_tasks if t.status == "completed")
     pending_tasks = sum(1 for t in planned_tasks if t.status != "completed")
+    open_commitments = sum(1 for c in all_commitments if c.status == "open")
 
     return JSONResponse({
         "status": "online",
@@ -103,6 +115,8 @@ async def api_status(request: Request) -> JSONResponse:
             "planned_tasks_pending": pending_tasks,
             "total_contacts": len(all_contacts),
             "total_topics": len(all_topics),
+            "total_commitments": len(all_commitments),
+            "open_commitments": open_commitments,
         },
     })
 
@@ -194,6 +208,11 @@ async def api_routines(request: Request) -> JSONResponse:
             domain=body.get("domain", "routine"),
             scheduled_time=body.get("scheduled_time"),
             recurrence=body.get("recurrence", "none"),
+            origin=body.get("origin", "manual"),
+            raw_statement=body.get("raw_statement"),
+            confidence=float(body.get("confidence", 1.0)),
+            relative_time_anchor=body.get("relative_time_anchor"),
+            session_id=body.get("session_id"),
             status="pending",
         )
         task_id = store.save_planned_task(task)
@@ -201,6 +220,7 @@ async def api_routines(request: Request) -> JSONResponse:
             "task_id": task_id,
             "title": task.title,
             "domain": task.domain,
+            "origin": task.origin,
         })
         return JSONResponse({
             "success": True,
@@ -209,16 +229,27 @@ async def api_routines(request: Request) -> JSONResponse:
             "domain": task.domain,
             "scheduled_time": task.scheduled_time,
             "recurrence": task.recurrence,
+            "origin": task.origin,
+            "raw_statement": task.raw_statement,
+            "confidence": task.confidence,
+            "relative_time_anchor": task.relative_time_anchor,
+            "session_id": task.session_id,
             "status": task.status,
         }, status_code=201)
 
     # GET
     domain = request.query_params.get("domain")
     status = request.query_params.get("status")
+    origin = request.query_params.get("origin")
     filter_domain = None if (not domain or domain.lower() == "all") else domain.lower()
     filter_status = None if (not status or status.lower() == "all") else status.lower()
+    filter_origin = None if (not origin or origin.lower() == "all") else origin.lower()
 
-    tasks = store.list_planned_tasks(domain=filter_domain, status=filter_status)
+    tasks = store.list_planned_tasks(
+        domain=filter_domain,
+        status=filter_status,
+        origin=filter_origin,
+    )
     result = []
     for t in tasks:
         result.append({
@@ -227,6 +258,11 @@ async def api_routines(request: Request) -> JSONResponse:
             "domain": t.domain,
             "scheduled_time": t.scheduled_time,
             "recurrence": t.recurrence,
+            "origin": t.origin,
+            "raw_statement": t.raw_statement,
+            "confidence": t.confidence,
+            "relative_time_anchor": t.relative_time_anchor,
+            "session_id": t.session_id,
             "status": t.status,
             "completed_at": t.completed_at,
             "verified_action_id": t.verified_action_id,
@@ -268,6 +304,12 @@ async def api_routine_detail(request: Request) -> JSONResponse:
         task.scheduled_time = body["scheduled_time"]
     if "recurrence" in body:
         task.recurrence = body["recurrence"]
+    if "origin" in body:
+        task.origin = body["origin"]
+    if "raw_statement" in body:
+        task.raw_statement = body["raw_statement"]
+    if "relative_time_anchor" in body:
+        task.relative_time_anchor = body["relative_time_anchor"]
     if "status" in body:
         new_status = body["status"]
         if new_status == "completed" and task.status != "completed":
@@ -287,6 +329,11 @@ async def api_routine_detail(request: Request) -> JSONResponse:
         "domain": task.domain,
         "scheduled_time": task.scheduled_time,
         "recurrence": task.recurrence,
+        "origin": task.origin,
+        "raw_statement": task.raw_statement,
+        "confidence": task.confidence,
+        "relative_time_anchor": task.relative_time_anchor,
+        "session_id": task.session_id,
         "status": task.status,
         "completed_at": task.completed_at,
         "verified_action_id": task.verified_action_id,
@@ -341,16 +388,476 @@ async def api_contacts(request: Request) -> JSONResponse:
 
     result = []
     for c in contacts:
+        comms_list = []
+        for com in (c.commitments or []):
+            if hasattr(com, "model_dump"):
+                comms_list.append(com.model_dump())
+            elif isinstance(com, dict):
+                comms_list.append(com)
+            else:
+                comms_list.append(str(com))
+
         result.append({
             "id": c.id,
             "name": c.person_name,
             "company_or_role": c.company_or_role,
             "contact_info": c.contact_info,
             "key_topics": c.key_topics,
-            "commitments": c.commitments,
+            "commitments": comms_list,
+            "web_profile": c.web_profile.model_dump() if c.web_profile else None,
             "timestamp": c.timestamp,
         })
     return JSONResponse({"contacts": result, "count": len(result)})
+
+
+@mcp.custom_route("/api/contacts/{contact_id}/profile", methods=["GET"])
+async def api_contact_profile(request: Request) -> JSONResponse:
+    """Returns detailed dossier and web profile for a specific contact."""
+    contact_id = request.path_params["contact_id"]
+    from src.serving.tools.social_tools import execute_get_contact_profile
+    data = execute_get_contact_profile(name_or_query=contact_id)
+    if not data.get("found"):
+        return JSONResponse({"error": f"Contact '{contact_id}' not found", "found": False}, status_code=404)
+    return JSONResponse(data)
+
+
+@mcp.custom_route("/api/contacts/{contact_id}/enrich", methods=["POST"])
+async def api_enrich_contact(request: Request) -> JSONResponse:
+    """Manually or autonomously triggers web intelligence enrichment for a contact."""
+    contact_id = request.path_params["contact_id"]
+    store = get_storage_store()
+    contact = store.get_social_contact(contact_id)
+    if not contact:
+        matches = store.search_social_contact(query=contact_id)
+        if matches:
+            contact = matches[0]
+
+    if not contact:
+        return JSONResponse({"error": f"Contact '{contact_id}' not found", "found": False}, status_code=404)
+
+    from src.pipeline.nodes.social_profiler import enrich_social_contact_sync
+    profile = enrich_social_contact_sync(contact, store=store, force=True)
+    if not profile:
+        return JSONResponse({
+            "success": False,
+            "message": f"Unable to enrich profile for '{contact.person_name}': insufficient disambiguation anchors or no results.",
+            "contact_id": contact.id,
+        }, status_code=422)
+
+    contact_dict = {
+        "id": contact.id,
+        "name": contact.person_name,
+        "company_or_role": contact.company_or_role,
+        "web_profile": profile.model_dump(),
+    }
+    broadcast_event("contact_enriched", contact_dict)
+    return JSONResponse({
+        "success": True,
+        "message": f"Successfully enriched profile for '{contact.person_name}'.",
+        "web_profile": profile.model_dump(),
+        "contact": contact_dict,
+    })
+
+
+@mcp.custom_route("/api/commitments", methods=["GET"])
+async def api_commitments(request: Request) -> JSONResponse:
+    """Returns bilateral commitments with optional filtering."""
+    store = get_storage_store()
+    contact_name = request.query_params.get("contact_name")
+    debtor = request.query_params.get("debtor")
+    status = request.query_params.get("status")
+    limit = int(request.query_params.get("limit", "50"))
+
+    commitments = store.list_social_commitments(
+        contact_name=contact_name,
+        debtor=debtor,
+        status=status,
+        limit=limit,
+    )
+    result = [
+        {
+            "id": c.id,
+            "contact_name": c.contact_name,
+            "debtor": c.debtor,
+            "description": c.description,
+            "due_date_raw": c.due_date_raw,
+            "normalized_deadline": c.normalized_deadline,
+            "status": c.status,
+            "auto_scheduled_task_id": c.auto_scheduled_task_id,
+            "created_at": c.created_at,
+        }
+        for c in commitments
+    ]
+    return JSONResponse({"commitments": result, "count": len(result)})
+
+
+@mcp.custom_route("/api/commitments", methods=["POST"])
+async def api_create_commitment(request: Request) -> JSONResponse:
+    """Manually creates a new bilateral commitment."""
+    store = get_storage_store()
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+
+    contact_name = body.get("contact_name")
+    description = body.get("description")
+    if not contact_name or not description:
+        return JSONResponse({"error": "Fields 'contact_name' and 'description' are required"}, status_code=400)
+
+    debtor = body.get("debtor", "user")
+    if debtor not in ("user", "contact"):
+        debtor = "user"
+
+    commitment = SocialCommitment(
+        contact_name=contact_name.strip(),
+        debtor=debtor,
+        description=description.strip(),
+        due_date_raw=body.get("due_date_raw"),
+        normalized_deadline=body.get("normalized_deadline"),
+        status=body.get("status", "open"),
+    )
+    com_id = store.save_social_commitment(commitment)
+    saved = store.get_social_commitment(com_id)
+    if not saved:
+        return JSONResponse({"error": "Failed to create commitment"}, status_code=500)
+
+    com_dict = {
+        "id": saved.id,
+        "contact_name": saved.contact_name,
+        "debtor": saved.debtor,
+        "description": saved.description,
+        "due_date_raw": saved.due_date_raw,
+        "normalized_deadline": saved.normalized_deadline,
+        "status": saved.status,
+        "auto_scheduled_task_id": saved.auto_scheduled_task_id,
+        "created_at": saved.created_at,
+    }
+    broadcast_event("commitment_created", com_dict)
+    # If a planned task was created, also notify routines
+    if saved.auto_scheduled_task_id:
+        task = store.get_planned_task(saved.auto_scheduled_task_id)
+        if task:
+            broadcast_event("routine_created", {
+                "id": task.id,
+                "title": task.title,
+                "domain": task.domain,
+                "scheduled_time": task.scheduled_time,
+                "recurrence": task.recurrence,
+                "origin": task.origin,
+                "status": task.status,
+                "created_at": task.created_at,
+            })
+    return JSONResponse({"success": True, "commitment": com_dict}, status_code=201)
+
+
+@mcp.custom_route("/api/commitments/{commitment_id}/fulfill", methods=["POST"])
+async def api_fulfill_commitment(request: Request) -> JSONResponse:
+    """Marks a bilateral commitment as fulfilled."""
+    store = get_storage_store()
+    commitment_id = request.path_params.get("commitment_id")
+    if not commitment_id:
+        return JSONResponse({"error": "Missing commitment_id"}, status_code=400)
+
+    updated = store.update_social_commitment_status(commitment_id, "fulfilled")
+    if not updated:
+        return JSONResponse({"error": f"Commitment '{commitment_id}' not found"}, status_code=404)
+
+    com = store.get_social_commitment(commitment_id)
+    com_dict = {
+        "id": com.id,
+        "contact_name": com.contact_name,
+        "debtor": com.debtor,
+        "description": com.description,
+        "due_date_raw": com.due_date_raw,
+        "normalized_deadline": com.normalized_deadline,
+        "status": com.status,
+        "auto_scheduled_task_id": com.auto_scheduled_task_id,
+        "created_at": com.created_at,
+    }
+    broadcast_event("commitment_updated", com_dict)
+    if com.auto_scheduled_task_id:
+        task = store.get_planned_task(com.auto_scheduled_task_id)
+        if task:
+            broadcast_event("routine_updated", {
+                "id": task.id,
+                "title": task.title,
+                "status": task.status,
+                "completed_at": task.completed_at,
+            })
+
+    return JSONResponse({"success": True, "commitment": com_dict})
+
+
+@mcp.custom_route("/api/commitments/{commitment_id}/cancel", methods=["POST"])
+async def api_cancel_commitment(request: Request) -> JSONResponse:
+    """Marks a bilateral commitment as cancelled."""
+    store = get_storage_store()
+    commitment_id = request.path_params.get("commitment_id")
+    if not commitment_id:
+        return JSONResponse({"error": "Missing commitment_id"}, status_code=400)
+
+    updated = store.update_social_commitment_status(commitment_id, "cancelled")
+    if not updated:
+        return JSONResponse({"error": f"Commitment '{commitment_id}' not found"}, status_code=404)
+
+    com = store.get_social_commitment(commitment_id)
+    com_dict = {
+        "id": com.id,
+        "contact_name": com.contact_name,
+        "debtor": com.debtor,
+        "description": com.description,
+        "due_date_raw": com.due_date_raw,
+        "normalized_deadline": com.normalized_deadline,
+        "status": com.status,
+        "auto_scheduled_task_id": com.auto_scheduled_task_id,
+        "created_at": com.created_at,
+    }
+    broadcast_event("commitment_updated", com_dict)
+    return JSONResponse({"success": True, "commitment": com_dict})
+
+
+@mcp.custom_route("/api/commitments/{commitment_id}", methods=["GET", "DELETE"])
+async def api_commitment_detail(request: Request) -> JSONResponse:
+    """Retrieves (GET) or deletes (DELETE) a bilateral commitment."""
+    store = get_storage_store()
+    commitment_id = request.path_params.get("commitment_id")
+    if not commitment_id:
+        return JSONResponse({"error": "Missing commitment_id"}, status_code=400)
+
+    com = store.get_social_commitment(commitment_id)
+    if not com:
+        return JSONResponse({"error": f"Commitment '{commitment_id}' not found"}, status_code=404)
+
+    if request.method == "DELETE":
+        deleted = store.delete_social_commitment(commitment_id)
+        if not deleted:
+            return JSONResponse({"error": "Failed to delete commitment"}, status_code=500)
+        broadcast_event("commitment_deleted", {"id": commitment_id, "contact_name": com.contact_name})
+        return JSONResponse({"success": True, "deleted_id": commitment_id})
+
+    # GET
+    com_dict = {
+        "id": com.id,
+        "contact_name": com.contact_name,
+        "debtor": com.debtor,
+        "description": com.description,
+        "due_date_raw": com.due_date_raw,
+        "normalized_deadline": com.normalized_deadline,
+        "status": com.status,
+        "auto_scheduled_task_id": com.auto_scheduled_task_id,
+        "created_at": com.created_at,
+    }
+    return JSONResponse({"commitment": com_dict})
+
+
+@mcp.custom_route("/api/cards/preview", methods=["GET"])
+async def api_cards_preview(request: Request) -> JSONResponse:
+    """Returns rich card payloads and spoken voice text for Echo Show Ext-App templates."""
+    store = get_storage_store()
+    template = request.query_params.get("template")
+
+    # 1. Briefing card
+    from src.serving.tools.topic_tools import execute_get_topic_briefing
+    briefing_card = execute_get_topic_briefing(store=store)
+    if not briefing_card.get("found"):
+        briefing_card = {
+            "found": True,
+            "topic_title": "AWS Bedrock AgentCore & Runtime Architecture",
+            "context_type": "tech_stack",
+            "created_at": datetime.now().isoformat(),
+            "executive_summary": [
+                "Serverless microVM execution runtime for autonomous LLM agents.",
+                "Sub-second state restoration and bidirectional audio streaming.",
+                "Built-in IAM credential isolation and automatic telemetry.",
+            ],
+            "explanatory_synthesis": "AWS Bedrock AgentCore provides high-performance microVM isolation tailored for ambient voice agents with strict low-latency requirements.",
+            "web_sources": ["https://aws.amazon.com/bedrock", "https://docs.aws.amazon.com/bedrock/agentcore"],
+            "action_items": ["Review IAM microVM execution policies", "Test audio chunking buffer"],
+            "display_template": "DEEP_BRIEFING_VIEWER",
+            "ui_card_type": "DEEP_BRIEFING_VIEWER",
+            "spoken_summary": "Here is the briefing on AWS Bedrock AgentCore Runtime. It provides serverless microVM execution for autonomous LLM agents.",
+            "card_payload": {
+                "template": "DEEP_BRIEFING_VIEWER",
+                "topic_title": "AWS Bedrock AgentCore & Runtime Architecture",
+                "title": "AWS Bedrock AgentCore & Runtime Architecture",
+                "context_type": "tech_stack",
+                "bullets": [
+                    "Serverless microVM execution runtime for autonomous LLM agents.",
+                    "Sub-second state restoration and bidirectional audio streaming.",
+                ],
+                "synthesis": "AWS Bedrock AgentCore provides high-performance microVM isolation tailored for ambient voice agents.",
+                "sources": ["https://aws.amazon.com/bedrock"],
+            },
+        }
+
+    # 2. Social profile card
+    from src.serving.tools.social_tools import execute_get_contact_profile
+    contacts_with_wp = [c for c in store.search_social_contact("") if c.web_profile]
+    if contacts_with_wp:
+        profile_card = execute_get_contact_profile(contacts_with_wp[0].person_name, force_enrich=False, store=store)
+    else:
+        profile_card = {
+            "found": True,
+            "display_template": "SOCIAL_PROFILE_CARD",
+            "ui_card_type": "SOCIAL_PROFILE_CARD",
+            "contact": {
+                "name": "Luca Bianchi",
+                "company_or_role": "VP of Infrastructure @ CloudScale",
+                "key_topics": ["Distributed Systems", "AWS Architecture"],
+            },
+            "web_profile": {
+                "headline": "VP of Infrastructure @ CloudScale | ex-AWS DynamoDB",
+                "organization": "CloudScale",
+                "current_role": "VP of Infrastructure",
+                "bio_summary": "Luca leads the distributed systems and cloud reliability team at CloudScale. Prior to CloudScale, he spent 6 years at AWS working on DynamoDB storage engines.",
+                "areas_of_expertise": ["Distributed Systems", "Kubernetes", "AWS Architecture"],
+                "linkedin_url": "https://www.linkedin.com/in/luca-bianchi-cloud",
+                "github_url": "https://github.com/lbianchi-infra",
+                "website_url": "https://cloudscale.io",
+                "confidence_score": 0.98,
+            },
+            "commitments": [
+                {
+                    "contact_name": "Luca Bianchi",
+                    "debtor": "user",
+                    "description": "Send architecture whitepaper by Friday 5 PM",
+                    "status": "open",
+                }
+            ],
+            "open_commitments_count": 1,
+            "spoken_summary": "Luca Bianchi is VP of Infrastructure at CloudScale. You have 1 open bilateral commitment.",
+            "card_payload": {
+                "template": "SOCIAL_PROFILE_CARD",
+                "name": "Luca Bianchi",
+                "headline": "VP of Infrastructure @ CloudScale | ex-AWS DynamoDB",
+                "organization": "CloudScale",
+                "bio_summary": "Luca leads the distributed systems and cloud reliability team at CloudScale.",
+                "bio": "Luca leads the distributed systems and cloud reliability team at CloudScale.",
+                "areas_of_expertise": ["Distributed Systems", "Kubernetes", "AWS Architecture"],
+                "expertise": ["Distributed Systems", "Kubernetes", "AWS Architecture"],
+                "linkedin": "https://www.linkedin.com/in/luca-bianchi-cloud",
+                "github": "https://github.com/lbianchi-infra",
+                "website": "https://cloudscale.io",
+                "confidence": 0.98,
+                "commitments": [
+                    {"description": "Send architecture whitepaper by Friday 5 PM", "debtor": "user"}
+                ],
+                "spoken_summary": "Luca Bianchi is VP of Infrastructure at CloudScale. You have 1 open bilateral commitment.",
+            },
+        }
+
+    # 3. Commitments card
+    from src.serving.tools.social_tools import execute_get_social_commitments
+    commitments_card = execute_get_social_commitments(store=store)
+
+    # 4. Action verified badge
+    from src.serving.tools.action_tools import execute_verify_action_status, execute_get_daily_actions_recap, execute_get_upcoming_tasks
+    actions = store.list_recent_actions(limit=1)
+    if actions:
+        action_card = execute_verify_action_status(action_query=actions[0].action_type, store=store)
+    else:
+        action_card = {
+            "status": "verified",
+            "action_type": "unplug_clothes_iron",
+            "domain": "safety",
+            "timestamp": datetime.now().isoformat(),
+            "raw_statement": "Ho appena staccato il ferro da stiro prima di uscire.",
+            "confidence": 0.98,
+            "elapsed_time_human": "just now",
+            "display_template": "ACTION_VERIFIED_BADGE",
+            "ui_card_type": "ACTION_VERIFIED_BADGE",
+            "spoken_summary": "Yes, you confirmed unplugging the clothes iron: 'Ho appena staccato il ferro da stiro prima di uscire' just now.",
+            "card_payload": {
+                "template": "ACTION_VERIFIED_BADGE",
+                "status": "verified",
+                "action_type": "unplug_clothes_iron",
+                "domain": "safety",
+                "raw_statement": "Ho appena staccato il ferro da stiro prima di uscire.",
+                "confidence": 0.98,
+                "elapsed_time": "just now",
+                "elapsed_time_human": "just now",
+                "spoken_summary": "Yes, you confirmed unplugging the clothes iron: 'Ho appena staccato il ferro da stiro prima di uscire' just now.",
+            },
+        }
+
+    # 5. Daily recap
+    daily_card = execute_get_daily_actions_recap(store=store)
+
+    # 6. Upcoming tasks
+    upcoming_card = execute_get_upcoming_tasks(store=store)
+
+    # 7. Session dossier card (Milestone 3.2)
+    from src.serving.tools.session_tools import execute_get_session_dossier
+    session_card = execute_get_session_dossier(store=store)
+    if not session_card.get("found"):
+        session_card = {
+            "found": True,
+            "session_id": "sess-arch-01",
+            "title": "Architecture Session: Postgres to DynamoDB Migration",
+            "domain": "meeting",
+            "status": "concluded",
+            "start_time": datetime.now().isoformat(),
+            "concluded_at": datetime.now().isoformat(),
+            "location": {"place_name": "Conference Room B", "semantic_zone": "office"},
+            "transcript_chunks_count": 8,
+            "key_discussion_points": [
+                "DynamoDB Single-Table Design vs RDBMS Postgres",
+                "GSI replication delay and 400KB item size constraints",
+                "Deployment pipeline configuration via Terraform",
+            ],
+            "linked_micro_events": [
+                {
+                    "event_type": "action",
+                    "record_id": "act-tf-01",
+                    "headline": "Terraform apply executed (Tables created in eu-west-1)",
+                    "timestamp": datetime.now().isoformat(),
+                },
+                {
+                    "event_type": "task_scheduled",
+                    "record_id": "tsk-bench-01",
+                    "headline": "Deliver latency benchmarks to Marco",
+                    "timestamp": datetime.now().isoformat(),
+                },
+                {
+                    "event_type": "social_contact",
+                    "record_id": "soc-sarah-01",
+                    "headline": "Met Dr. Sarah Lin (Datadog Principal Architect)",
+                    "timestamp": datetime.now().isoformat(),
+                },
+            ],
+            "actions_count": 1,
+            "tasks_count": 1,
+            "contacts_count": 1,
+            "display_template": "SESSION_DOSSIER_VIEWER",
+            "ui_card_type": "SESSION_DOSSIER_VIEWER",
+            "spoken_summary": "Here is the recap for Architecture Session: Postgres to DynamoDB Migration. I tracked 1 verified action, 1 scheduled task, and 1 contact encountered.",
+            "card_payload": {
+                "template": "SESSION_DOSSIER_VIEWER",
+                "title": "Architecture Session: Postgres to DynamoDB Migration",
+                "location_name": "Conference Room B",
+                "explanatory_synthesis": "The team agreed on DynamoDB single-table design for sub-10ms read latencies, with GSI replication considerations.",
+                "actions": [{"headline": "Terraform apply executed (Tables created in eu-west-1)"}],
+                "tasks": [{"headline": "Deliver latency benchmarks to Marco"}],
+                "contacts": [{"headline": "Dr. Sarah Lin (Datadog Principal Architect)"}],
+            },
+        }
+
+    cards = {
+        "DEEP_BRIEFING_VIEWER": briefing_card,
+        "SOCIAL_PROFILE_CARD": profile_card,
+        "SOCIAL_COMMITMENTS_CARD": commitments_card,
+        "ACTION_VERIFIED_BADGE": action_card,
+        "DAILY_ACTIONS_RECAP": daily_card,
+        "UPCOMING_TASKS_VIEWER": upcoming_card,
+        "SESSION_DOSSIER_VIEWER": session_card,
+    }
+
+    if template:
+        selected = cards.get(template, briefing_card)
+        return JSONResponse(selected)
+
+    return JSONResponse({"cards": cards})
 
 
 @mcp.custom_route("/api/topics", methods=["GET"])
@@ -367,12 +874,70 @@ async def api_topics(request: Request) -> JSONResponse:
             "topic_title": t.topic_title,
             "context_type": t.context_type,
             "executive_summary": t.executive_summary,
+            "explanatory_synthesis": t.explanatory_synthesis,
             "web_sources": t.web_sources,
             "action_items": t.action_items,
             "deep_dive_markdown": t.deep_dive_markdown,
             "created_at": t.created_at,
         })
     return JSONResponse({"topics": result, "count": len(result)})
+
+
+@mcp.custom_route("/api/sessions", methods=["GET"])
+async def api_sessions(request: Request) -> JSONResponse:
+    """Lists recorded macro session dossiers."""
+    store = get_storage_store()
+    status = request.query_params.get("status")
+    limit = int(request.query_params.get("limit", "10"))
+    dossiers = store.list_session_dossiers(status=status, limit=limit)
+    result = [d.model_dump() for d in dossiers]
+    return JSONResponse({"sessions": result, "count": len(result)})
+
+
+@mcp.custom_route("/api/sessions/{session_id}", methods=["GET"])
+async def api_session_detail(request: Request) -> JSONResponse:
+    """Retrieves a specific session dossier by ID."""
+    session_id = request.path_params.get("session_id")
+    from src.serving.tools.session_tools import execute_get_session_dossier
+    data = execute_get_session_dossier(session_id=session_id)
+    if not data.get("found"):
+        return JSONResponse({"error": f"Session '{session_id}' not found", "found": False}, status_code=404)
+    return JSONResponse(data)
+
+
+@mcp.custom_route("/api/sessions/{session_id}/conclude", methods=["POST"])
+async def api_session_conclude(request: Request) -> JSONResponse:
+    """Marks a session dossier as concluded, with optional briefing report synthesis."""
+    session_id = request.path_params.get("session_id")
+    if not session_id:
+        return JSONResponse({"error": "Missing session_id"}, status_code=400)
+
+    from src.ingestion.session_manager import SessionManager
+    store = get_storage_store()
+    mgr = SessionManager(store=store)
+
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+
+    briefing_id = body.get("briefing_report_id")
+    auto_synthesize = body.get("auto_synthesize", False)
+
+    if auto_synthesize and not briefing_id:
+        mgr.synthesize_session_dossier(session_id=session_id, auto_conclude=True)
+        dossier = store.get_session_dossier(session_id)
+        if dossier:
+            broadcast_event("session_concluded", dossier.model_dump())
+            return JSONResponse({"success": True, "concluded": True, "dossier": dossier.model_dump()})
+
+    dossier = mgr.conclude_session(session_id=session_id, briefing_report_id=briefing_id)
+    if not dossier:
+        return JSONResponse({"error": f"Session '{session_id}' not found"}, status_code=404)
+
+    broadcast_event("session_concluded", dossier.model_dump())
+    return JSONResponse({"success": True, "concluded": True, "dossier": dossier.model_dump()})
 
 
 @mcp.custom_route("/api/simulate", methods=["POST"])

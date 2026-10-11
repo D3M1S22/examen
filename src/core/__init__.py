@@ -2,11 +2,18 @@
 
 from src.core.config import settings
 from src.core.schemas import (
+    LocationTelemetry,
+    UtteranceChunk,
     ChunkClassification,
+    SocialCommitment,
+    SocialWebProfile,
     SocialEntity,
     VerifiedAction,
+    PlannedTask,
     TopicExtraction,
     BriefingReport,
+    MicroEventRef,
+    SessionDossier,
     ExamenState,
 )
 
@@ -23,11 +30,18 @@ __all__ = [
     "get_fast_model",
     "get_reasoner_model",
     "has_active_model_credentials",
+    "LocationTelemetry",
+    "UtteranceChunk",
     "ChunkClassification",
+    "SocialCommitment",
+    "SocialWebProfile",
     "SocialEntity",
     "VerifiedAction",
+    "PlannedTask",
     "TopicExtraction",
     "BriefingReport",
+    "MicroEventRef",
+    "SessionDossier",
     "ExamenState",
 ]
 

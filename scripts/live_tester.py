@@ -102,7 +102,7 @@ def print_banner(db_path: str):
     print(f" {BOLD}Model:{RESET}        {YELLOW}{model}{RESET}")
     print(f" {BOLD}Credentials:{RESET}  {cred_status}")
     print(f" {BOLD}Storage:{RESET}      {WHITE}SQLite ({db_path}){RESET} — {CYAN}{pending_tasks_count} active planned tasks{RESET}")
-    print(f" {DIM}Commands: /tasks, /add-task <title> [domain], /actions, /social, /topics, /help, /exit{RESET}")
+    print(f" {DIM}Commands: /tasks, /actions, /commitments, /sessions, /profiles, /social, /topics, /simulate, /help, /exit{RESET}")
     print(f"{DIM}──────────────────────────────────────────────────────────────────────────────────{RESET}\n")
 
 
@@ -122,11 +122,15 @@ def handle_subcommand(cmd: str, store: SQLiteContextStore) -> bool:
 
     elif action == "/help":
         print(f"\n{BOLD}Available Commands:{RESET}")
-        print(f"  {CYAN}/tasks{RESET}                  List all planned tasks (pending and completed)")
+        print(f"  {CYAN}/tasks{RESET}                  List all planned tasks (pending and completed, with origin badges)")
         print(f"  {CYAN}/add-task <title> [domain]{RESET} Schedule a new planned task (domain: safety|routine|work_task)")
-        print(f"  {CYAN}/actions{RESET}                List recent verified completed actions")
+        print(f"  {CYAN}/actions{RESET}                List recent verified completed actions with spatial telemetry")
+        print(f"  {CYAN}/commitments{RESET}            List bilateral promises (debts you owe vs contact debts) [M1.3]")
+        print(f"  {CYAN}/sessions{RESET}               List continuous macro session dossiers with linked micro-events [M3.2]")
+        print(f"  {CYAN}/profiles{RESET}               List enriched executive web dossiers with LinkedIn links [M2.1]")
         print(f"  {CYAN}/social{RESET}                 List stored social contacts and bilateral commitments")
-        print(f"  {CYAN}/topics{RESET}                 List recent deep topic briefings and web sources")
+        print(f"  {CYAN}/topics{RESET}                 List recent deep topic briefings and explanatory syntheses [M1.1]")
+        print(f"  {CYAN}/simulate [name]{RESET}        Run Phase 1-3 mock conversation scenarios interactively")
         print(f"  {CYAN}/clear{RESET}                  Clear terminal screen")
         print(f"  {CYAN}/exit{RESET}                   Exit the interactive tester")
         return True
@@ -212,6 +216,68 @@ def handle_subcommand(cmd: str, store: SQLiteContextStore) -> bool:
                 if b.executive_summary:
                     print(f"    {DIM}Summary: {b.executive_summary[0]}{RESET}")
                 print(f"    {DIM}Sources: {len(b.web_sources)} web reference(s){RESET}")
+        return True
+
+    elif action == "/commitments":
+        print_section("Bilateral Social Commitments [M1.3]", "🤝", YELLOW)
+        commitments = store.list_social_commitments(limit=20)
+        if not commitments:
+            print(f"  {DIM}No social commitments stored yet.{RESET}")
+        else:
+            for c in commitments:
+                debtor_badge = f"{YELLOW}📤 You Promised{RESET}" if c.debtor == "user" else f"{CYAN}📥 Contact Promised{RESET}"
+                status_color = GREEN if c.status == "fulfilled" else YELLOW
+                task_str = f" [Linked Task: {c.auto_scheduled_task_id}]" if c.auto_scheduled_task_id else ""
+                print(f"  • [{status_color}{c.status.upper()}{RESET}] {BOLD}{c.contact_name}{RESET} — {debtor_badge}: \"{c.description}\" ({c.due_date_raw or 'No due date'}){task_str}")
+        return True
+
+    elif action == "/sessions":
+        print_section("Macro Session Dossiers [M3.2]", "📂", MAGENTA)
+        dossiers = store.list_session_dossiers(limit=10)
+        if not dossiers:
+            print(f"  {DIM}No session dossiers stored yet.{RESET}")
+        else:
+            for d in dossiers:
+                status_color = GREEN if d.status == "concluded" else YELLOW
+                print(f"  • [{status_color}{d.status.upper()}{RESET}] {BOLD}{d.title or d.session_id}{RESET} ({CYAN}{d.domain}{RESET}) — Started: {DIM}{d.start_time}{RESET}")
+                print(f"    Chunks: {len(d.transcript_chunks)} | Micro-events: {len(d.linked_micro_events)}")
+                for ref in d.linked_micro_events[:4]:
+                    print(f"    - [{ref.event_type.upper()}] {ref.headline}")
+        return True
+
+    elif action == "/profiles":
+        print_section("Executive Web Profiles [M2.1]", "⚡", CYAN)
+        contacts = store.search_social_contact("")
+        profiled = [c for c in contacts if c.web_profile]
+        if not profiled:
+            print(f"  {DIM}No contacts with enriched web profiles yet.{RESET}")
+        else:
+            for c in profiled:
+                wp = c.web_profile
+                print(f"  • {BOLD}{c.person_name}{RESET} — {CYAN}{wp.headline or c.company_or_role}{RESET} (Match: {wp.confidence_score*100:.0f}%)")
+                if wp.linkedin_url:
+                    print(f"    🔗 LinkedIn: {wp.linkedin_url}")
+                if wp.areas_of_expertise:
+                    print(f"    🏷️ Expertise: {', '.join(wp.areas_of_expertise[:4])}")
+                if wp.bio_summary:
+                    print(f"    📖 Bio: {DIM}\"{wp.bio_summary[:120]}...\"{RESET}")
+        return True
+
+    elif action == "/simulate":
+        from scripts.simulate_mock_conversations import execute_scenario, load_mock_scenarios
+        scenarios = load_mock_scenarios()
+        target_name = parts[1].strip() if len(parts) > 1 else None
+        if target_name:
+            matched = next((s for s in scenarios if s.get("id") == target_name), None)
+            if matched:
+                execute_scenario(matched, use_mock_ai=True)
+            else:
+                print(f"{RED}Unknown scenario '{target_name}'. Available: {[s['id'] for s in scenarios]}{RESET}")
+        else:
+            print(f"\n{BOLD}Available Mock Scenarios:{RESET}")
+            for sc in scenarios:
+                print(f"  • {CYAN}{sc['id']}{RESET} — {sc['title']} ({MAGENTA}{sc['milestone']}{RESET})")
+            print(f"Run with: {YELLOW}/simulate <id>{RESET}\n")
         return True
 
     return False

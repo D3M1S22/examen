@@ -16,6 +16,10 @@ from src.core.schemas import (
 from src.core.storage.sqlite_store import SQLiteContextStore
 from src.pipeline.nodes.action_state import node_extract_action
 from src.pipeline.nodes.persist import node_persist
+from src.pipeline.nodes.scheduler import (
+    node_extract_scheduled_task,
+    parse_relative_time_expression,
+)
 from src.pipeline.nodes.social import node_extract_social
 from src.pipeline.nodes.topic_research import node_topic_research
 
@@ -30,6 +34,7 @@ def temp_store(monkeypatch):
     monkeypatch.setattr("src.core.storage.get_storage_store", lambda: store)
     monkeypatch.setattr("src.pipeline.nodes.action_state.get_storage_store", lambda: store)
     monkeypatch.setattr("src.pipeline.nodes.social.get_storage_store", lambda: store)
+    monkeypatch.setattr("src.pipeline.nodes.social_profiler.get_storage_store", lambda: store)
     monkeypatch.setattr("src.pipeline.nodes.persist.get_storage_store", lambda: store)
 
     yield store
@@ -202,6 +207,38 @@ class TestSocialNode:
         res = node_extract_social(state)
         assert res.get("social_data") is None
 
+    def test_extract_bilateral_commitments_debtor_and_timing(self, temp_store):
+        # 1. Contact promises user
+        state_contact: ExamenState = {
+            "raw_transcript": "Hi, I'm Luca Rossi from AWS. I will send you the whitepaper tomorrow at 10 AM.",
+            "session_id": "test_session",
+            "categories": ["social"],
+        }
+        res_contact = node_extract_social(state_contact)
+        social_contact: SocialEntity = res_contact.get("social_data")
+        assert social_contact is not None
+        comms = social_contact.get_commitments_as_objects()
+        assert len(comms) >= 1
+        c = comms[0]
+        assert c.debtor in ("contact", "user")
+        assert "tomorrow at 10 am" in (c.due_date_raw or "").lower()
+        assert c.normalized_deadline is not None
+
+        # 2. User explicitly promises contact
+        state_user: ExamenState = {
+            "raw_transcript": "Nice to meet you Giulia Verdi from Datadog. I will send you our pitch deck tomorrow at 10 AM.",
+            "session_id": "test_session",
+            "categories": ["social"],
+        }
+        res_user = node_extract_social(state_user)
+        social_user: SocialEntity = res_user.get("social_data")
+        assert social_user is not None
+        user_comms = social_user.get_commitments_as_objects()
+        assert len(user_comms) >= 1
+        user_c = user_comms[0]
+        assert user_c.debtor == "user"
+        assert "pitch deck" in user_c.description.lower() or "send" in user_c.description.lower()
+
 
 class TestTopicResearchNode:
     """Tests for Stage 3C Deep Research & Briefing Synthesizer."""
@@ -225,9 +262,35 @@ class TestTopicResearchNode:
         assert len(report.executive_summary) >= 2
         assert len(report.deep_dive_markdown) > 50
         assert len(report.action_items) >= 1
+        assert len(report.explanatory_synthesis) > 40
         # Real web search should have populated sources
         assert isinstance(report.web_sources, list)
         assert len(report.web_sources) >= 1
+
+    def test_contextual_synthesis_depth_academic_and_bug(self):
+        # 1. Academic lecture test
+        academic_state: ExamenState = {
+            "raw_transcript": "In today's lecture we study distributed consensus algorithms and the Raft leader election theorem.",
+            "session_id": "academic_session",
+            "categories": ["deep_topic"],
+        }
+        res_acad = node_topic_research(academic_state)
+        report_acad = res_acad.get("briefing_report")
+        assert report_acad is not None
+        assert report_acad.context_type == "academic_lecture"
+        assert len(report_acad.explanatory_synthesis) > 30
+
+        # 2. Bug / incident test
+        bug_state: ExamenState = {
+            "raw_transcript": "We hit a critical bug with Bedrock AgentCore socket timeouts causing 504 Gateway errors in production.",
+            "session_id": "incident_session",
+            "categories": ["deep_topic"],
+        }
+        res_bug = node_topic_research(bug_state)
+        report_bug = res_bug.get("briefing_report")
+        assert report_bug is not None
+        assert report_bug.context_type in ("bug", "system_incident")
+        assert len(report_bug.explanatory_synthesis) > 30
 
     def test_empty_transcript_topic(self):
         res = node_topic_research({"raw_transcript": ""})
@@ -335,3 +398,196 @@ class TestPersistNode:
         briefing = temp_store.get_topic_briefing("Docker")
         assert briefing is not None
         assert briefing.topic_title == "Docker Container Security"
+
+    def test_persist_scheduled_task(self, temp_store):
+        task = PlannedTask(
+            title="Call Dr. Smith",
+            domain="personal",
+            scheduled_time="2026-10-09T15:00:00",
+            origin="ambient_voice",
+            raw_statement="I need to call Dr. Smith at 3 PM tomorrow.",
+            confidence=0.92,
+            relative_time_anchor="at 3 PM tomorrow",
+            status="pending",
+        )
+        state: ExamenState = {
+            "scheduled_task": task,
+        }
+
+        node_persist(state)
+
+        # Verify task is persisted
+        tasks = temp_store.list_planned_tasks(origin="ambient_voice")
+        assert len(tasks) == 1
+        assert tasks[0].title == "Call Dr. Smith"
+        assert tasks[0].origin == "ambient_voice"
+        assert tasks[0].relative_time_anchor == "at 3 PM tomorrow"
+        assert tasks[0].raw_statement == "I need to call Dr. Smith at 3 PM tomorrow."
+
+
+class TestAmbientSchedulerNode:
+    """Tests for Stage 3D Ambient Scheduled Task Extraction."""
+
+    def test_parse_relative_time_expressions(self):
+        from datetime import datetime
+        base = datetime(2026, 10, 8, 10, 0, 0)
+
+        # 1. in 30 minutes
+        iso_min, anchor_min = parse_relative_time_expression("in 30 minutes", ref_dt=base)
+        assert iso_min == "2026-10-08T10:30:00"
+        assert anchor_min == "in 30 minutes"
+
+        # 2. in an hour
+        iso_hr, anchor_hr = parse_relative_time_expression("in an hour", ref_dt=base)
+        assert iso_hr == "2026-10-08T11:00:00"
+        assert anchor_hr == "in an hour"
+
+        # 3. tomorrow at 3 pm
+        iso_tom, anchor_tom = parse_relative_time_expression("tomorrow at 3 pm", ref_dt=base)
+        assert iso_tom == "2026-10-09T15:00:00"
+        assert "tomorrow at 3 pm" in anchor_tom
+
+        # 4. tonight at 9 pm
+        iso_ton, anchor_ton = parse_relative_time_expression("tonight at 9 pm", ref_dt=base)
+        assert iso_ton == "2026-10-08T21:00:00"
+        assert "tonight at 9 pm" in anchor_ton
+
+    def test_extract_scheduled_task_ambient_voice(self):
+        state: ExamenState = {
+            "raw_transcript": "I need to call Dr. Smith at 3 PM tomorrow.",
+            "session_id": "session_sched_1",
+            "categories": ["scheduled_task"],
+        }
+        res = node_extract_scheduled_task(state)
+        task: PlannedTask = res.get("scheduled_task")
+        assert task is not None
+        assert "call dr. smith" in task.title.lower() or "dr. smith" in task.title.lower()
+        assert task.origin == "ambient_voice"
+        assert task.raw_statement == "I need to call Dr. Smith at 3 PM tomorrow."
+        assert task.confidence >= 0.8
+        assert task.status == "pending"
+
+    def test_extract_safety_scheduled_task(self):
+        state: ExamenState = {
+            "raw_transcript": "Remind me to turn off the irrigation valve in an hour.",
+            "session_id": "session_sched_2",
+            "categories": ["scheduled_task"],
+        }
+        res = node_extract_scheduled_task(state)
+        task: PlannedTask = res.get("scheduled_task")
+        assert task is not None
+        assert task.domain == "safety"
+        assert task.origin == "ambient_voice"
+        assert "turn off" in task.title.lower() or "irrigation" in task.title.lower()
+        assert task.scheduled_time is not None
+
+    def test_empty_transcript_scheduler(self):
+        res = node_extract_scheduled_task({"raw_transcript": ""})
+        assert res.get("scheduled_task") is None
+
+
+class TestSocialProfilerNode:
+    """Tests for Milestone 2.1: Autonomous Social Web Profiler."""
+
+    def test_disambiguation_guardrails(self):
+        from src.pipeline.nodes.social_profiler import verify_disambiguation_anchors
+
+        # 1. Standalone single-word names without company/role/topics must be rejected
+        assert verify_disambiguation_anchors("Dave") is False
+        assert verify_disambiguation_anchors("Marco") is False
+        assert verify_disambiguation_anchors("Elena") is False
+        assert verify_disambiguation_anchors("") is False
+        assert verify_disambiguation_anchors("   ") is False
+
+        # 2. Single-word name with strong company/role anchor passes
+        assert verify_disambiguation_anchors("Luca", company_or_role="VP at CloudScale") is True
+        assert verify_disambiguation_anchors("Elena", company_or_role="Lab Head at ETH Zurich") is True
+        assert verify_disambiguation_anchors("Marco", topics=["AgentCore", "AWS"]) is True
+
+        # 3. Full multi-word names pass with or without additional context
+        assert verify_disambiguation_anchors("Luca Bianchi", company_or_role="VP of Infrastructure") is True
+        assert verify_disambiguation_anchors("Dr. Elena Rostova", topics=["Computer Vision"]) is True
+        assert verify_disambiguation_anchors("Sarah Connor", notes="sarah@cyberdyne.com") is True
+        assert verify_disambiguation_anchors("Luca Bianchi") is True
+
+    def test_query_formulation(self):
+        from src.pipeline.nodes.social_profiler import build_profiling_queries
+
+        queries = build_profiling_queries(
+            name="Luca Bianchi",
+            company_or_role="VP of Infrastructure at CloudScale",
+            topics=["Distributed Systems", "Raft"]
+        )
+        assert len(queries) >= 2
+        assert any("Luca Bianchi" in q for q in queries)
+        assert any("CloudScale" in q or "VP" in q for q in queries)
+        # Should NOT contain personal social networks
+        for q in queries:
+            assert "instagram" not in q.lower()
+            assert "tiktok" not in q.lower()
+
+    def test_enrich_social_contact_heuristic(self, temp_store, monkeypatch):
+        from src.pipeline.nodes.social_profiler import enrich_social_contact_sync, heuristic_profile_synthesis
+        from src.core.schemas import SocialEntity
+
+        # Test deterministic heuristic synthesizer directly
+        contact = SocialEntity(
+            person_name="Luca Bianchi",
+            company_or_role="VP of Infrastructure at CloudScale",
+            key_topics=["Distributed Systems", "AWS"],
+        )
+        h_profile = heuristic_profile_synthesis(contact)
+        assert h_profile is not None
+        assert "CloudScale" in (h_profile.organization or h_profile.headline)
+        assert "Distributed Systems" in h_profile.areas_of_expertise
+        assert h_profile.linkedin_url is not None
+
+        # Test enrich_social_contact_sync with mock_ai
+        monkeypatch.setattr(settings, "mock_ai", True)
+        temp_store.save_social_contact(contact)
+        profile = enrich_social_contact_sync(contact, store=temp_store)
+        assert profile is not None
+        assert profile.headline is not None
+        assert "CloudScale" in (profile.organization or profile.headline)
+        assert profile.bio_summary is not None
+        assert len(profile.areas_of_expertise) > 0
+        assert profile.linkedin_url is not None
+        assert "linkedin.com/in/" in profile.linkedin_url
+
+        # Verify persisted in store
+        persisted = temp_store.get_social_contact("Luca Bianchi")
+        assert persisted.web_profile is not None
+        assert persisted.web_profile.headline == profile.headline
+
+    def test_enrich_social_contact_guardrail_rejection(self, temp_store):
+        from src.pipeline.nodes.social_profiler import enrich_social_contact_sync
+        from src.core.schemas import SocialEntity
+
+        # Ambiguous contact with only first name and no role/topics
+        contact = SocialEntity(
+            person_name="Dave",
+            company_or_role=None,
+            key_topics=[],
+        )
+        profile = enrich_social_contact_sync(contact, store=temp_store)
+        assert profile is None
+
+    def test_node_extract_social_with_profiler(self, temp_store):
+        from src.pipeline.nodes.social import node_extract_social
+        from src.core.schemas import ExamenState
+
+        state: ExamenState = {
+            "raw_transcript": "Hi, I'm Luca Bianchi, VP of Infrastructure at CloudScale. Let's discuss Raft consensus.",
+            "session_id": "test_social_profiler_sess",
+            "categories": ["social"],
+        }
+        res = node_extract_social(state)
+        social = res.get("social_data")
+        assert social is not None
+        assert social.person_name == "Luca Bianchi"
+        # Autonomous profiler should have enriched this qualified contact
+        assert social.web_profile is not None
+        assert social.web_profile.headline is not None
+        assert len(social.web_profile.bio_summary) > 0
+        assert social.web_profile.confidence_score > 0
+

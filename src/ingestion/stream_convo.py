@@ -33,8 +33,8 @@ class BeeClient(Debug):
             self.debug("Failed to parse JSON from Bee CLI output.")
             return None
 
-    async def stream_utterances(self):
-        """Spawns the stream, yields utterances, and handles aggressive auto-reconnection."""
+    async def stream_events(self):
+        """Spawns the stream, yields parsed SSE events (utterances, location, diarization updates)."""
         retry_delay = 1
         
         while True:
@@ -49,55 +49,79 @@ class BeeClient(Debug):
                 )
                 
                 self.debug("Connected to Bee stream.")
-                retry_delay = 1  # Reset delay on successful connection
+                retry_delay = 1
                 
                 while True:
                     try:
-                        # Wait maximum 60 seconds for ANY data (utterance or keep-alive)
-                        # If the network dies silently, this raises a TimeoutError
                         line_bytes = await asyncio.wait_for(
                             self.process.stdout.readline(), 
                             timeout=330.0
                         )
                     except asyncio.TimeoutError:
                         self.debug("Stream timed out (no data for 330s). Assuming dead connection.")
-                        break  # Break inner loop to kill process and retry
+                        break
 
                     if not line_bytes:
-                        # EOF reached: The bun process crashed or exited
                         self.debug("Stream process ended unexpectedly. Reconnecting...")
                         break 
                     
                     line = line_bytes.decode('utf-8').strip()
                     if not line:
-                        # Safely ignore empty lines (SSE keep-alives)
                         continue 
                     
                     try:
                         data = json.loads(line)
                         self.debug(f"Received data: {data}")
-                        if data.get("type") == "new-utterance":
-                            text = data.get("utterance", {}).get("text", "")
-                            if text:
-                                self.debug(f"Extracted text: '{text}'")
-                                yield text
+                        msg_type = data.get("type") or data.get("event")
+
+                        if msg_type == "new-utterance":
+                            utt = data.get("utterance", {})
+                            yield {
+                                "event": "new-utterance",
+                                "data": {
+                                    "id": str(utt.get("id") or data.get("id") or ""),
+                                    "text": utt.get("text") or data.get("text") or "",
+                                    "speaker": utt.get("speaker") or data.get("speaker"),
+                                    "conversation_uuid": data.get("conversation_id") or data.get("conversation_uuid") or "default_session",
+                                }
+                            }
+                        elif msg_type == "update-location":
+                            loc = data.get("location") or data.get("data", {}).get("location", {})
+                            yield {
+                                "event": "update-location",
+                                "data": loc
+                            }
+                        elif msg_type == "update-utterance":
+                            yield {
+                                "event": "update-utterance",
+                                "data": {
+                                    "utterance_id": str(data.get("utterance_id") or data.get("id") or data.get("data", {}).get("utterance_id") or ""),
+                                    "speaker": data.get("speaker") or data.get("data", {}).get("speaker"),
+                                    "conversation_uuid": data.get("conversation_id") or data.get("data", {}).get("conversation_id") or "default_session",
+                                }
+                            }
                     except json.JSONDecodeError:
                         continue
                         
             except asyncio.CancelledError:
                 self.stop()
-                raise  # Re-raise to gracefully exit the generator during script shutdown
+                raise
             except Exception as e:
                 self.debug(f"Connection error: {e}")
                 
-            # If we break out of the inner loop, the connection is dead.
-            # Clean up the dead process before attempting a retry.
             self.stop() 
-            
             self.debug(f"Retrying connection in {retry_delay} seconds...")
             await asyncio.sleep(retry_delay)
-            # Exponential backoff up to a maximum 1-minute wait
             retry_delay = min(retry_delay * 2, 60)
+
+    async def stream_utterances(self):
+        """Spawns the stream, yields raw utterance text strings for backward compatibility."""
+        async for event in self.stream_events():
+            if event.get("event") == "new-utterance":
+                text = event.get("data", {}).get("text", "")
+                if text:
+                    self.debug(f"Extracted text: '{text}'")
+                    yield text
 
     def stop(self):
         """Cleanly terminates the underlying subprocess."""

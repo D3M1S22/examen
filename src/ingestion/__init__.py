@@ -8,6 +8,8 @@ from src.ingestion.gatekeeper import (
 )
 from src.ingestion.stream_convo import BeeClient
 from src.ingestion.debug import Debug
+from src.ingestion.ring_buffer import ContextRingBuffer
+from src.ingestion.session_manager import SessionManager
 
 __all__ = [
     "classify_chunk",
@@ -16,6 +18,8 @@ __all__ = [
     "build_gatekeeper_prompt",
     "BeeClient",
     "Debug",
+    "ContextRingBuffer",
+    "SessionManager",
 ]
 
 

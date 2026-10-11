@@ -36,6 +36,22 @@ def execute_get_topic_briefing(
             f"I found {sources_count} online reference(s) and noted {actions_count} follow-up action item(s)."
         )
 
+        card_payload = {
+            "template": "DEEP_BRIEFING_VIEWER",
+            "topic_title": briefing.topic_title,
+            "title": briefing.topic_title,
+            "context_type": briefing.context_type,
+            "created_at": briefing.created_at,
+            "executive_summary": briefing.executive_summary,
+            "bullets": briefing.executive_summary,
+            "explanatory_synthesis": briefing.explanatory_synthesis,
+            "synthesis": briefing.explanatory_synthesis,
+            "web_sources": briefing.web_sources,
+            "sources": briefing.web_sources,
+            "action_items": briefing.action_items,
+            "spoken_summary": spoken,
+        }
+
         return {
             "found": True,
             "id": briefing.id,
@@ -43,11 +59,14 @@ def execute_get_topic_briefing(
             "context_type": briefing.context_type,
             "created_at": briefing.created_at,
             "executive_summary": briefing.executive_summary,
+            "explanatory_synthesis": briefing.explanatory_synthesis,
             "web_sources": briefing.web_sources,
             "action_items": briefing.action_items,
             "deep_dive_markdown": briefing.deep_dive_markdown,
+            "display_template": "DEEP_BRIEFING_VIEWER",
             "ui_card_type": "DEEP_BRIEFING_VIEWER",
             "spoken_summary": spoken,
+            "card_payload": card_payload,
         }
 
     search_desc = f" matching '{topic_query}'" if topic_query else ""
@@ -55,8 +74,14 @@ def execute_get_topic_briefing(
         "found": False,
         "query": topic_query,
         "message": f"No technical briefing reports found{search_desc}.",
+        "display_template": "BRIEFING_NOT_FOUND",
         "ui_card_type": "BRIEFING_NOT_FOUND",
         "spoken_summary": f"I don't have any saved technical briefings{search_desc} yet.",
+        "card_payload": {
+            "template": "BRIEFING_NOT_FOUND",
+            "query": topic_query,
+            "message": f"No technical briefing reports found{search_desc}.",
+        },
     }
 
 

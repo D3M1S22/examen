@@ -31,24 +31,44 @@ TOPIC_EXTRACTOR_SYSTEM_PROMPT = """You are the Technical Topic Extractor for the
 Your role is to analyze a transcribed audio snippet discussing engineering issues, libraries, system design, bugs, or academic lectures.
 Extract:
 1. topic_title: A concise title of the core technical topic, bug, library, or methodology.
-2. context_type: One of "bug", "feature_discussion", "tech_stack", "academic_lecture".
+2. context_type: One of "bug", "feature_discussion", "tech_stack", "academic_lecture", "system_incident", "general_meeting".
 3. search_queries: 1 to 2 high-precision, focused web search queries to retrieve documentation, code patterns, or solutions.
    * Strip conversational words (e.g. do not include "how to", "please find", "what is").
    * Focus on distinctive library names, error messages, or architectural keywords.
 4. key_questions: 2 to 3 core questions or technical aspects to resolve in the final dossier.
 """
 
-SYNTHESIZER_SYSTEM_PROMPT = """You are the Senior Technical Research Synthesizer for the EXAMEN engine on AWS Bedrock.
-You synthesize authoritative, high-density Executive Briefings and Technical Dossiers for engineers and Echo Show multimodal displays.
+SYNTHESIZER_SYSTEM_PROMPT = """You are the Senior Technical Research Synthesizer and Executive Knowledge Assistant for the EXAMEN wearable AI engine.
+Your mission is to compile an authoritative, high-density briefing report after an ambient meeting, technical discussion, or academic lecture.
 
-INSTRUCTIONS:
-1. Synthesize an Executive Summary in 3-4 high-impact bullet points.
-2. In deep_dive_markdown, provide a thorough, production-grade technical breakdown with:
-   - Clear architectural definitions and mechanism explanations.
-   - Code snippets, CLI commands, or configuration examples where appropriate.
-   - Direct citations to consulted web sources using markdown links.
-3. List actionable next steps in action_items.
-4. Keep the output clean, objective, and dense with verified technical details.
+CRITICAL INSTRUCTION FOR explanatory_synthesis:
+Do NOT simply repeat conversational dialogue or transcripts.
+Instead, act as a world-class domain expert. Synthesize a 2-3 paragraph cohesive, educational narrative that deeply explains and unpacks the core themes discussed, using the authoritative web search findings to fill all technical gaps.
+
+ADAPT DEPTH AND PEDAGOGICAL TONE BASED ON context_type:
+1. When context_type is "academic_lecture":
+   - Explain the core theoretical foundations, key theorems, and conceptual models.
+   - Provide intuitive analogies and practical illustrations so the reader thoroughly understands the mechanism.
+   - Clarify academic terminology and historical or scientific context.
+
+2. When context_type is "bug" or "system_incident":
+   - Explain the underlying technical failure mode (memory leak, race condition, network timeout, cold-start).
+   - Unpack why the error occurs in the software architecture based on official documentation and community findings.
+   - Outline verified workarounds, configuration flags, or patch recommendations.
+
+3. When context_type is "tech_stack" or "feature_discussion":
+   - Detail the architectural trade-offs, scalability bottlenecks, and operational trade-offs.
+   - Explain standard best practices, recommended libraries, and standard deployment patterns.
+
+4. When context_type is "general_meeting":
+   - Clarify industry concepts, strategic definitions, and the practical implications of decisions considered.
+
+OUTPUT RULES:
+- Write explanatory_synthesis with dense, professional clarity (2-3 structured, educational paragraphs).
+- Structure deep_dive_markdown with clear headings, code snippets, and direct citations.
+- Include 3-4 high-impact bullets in executive_summary.
+- Provide concrete, pragmatic action_items.
+- Keep the output clean, objective, and dense with verified technical details.
 """
 
 
@@ -70,12 +90,16 @@ def _heuristic_extract_topic(transcript: str) -> TopicExtraction:
     # Detect context type
     context_type = "tech_stack"
     lower_text = text.lower()
-    if any(k in lower_text for k in ["bug", "error", "leak", "crash", "issue", "exception", "failed"]):
+    if any(k in lower_text for k in ["outage", "incident", "down", "p0", "p1"]):
+        context_type = "system_incident"
+    elif any(k in lower_text for k in ["bug", "error", "leak", "crash", "issue", "exception", "failed"]):
         context_type = "bug"
     elif any(k in lower_text for k in ["feature", "proposal", "roadmap", "plan", "rfc"]):
         context_type = "feature_discussion"
     elif any(k in lower_text for k in ["lecture", "theory", "theorem", "paper", "professor", "class"]):
         context_type = "academic_lecture"
+    elif any(k in lower_text for k in ["meeting", "agenda", "sync", "status", "alignment"]):
+        context_type = "general_meeting"
 
     # Identify candidate topic title from capitalized entities or prominent tech keywords
     tech_keywords = [
@@ -95,7 +119,7 @@ def _heuristic_extract_topic(transcript: str) -> TopicExtraction:
 
     # Formulate 1-2 search queries
     search_queries = [f"{topic_title} documentation best practices"]
-    if context_type == "bug":
+    if context_type in ("bug", "system_incident"):
         search_queries.append(f"{topic_title} troubleshooting fix")
 
     key_questions = [
@@ -124,6 +148,31 @@ def _heuristic_synthesize_report(
         f"Context verified from ambient transcript discussion.",
         "Concrete follow-up steps identified for implementation."
     ]
+
+    # Generate contextual explanatory synthesis adapted to context_type
+    if topic.context_type in ("bug", "system_incident"):
+        explanatory_synthesis = (
+            f"The discussion centered on an operational failure mode concerning {title}. "
+            f"According to authoritative documentation and community troubleshooting guides, such runtime anomalies "
+            f"frequently stem from configuration drift, resource lifecycle exhaustion, or unexpected thread contention. "
+            f"Resolving these incidents requires inspecting log traces, applying idempotent backoff strategies, and verifying "
+            f"dependency compatibility across active service tiers."
+        )
+    elif topic.context_type == "academic_lecture":
+        explanatory_synthesis = (
+            f"This session explored fundamental theoretical frameworks and conceptual principles underpinning {title}. "
+            f"In foundational academic literature, the core mechanism relies on rigorous invariants, structured abstractions, "
+            f"and analytical models governing state behavior. Understanding these foundational principles allows practitioners "
+            f"to bridge theoretical proofs with real-world computational implementations."
+        )
+    else:  # tech_stack, feature_discussion, general_meeting
+        explanatory_synthesis = (
+            f"The architectural debate focused on evaluating {title} within modern distributed systems. "
+            f"Authoritative research and engineering documentation demonstrate that adopting this approach involves key trade-offs between "
+            f"operational complexity, end-to-end latency, and consistency guarantees. "
+            f"Production best practices recommend establishing strict interface contracts, telemetry instrumentation, and staged rollouts "
+            f"to maximize reliability and maintainability."
+        )
 
     # Build deep dive markdown from search results and transcript
     doc_sections = []
@@ -160,6 +209,7 @@ The system initiated autonomous background research into **{title}** to consolid
         topic_title=title,
         context_type=topic.context_type,
         executive_summary=exec_summary,
+        explanatory_synthesis=explanatory_synthesis,
         deep_dive_markdown=deep_dive.strip(),
         web_sources=search_batch.source_urls,
         action_items=action_items,
@@ -257,9 +307,16 @@ def node_topic_research(state: ExamenState) -> Dict[str, Any]:
                 HumanMessage(content=prompt),
             ]
             report = synthesizer.invoke(messages)
-            # Ensure web sources are populated from real search results
-            if report and not report.web_sources:
-                report.web_sources = search_batch.source_urls
+            # Ensure web sources, deep dive markdown, and explanatory synthesis are populated
+            if report:
+                if not report.web_sources:
+                    report.web_sources = search_batch.source_urls
+                if not report.deep_dive_markdown or len(report.deep_dive_markdown.strip()) < 10:
+                    heuristic = _heuristic_synthesize_report(topic, transcript, search_batch)
+                    report.deep_dive_markdown = heuristic.deep_dive_markdown
+                if not report.explanatory_synthesis:
+                    heuristic = _heuristic_synthesize_report(topic, transcript, search_batch)
+                    report.explanatory_synthesis = heuristic.explanatory_synthesis
         except Exception as e:
             logger.warning(f"Briefing synthesis model failed: {e}. Falling back to heuristic.")
             report = _heuristic_synthesize_report(topic, transcript, search_batch)

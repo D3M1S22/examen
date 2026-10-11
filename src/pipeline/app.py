@@ -48,6 +48,13 @@ def _build_summary(result_state: Dict[str, Any]) -> str:
             f"Technical briefing compiled on '{briefing_report.topic_title}' with {sources_count} web source(s)"
         )
 
+    scheduled_task = result_state.get("scheduled_task")
+    if scheduled_task:
+        target_str = f" scheduled for {scheduled_task.scheduled_time}" if scheduled_task.scheduled_time else ""
+        summaries.append(
+            f"Ambient scheduled task recorded '{scheduled_task.title}' in domain '{scheduled_task.domain}'{target_str}"
+        )
+
     if not summaries:
         return "No actionable signals extracted"
 
@@ -86,6 +93,7 @@ def agent_invocation(payload: Dict[str, Any], context: Any = None) -> Dict[str, 
             "action_data": None,
             "social_data": None,
             "briefing_report": None,
+            "scheduled_task": None,
         }
 
     # 2. Session ID Resolution
@@ -108,7 +116,9 @@ def agent_invocation(payload: Dict[str, Any], context: Any = None) -> Dict[str, 
     # Ingress fallback: If invoked without pre-screening categories (e.g. direct AWS Console test)
     if not categories:
         logger.debug("Ingress payload lacks pre-screened categories; screening via Gatekeeper.")
-        classification = classify_chunk(raw_transcript)
+        classification = classify_chunk(
+            raw_transcript, prior_context=payload.get("historical_context")
+        )
         categories = classification.categories
         confidence = classification.confidence
         summary_hint = classification.summary_hint
@@ -121,6 +131,11 @@ def agent_invocation(payload: Dict[str, Any], context: Any = None) -> Dict[str, 
         "confidence": confidence,
         "summary_hint": summary_hint,
         "timestamp": payload.get("timestamp") or datetime.now().isoformat(),
+        "historical_context": payload.get("historical_context"),
+        "location": payload.get("location"),
+        "speaker": payload.get("speaker") or payload.get("speaker_id"),
+        "speaker_role": payload.get("speaker_role"),
+        "utterance_id": payload.get("utterance_id") or payload.get("chunk_id"),
     }
 
     # 5. Execute LangGraph StateGraph
@@ -137,12 +152,14 @@ def agent_invocation(payload: Dict[str, Any], context: Any = None) -> Dict[str, 
             "action_data": None,
             "social_data": None,
             "briefing_report": None,
+            "scheduled_task": None,
         }
 
     # 6. Structured Output Serialization
     action_data = result_state.get("action_data")
     social_data = result_state.get("social_data")
     briefing_report = result_state.get("briefing_report")
+    scheduled_task = result_state.get("scheduled_task")
 
     response: Dict[str, Any] = {
         "status": "success",
@@ -152,6 +169,7 @@ def agent_invocation(payload: Dict[str, Any], context: Any = None) -> Dict[str, 
         "action_data": action_data.model_dump() if action_data and hasattr(action_data, "model_dump") else action_data,
         "social_data": social_data.model_dump() if social_data and hasattr(social_data, "model_dump") else social_data,
         "briefing_report": briefing_report.model_dump() if briefing_report and hasattr(briefing_report, "model_dump") else briefing_report,
+        "scheduled_task": scheduled_task.model_dump() if scheduled_task and hasattr(scheduled_task, "model_dump") else scheduled_task,
     }
 
     logger.info(f"AgentCore invocation completed for session {session_id}: {response['summary']}")

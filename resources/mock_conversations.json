@@ -1,0 +1,291 @@
+{
+  "version": "1.0",
+  "description": "Curated test conversations and multimodal scenarios for EXAMEN Phase 1-3 features",
+  "scenarios": [
+    {
+      "id": "ambient_scheduled_tasks",
+      "title": "Ambient Scheduled Tasks from Spoken Voice",
+      "milestone": "M1.2",
+      "target_feature": "Gatekeeper scheduled_task category + Stage 3D Ambient Scheduler + relative time parsing",
+      "description": "Tests extracting future commitments and intentions from ambient speech, calculating ISO-8601 deadlines, and distinguishing them from doubts.",
+      "turns": [
+        {
+          "turn_id": 1,
+          "speaker": "user",
+          "speaker_role": "user",
+          "text": "I need to call Dr. Smith at 3 PM tomorrow regarding the annual medical checkup results.",
+          "location": {
+            "latitude": 45.4642,
+            "longitude": 9.1900,
+            "place_name": "Milano Office",
+            "semantic_zone": "work_office"
+          },
+          "expected_category": "scheduled_task",
+          "expected_extraction": {
+            "title_contains": "call dr. smith",
+            "domain": "routine",
+            "relative_time_anchor": "at 3 pm tomorrow",
+            "origin": "ambient_voice"
+          }
+        },
+        {
+          "turn_id": 2,
+          "speaker": "user",
+          "speaker_role": "user",
+          "text": "Remind me to turn off the garden irrigation valve in an hour before leaving for dinner.",
+          "location": {
+            "latitude": 45.4650,
+            "longitude": 9.1920,
+            "place_name": "Home Residence",
+            "semantic_zone": "home"
+          },
+          "expected_category": "scheduled_task",
+          "expected_extraction": {
+            "title_contains": "turn off",
+            "domain": "safety",
+            "relative_time_anchor": "in an hour",
+            "origin": "ambient_voice"
+          }
+        },
+        {
+          "turn_id": 3,
+          "speaker": "user",
+          "speaker_role": "user",
+          "text": "I must submit the security compliance report tonight at 9 PM to the audit team.",
+          "location": {
+            "latitude": 45.4642,
+            "longitude": 9.1900,
+            "place_name": "Milano Office",
+            "semantic_zone": "work_office"
+          },
+          "expected_category": "scheduled_task",
+          "expected_extraction": {
+            "title_contains": "submit",
+            "relative_time_anchor": "tonight at 9 pm",
+            "origin": "ambient_voice"
+          }
+        }
+      ]
+    },
+    {
+      "id": "bilateral_social_commitments",
+      "title": "Bilateral Social Commitments & Closed-Loop Reconciliation",
+      "milestone": "M1.3",
+      "target_feature": "Debtor tracking (user vs contact) + auto-provisioning of agenda tasks + auto-fulfillment upon action verification",
+      "description": "Tests full bilateral promise lifecycle: user promises contact (auto-creates PlannedTask), contact promises user (debt tracked), and user completes the promised action.",
+      "turns": [
+        {
+          "turn_id": 1,
+          "speaker": "user",
+          "speaker_role": "user",
+          "text": "Nice to meet you Giulia Verdi, Senior Director at CloudOps. I will send you our architecture pitch deck tomorrow at 10 AM.",
+          "expected_category": "social",
+          "expected_extraction": {
+            "contact_name": "Giulia Verdi",
+            "company_or_role": "Senior Director at CloudOps",
+            "commitments": [
+              {
+                "debtor": "user",
+                "description_contains": "pitch deck",
+                "due_date_raw": "tomorrow at 10 AM",
+                "auto_schedule": true
+              }
+            ]
+          }
+        },
+        {
+          "turn_id": 2,
+          "speaker": "contact",
+          "speaker_role": "contact",
+          "text": "Hi, I'm Luca Rossi, Partner Architect at AWS. I will send you the Bedrock Mantle whitepaper and migration checklist by Friday at 5 PM.",
+          "expected_category": "social",
+          "expected_extraction": {
+            "contact_name": "Luca Rossi",
+            "company_or_role": "Partner Architect at AWS",
+            "commitments": [
+              {
+                "debtor": "contact",
+                "description_contains": "whitepaper",
+                "due_date_raw": "by Friday at 5 PM",
+                "auto_schedule": false
+              }
+            ]
+          }
+        },
+        {
+          "turn_id": 3,
+          "speaker": "user",
+          "speaker_role": "user",
+          "text": "I just emailed the architecture pitch deck to Giulia Verdi.",
+          "expected_category": "action_state",
+          "expected_extraction": {
+            "action_type": "email_sent",
+            "reconciles_commitment": true,
+            "commitment_contact": "Giulia Verdi"
+          }
+        }
+      ]
+    },
+    {
+      "id": "social_web_profiler",
+      "title": "Autonomous Social Web Profiler & Disambiguation Guardrails",
+      "milestone": "M2.1",
+      "target_feature": "Strict 2-anchor verification + professional web scraping + Executive Dossier modal",
+      "description": "Tests autonomous profiling for qualified professional encounters and verifies rejection for ambiguous single-name greetings.",
+      "turns": [
+        {
+          "turn_id": 1,
+          "speaker": "contact",
+          "speaker_role": "contact",
+          "text": "Pleased to meet you, I'm Dr. Elena Rostova, VP of AI Research at CloudScale. Let's discuss Raft consensus algorithms and distributed systems.",
+          "expected_category": "social",
+          "expected_extraction": {
+            "contact_name": "Dr. Elena Rostova",
+            "passes_guardrail": true,
+            "expected_profile": {
+              "organization": "CloudScale",
+              "has_expertise": true,
+              "has_linkedin": true
+            }
+          }
+        },
+        {
+          "turn_id": 2,
+          "speaker": "contact",
+          "speaker_role": "contact",
+          "text": "Hey there! My name is Dave. Great weather today in the park.",
+          "expected_category": "noop",
+          "expected_extraction": {
+            "passes_guardrail": false,
+            "reason": "Single name without role or organizational anchor dropped by guardrail"
+          }
+        }
+      ]
+    },
+    {
+      "id": "deep_topic_synthesis",
+      "title": "Contextual Deep Topic Explanatory Synthesis",
+      "milestone": "M1.1",
+      "target_feature": "Context-adaptive deep explanatory synthesis (academic theory, bug failure mechanisms, architectural trade-offs)",
+      "description": "Tests the upgraded synthesizer prompt generating dense explanatory narrative bridging dialogue concepts with authoritative web research.",
+      "turns": [
+        {
+          "turn_id": 1,
+          "speaker": "user",
+          "speaker_role": "user",
+          "text": "In today's systems seminar we study distributed consensus algorithms and the Raft leader election theorem compared to Multi-Paxos.",
+          "expected_category": "deep_topic",
+          "expected_extraction": {
+            "topic_title_contains": "Raft",
+            "context_type": "academic_lecture",
+            "synthesis_min_length": 100,
+            "has_sources": true
+          }
+        },
+        {
+          "turn_id": 2,
+          "speaker": "user",
+          "speaker_role": "user",
+          "text": "We hit a critical production incident with AWS Bedrock AgentCore socket timeouts causing 504 Gateway errors in high-throughput streaming.",
+          "expected_category": "deep_topic",
+          "expected_extraction": {
+            "topic_title_contains": "Bedrock",
+            "context_type": "bug",
+            "synthesis_min_length": 100,
+            "has_action_items": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "context_ring_buffer_anaphora",
+      "title": "Context Ring Buffer & Anaphora Telemetry Grounding",
+      "milestone": "M3.1",
+      "target_feature": "FIFO N=4 history injection + split turn anaphora detection + GPS location grounding",
+      "description": "Tests anaphora resolution across conversational turns where the question provides the action anchor and the response provides the confirmation.",
+      "turns": [
+        {
+          "turn_id": 1,
+          "speaker": "partner",
+          "speaker_role": "contact",
+          "text": "Did you lock the main front entrance and set the security alarm?",
+          "location": {
+            "latitude": 45.4650,
+            "longitude": 9.1920,
+            "place_name": "Home Residence",
+            "semantic_zone": "home"
+          },
+          "expected_category": "noop",
+          "is_prior_context": true
+        },
+        {
+          "turn_id": 2,
+          "speaker": "user",
+          "speaker_role": "user",
+          "text": "Yes, I just did right now.",
+          "location": {
+            "latitude": 45.4650,
+            "longitude": 9.1920,
+            "place_name": "Home Residence",
+            "semantic_zone": "home"
+          },
+          "expected_category": "action_state",
+          "expected_extraction": {
+            "anaphora_resolved": true,
+            "action_type_contains": "lock",
+            "location_zone": "home"
+          }
+        }
+      ]
+    },
+    {
+      "id": "macro_session_continuous_meeting",
+      "title": "Macro Session Continuous Meeting & Micro-Event Decoupling",
+      "milestone": "M3.2",
+      "target_feature": "SessionManager tracking + micro-events foreign key linking + boundary closing trigger + holistic SessionDossier",
+      "description": "Simulates a complete 4-chunk continuous executive review meeting. Micro-events are extracted and linked, and the closing phrase trigger seals the session dossier.",
+      "session_id": "session-exec-review-q4",
+      "turns": [
+        {
+          "turn_id": 1,
+          "speaker": "Roberto Ferri",
+          "speaker_role": "contact",
+          "text": "Good morning team, I'm Roberto Ferri, Head of Cloud Engineering at Nexi Payments. Welcome to our quarterly platform review session.",
+          "location": {
+            "latitude": 45.4642,
+            "longitude": 9.1900,
+            "place_name": "Nexi HQ Boardroom",
+            "semantic_zone": "work_office"
+          },
+          "expected_category": "social",
+          "expected_micro_event": "social_contact"
+        },
+        {
+          "turn_id": 2,
+          "speaker": "user",
+          "speaker_role": "user",
+          "text": "Let's review our event streaming migration strategy moving from RabbitMQ to Apache Kafka with exactly-once delivery guarantees.",
+          "expected_category": "deep_topic",
+          "expected_micro_event": "topic_briefing"
+        },
+        {
+          "turn_id": 3,
+          "speaker": "user",
+          "speaker_role": "user",
+          "text": "I will deliver the completed Kafka benchmark report to Roberto tomorrow at 4 PM, and I just deployed the staging validation broker.",
+          "expected_category": "social",
+          "expected_micro_event": "task_scheduled"
+        },
+        {
+          "turn_id": 4,
+          "speaker": "Roberto Ferri",
+          "speaker_role": "contact",
+          "text": "Thank you everyone for attending today's review, that wraps up our meeting for today! Let's close the session.",
+          "expected_category": "noop",
+          "triggers_boundary": "closing_phrase",
+          "expected_session_status": "concluded"
+        }
+      ]
+    }
+  ]
+}
