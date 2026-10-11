@@ -1,334 +1,428 @@
-import { useState } from "react";
+import React, { useState } from "react";
 import { PlannedTask } from "@/types/schemas";
-import { MockAsterisk } from "../ui/MockAsterisk";
+import { StatusBadge, DomainBadge } from "../ui/StatusBadge";
+import { CreateTaskModal } from "../ui/CreateTaskModal";
+import { playAcousticVerificationTone } from "@/utils/audioEffects";
 
 interface DailyRoutinesProps {
   routinesData: { tasks: PlannedTask[] } | undefined;
   handleToggleRoutine: (task: PlannedTask) => void;
-  handleAddRoutine: (title: string, domain: string, scheduled_time: string) => Promise<void>;
+  handleAddRoutine: (title: string, domain: string, scheduled_time: string, recurrence?: string) => Promise<void>;
+  handleDeleteRoutine?: (taskId: string) => Promise<void>;
 }
 
-export function DailyRoutines({ routinesData, handleToggleRoutine, handleAddRoutine }: DailyRoutinesProps) {
+export function DailyRoutines({
+  routinesData,
+  handleToggleRoutine,
+  handleAddRoutine,
+  handleDeleteRoutine,
+}: DailyRoutinesProps) {
   const [activeFilter, setActiveFilter] = useState<string>("ALL");
+  const [searchQuery, setSearchQuery] = useState("");
   const [showAddModal, setShowAddModal] = useState(false);
-  const [newTitle, setNewTitle] = useState("");
-  const [newDomain, setNewDomain] = useState("routine");
-  const [newTime, setNewTime] = useState("");
+  const [activeAudioIndex, setActiveAudioIndex] = useState<number | null>(null);
 
   const tasks = routinesData?.tasks || [];
-  const uniqueDomains = Array.from(new Set(tasks.map(t => t.domain))).filter(Boolean);
+  const uniqueDomains = Array.from(new Set(tasks.map((t) => t.domain))).filter(Boolean);
 
-  const filteredTasks = activeFilter === "ALL" 
-    ? tasks 
-    : tasks.filter(t => t.domain === activeFilter);
+  const completedCount = tasks.filter((t) => t.status === "completed").length;
+  const pendingCount = tasks.filter((t) => t.status === "pending").length;
 
-  const submitAdd = async () => {
-    if (!newTitle.trim()) return;
-    await handleAddRoutine(newTitle, newDomain, newTime);
-    setNewTitle("");
-    setNewDomain("routine");
-    setNewTime("");
-    setShowAddModal(false);
+  const filteredTasks = tasks.filter((t) => {
+    // Filter by category / status
+    let matchesCategory = true;
+    if (activeFilter === "COMPLETED") {
+      matchesCategory = t.status === "completed";
+    } else if (activeFilter === "PENDING") {
+      matchesCategory = t.status === "pending";
+    } else if (activeFilter !== "ALL") {
+      matchesCategory = t.domain === activeFilter;
+    }
+
+    // Filter by search query
+    const searchLower = searchQuery.toLowerCase();
+    const matchesSearch =
+      !searchQuery ||
+      t.title.toLowerCase().includes(searchLower) ||
+      t.domain.toLowerCase().includes(searchLower) ||
+      (t.scheduled_time || "").toLowerCase().includes(searchLower);
+
+    return matchesCategory && matchesSearch;
+  });
+
+  const handleSimulateCheck = (idx: number) => {
+    setActiveAudioIndex(idx);
+    playAcousticVerificationTone();
+    setTimeout(() => setActiveAudioIndex(null), 1200);
   };
 
   return (
-    <div className="space-y-space-lg animate-in fade-in max-w-[1200px] mx-auto relative">
-      {/* ADD MODAL */}
-      {showAddModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-          <div className="w-full max-w-md card-elevated p-space-xl bg-surface-container border-outline-variant animate-in zoom-in-95">
-            <h3 className="font-serif text-[24px] text-primary mb-6 uppercase">Add Monitored Routine</h3>
-            
-            <div className="space-y-4 mb-8">
-              <div>
-                <label className="block font-mono text-[9px] text-secondary tracking-widest uppercase mb-2">Routine Title</label>
-                <input 
-                  type="text" 
-                  value={newTitle}
-                  onChange={e => setNewTitle(e.target.value)}
-                  className="w-full bg-[#121316] border border-surface-container-highest rounded-md py-3 px-4 text-body-sm font-sans text-primary focus:outline-none focus:border-primary"
-                  placeholder="e.g. Iron Unplugged"
-                />
-              </div>
-              <div>
-                <label className="block font-mono text-[9px] text-secondary tracking-widest uppercase mb-2">Domain Category</label>
-                <input 
-                  type="text" 
-                  value={newDomain}
-                  onChange={e => setNewDomain(e.target.value)}
-                  className="w-full bg-[#121316] border border-surface-container-highest rounded-md py-3 px-4 text-body-sm font-sans text-primary focus:outline-none focus:border-primary"
-                  placeholder="e.g. safety"
-                />
-              </div>
-              <div>
-                <label className="block font-mono text-[9px] text-secondary tracking-widest uppercase mb-2">Scheduled Time</label>
-                <input 
-                  type="time" 
-                  value={newTime}
-                  onChange={e => setNewTime(e.target.value)}
-                  className="w-full bg-[#121316] border border-surface-container-highest rounded-md py-3 px-4 text-body-sm font-sans text-primary focus:outline-none focus:border-primary [color-scheme:dark]"
-                />
-              </div>
-            </div>
-            
-            <div className="flex justify-end gap-4">
-              <button 
-                onClick={() => setShowAddModal(false)}
-                className="px-6 py-3 rounded-md border border-surface-container-highest font-mono text-[10px] tracking-widest hover:bg-surface-container-highest transition-colors text-secondary"
-              >
-                CANCEL
-              </button>
-              <button 
-                onClick={submitAdd}
-                className="btn-primary bg-primary text-background font-mono text-[10px] tracking-widest rounded-md px-6 py-3 hover:bg-surface-tint transition-colors"
-              >
-                CREATE ROUTINE
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+    <div className="space-y-space-lg animate-in fade-in max-w-[1300px] mx-auto relative">
+      {/* ADD ROUTINE MODAL (Clean fixed viewport positioning) */}
+      <CreateTaskModal
+        isOpen={showAddModal}
+        onClose={() => setShowAddModal(false)}
+        onSubmit={async (title, domain, scheduledTime, recurrence) => {
+          await handleAddRoutine(title, domain, scheduledTime, recurrence);
+        }}
+      />
 
-      {/* Header section matching the mockup */}
-      <div className="card-elevated p-space-xl flex flex-col md:flex-row justify-between items-start md:items-center gap-space-lg mb-space-lg bg-surface-container border-outline-variant">
+      {/* Screen Header Banner */}
+      <div className="card-elevated p-space-xl flex flex-col md:flex-row justify-between items-start md:items-center gap-space-lg mb-space-lg bg-surface-container-low border-surface-container-highest">
         <div className="max-w-3xl">
-          <div className="font-mono text-label-sm text-secondary uppercase tracking-widest mb-2 flex items-center gap-2">
-            <span className="w-1.5 h-1.5 bg-secondary rounded-full inline-block"></span>
-            OPERATIONAL DIRECTIVE • SECTOR 04
+          <div className="font-mono text-label-sm text-amber-400/90 uppercase tracking-widest mb-2 flex items-center gap-2">
+            <span className="w-1.5 h-1.5 bg-amber-400 rounded-full inline-block"></span>
+            OPERATIONAL DIRECTIVE • SECTOR 04 // PASSIVE ROUTINES
           </div>
           <h2 className="font-serif text-[32px] leading-tight text-primary uppercase mb-4 font-normal">
-            SCREEN PURPOSE: PASSIVE ROUTINE TRACKING & SAFETY CHECKLIST
+            Passive Routine Tracking & Domestic Safety Checklist
           </h2>
           <p className="font-sans text-body-md text-secondary leading-relaxed max-w-3xl pr-4">
-            EXAMEN passively monitors recurring household routines, mechanical closures, and environmental habits without requiring manual checkmarks or tedious app inputs. By sampling natural habit acoustic anchors and ambient resonance profiles throughout the day, the system evaluates completion states in real-time, escalating silent alerts to wearable nodes only if an essential dwelling safety protocol is omitted prior to perimeter egress.
+            EXAMEN passively monitors recurring household routines, appliance disconnects, and perimeter closures without requiring manual checkmarks. Acoustic anchors registered by the Bee wearable evaluate completion states in real-time.
           </p>
         </div>
         <div className="shrink-0 flex flex-col items-end gap-3 self-center md:self-auto mt-4 md:mt-0">
-          <div className="status-badge bg-surface-container-low border-white/5 font-mono text-[10px] tracking-widest py-2 px-4 rounded-full">
-            ACOUSTIC INGESTION: NOMINAL
-            <div className="status-dot status-dot-active ml-2"></div>
-          </div>
+          <StatusBadge status="nominal" label="ACOUSTIC INGESTION: ACTIVE" size="md" />
           <div className="font-mono text-[9px] text-secondary uppercase text-right tracking-[0.2em] pr-2">
-            LATENCY: 42MS • ZERO CLOUD EGRESS
+            LATENCY: 14MS • LOCAL PRIVACY ENCLAVE
           </div>
         </div>
       </div>
 
-      {/* 4 Cards Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-space-md mb-space-xl">
-        {/* Card 1 */}
-        <div className="card-elevated p-space-lg flex flex-col">
-          <div className="flex items-center justify-between mb-8">
-            <div className="font-mono text-[10px] text-secondary uppercase tracking-widest">MORNING CYCLE COMPLETION</div>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-primary"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+      {/* 4 Metrics Cards Grid */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-space-md mb-space-xl">
+        {/* Card 1: Cycle Completion */}
+        <div className="card-elevated p-space-lg flex flex-col justify-between bg-[#121419] border border-white/5">
+          <div className="flex items-center justify-between mb-6">
+            <div className="font-mono text-[10px] text-secondary uppercase tracking-widest">
+              CYCLE COMPLETION
+            </div>
+            <span className="text-emerald-400 text-lg">✓</span>
           </div>
-          <div className="mt-auto">
-            <div className="flex items-baseline gap-2 mb-4">
-              <span className="font-serif text-[40px] text-primary">{tasks.filter(t => t.status === "completed").length} / {tasks.length}</span>
-              <span className="font-mono text-[9px] text-secondary uppercase tracking-widest">VERIFIED</span>
+          <div>
+            <div className="flex items-baseline gap-2 mb-3">
+              <span className="font-serif text-[38px] text-primary">
+                {completedCount} / {tasks.length}
+              </span>
+              <span className="font-mono text-[9px] text-secondary uppercase tracking-widest">
+                VERIFIED
+              </span>
             </div>
             <div className="h-1.5 bg-surface-container-highest rounded-full overflow-hidden">
-              <div className="h-full bg-primary" style={{ width: `${tasks.length ? (tasks.filter(t => t.status === "completed").length / tasks.length) * 100 : 0}%` }}></div>
-            </div>
-          </div>
-        </div>
-        
-        {/* Card 2 */}
-        <div className="card-elevated p-space-lg flex flex-col">
-          <div className="flex items-center justify-between mb-8">
-            <div className="font-mono text-[10px] text-secondary uppercase tracking-widest">NEXT PASSIVE CADENCE</div>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-primary"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-          </div>
-          <div className="mt-auto">
-            <div className="font-serif text-[32px] text-primary mb-2">18:30:00</div>
-            <div className="font-mono text-[9px] text-secondary uppercase tracking-widest mb-3">EVENING INGRESS PROTOCOL</div>
-            <div className="font-mono text-[9px] text-secondary uppercase tracking-widest opacity-60">T-MINUS 04H 01M 51S</div>
-          </div>
-        </div>
-
-        {/* Card 3 */}
-        <div className="card-elevated p-space-lg flex flex-col">
-          <div className="flex items-center justify-between mb-8">
-            <div className="font-mono text-[10px] text-secondary uppercase tracking-widest">DWELL PERIMETER INTEGRITY</div>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-primary"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-          </div>
-          <div className="mt-auto">
-            <div className="font-serif text-[28px] text-primary mb-2 tracking-wide">CALIBRATED</div>
-            <div className="font-mono text-[9px] text-secondary uppercase tracking-widest mb-3">ALL VALVES & SASHES SEALED</div>
-            <div className="font-mono text-[9px] text-secondary uppercase tracking-widest flex items-center gap-2">
-              <div className="w-1.5 h-1.5 rounded-full bg-primary"></div>
-              ZERO ANOMALY LOGGED
+              <div
+                className="h-full bg-emerald-400 transition-all duration-500"
+                style={{
+                  width: `${tasks.length ? (completedCount / tasks.length) * 100 : 0}%`,
+                }}
+              />
             </div>
           </div>
         </div>
 
-        {/* Card 4 */}
-        <div className="card-elevated p-space-lg flex flex-col justify-between">
+        {/* Card 2: Next Cadence */}
+        <div className="card-elevated p-space-lg flex flex-col justify-between bg-[#121419] border border-white/5">
+          <div className="flex items-center justify-between mb-6">
+            <div className="font-mono text-[10px] text-secondary uppercase tracking-widest">
+              NEXT ANCHOR CADENCE
+            </div>
+            <span className="text-amber-400 text-lg">⏱️</span>
+          </div>
           <div>
-            <div className="flex items-center justify-between mb-4">
-              <div className="font-mono text-[10px] text-secondary uppercase tracking-widest">ROUTINE SUPERVISION</div>
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-primary"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
+            <div className="font-serif text-[32px] text-primary mb-1">18:30:00</div>
+            <div className="font-mono text-[9px] text-secondary uppercase tracking-widest mb-1">
+              EVENING INGRESS PROTOCOL
             </div>
-            <div className="font-sans text-body-sm text-secondary mb-6 leading-relaxed pr-2">
-              Track recurring mechanical steps via acoustic signature profiling.
+            <div className="font-mono text-[9px] text-amber-400/80 uppercase tracking-widest">
+              {pendingCount} ANCHORS ACTIVE
             </div>
           </div>
-          <button 
+        </div>
+
+        {/* Card 3: Perimeter Integrity */}
+        <div className="card-elevated p-space-lg flex flex-col justify-between bg-[#121419] border border-white/5">
+          <div className="flex items-center justify-between mb-6">
+            <div className="font-mono text-[10px] text-secondary uppercase tracking-widest">
+              PERIMETER INTEGRITY
+            </div>
+            <span className="text-cyan-400 text-lg">🛡️</span>
+          </div>
+          <div>
+            <div className="font-serif text-[28px] text-primary mb-1 tracking-wide">CALIBRATED</div>
+            <div className="font-mono text-[9px] text-secondary uppercase tracking-widest mb-1">
+              ALL VALVES & SASHES SEALED
+            </div>
+            <div className="font-mono text-[9px] text-emerald-400 uppercase tracking-widest flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+              ZERO ANOMALIES LOGGED
+            </div>
+          </div>
+        </div>
+
+        {/* Card 4: Action Button */}
+        <div className="card-elevated p-space-lg flex flex-col justify-between bg-[#121419] border border-white/5">
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <div className="font-mono text-[10px] text-secondary uppercase tracking-widest">
+                ROUTINE SUPERVISION
+              </div>
+              <span className="text-amber-400 text-lg">➕</span>
+            </div>
+            <div className="font-sans text-body-xs text-secondary leading-relaxed mb-4">
+              Track recurring mechanical closures via acoustic resonance.
+            </div>
+          </div>
+          <button
             onClick={() => setShowAddModal(true)}
-            className="w-full btn-primary bg-primary text-background hover:bg-surface-tint py-3 font-mono text-[11px] tracking-widest rounded-md mt-auto transition-colors"
+            className="w-full py-2.5 px-4 bg-primary hover:bg-surface-tint text-background font-mono text-[11px] font-bold tracking-widest rounded-lg transition-all shadow-md flex items-center justify-center gap-2"
           >
-            + ADD MONITORED ROUTINE
+            <span>+</span>
+            <span>ADD ROUTINE</span>
           </button>
         </div>
       </div>
 
-      {/* Filter Row */}
-      <div className="flex flex-wrap items-center justify-between gap-4 mb-space-lg border-b border-surface-container-highest pb-6">
+      {/* Search & Filter Row */}
+      <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4 mb-space-lg border-b border-surface-container-highest pb-6">
+        {/* Search input */}
+        <div className="flex-1 max-w-md relative">
+          <span className="absolute left-4 top-1/2 -translate-y-1/2 text-secondary text-sm">🔍</span>
+          <input
+            type="text"
+            placeholder="Search routines by title, domain, or time..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="w-full bg-[#121419] border border-surface-container-highest rounded-full py-2.5 pl-10 pr-4 text-body-sm font-sans text-primary placeholder-zinc-500 focus:outline-none focus:border-primary transition-colors"
+          />
+        </div>
+
+        {/* Category Filters */}
         <div className="flex flex-wrap items-center gap-2">
-          <button onClick={() => setActiveFilter("ALL")} className={`px-5 py-2.5 rounded-full font-mono text-[10px] font-bold tracking-widest transition-colors ${activeFilter === "ALL" ? 'bg-primary text-background' : 'text-secondary hover:bg-surface-container hover:text-primary'}`}>
-            ALL DOMAINS
+          <button
+            onClick={() => setActiveFilter("ALL")}
+            className={`px-4 py-2 rounded-full font-mono text-[10px] font-bold tracking-widest transition-colors ${
+              activeFilter === "ALL"
+                ? "bg-primary text-background shadow"
+                : "text-secondary hover:bg-surface-container hover:text-primary"
+            }`}
+          >
+            ALL ({tasks.length})
           </button>
-          {uniqueDomains.map(domain => (
-            <button key={domain} onClick={() => setActiveFilter(domain)} className={`px-5 py-2.5 rounded-full font-mono text-[10px] font-bold tracking-widest transition-colors ${activeFilter === domain ? 'bg-primary text-background' : 'text-secondary hover:bg-surface-container hover:text-primary'}`}>
-              {domain.replace(/_/g, ' ').toUpperCase()}
+          <button
+            onClick={() => setActiveFilter("PENDING")}
+            className={`px-4 py-2 rounded-full font-mono text-[10px] font-bold tracking-widest transition-colors ${
+              activeFilter === "PENDING"
+                ? "bg-amber-500 text-black shadow"
+                : "text-secondary hover:bg-surface-container hover:text-primary"
+            }`}
+          >
+            PENDING ({pendingCount})
+          </button>
+          <button
+            onClick={() => setActiveFilter("COMPLETED")}
+            className={`px-4 py-2 rounded-full font-mono text-[10px] font-bold tracking-widest transition-colors ${
+              activeFilter === "COMPLETED"
+                ? "bg-emerald-500 text-black shadow"
+                : "text-secondary hover:bg-surface-container hover:text-primary"
+            }`}
+          >
+            COMPLETED ({completedCount})
+          </button>
+          {uniqueDomains.map((domain) => (
+            <button
+              key={domain}
+              onClick={() => setActiveFilter(domain)}
+              className={`px-4 py-2 rounded-full font-mono text-[10px] font-bold tracking-widest transition-colors ${
+                activeFilter === domain
+                  ? "bg-primary text-background shadow"
+                  : "text-secondary hover:bg-surface-container hover:text-primary"
+              }`}
+            >
+              {domain.replace(/_/g, " ").toUpperCase()}
             </button>
           ))}
         </div>
-        <div className="flex items-center gap-3">
-          <div className="px-4 py-2.5 rounded-full bg-surface-container-low border border-surface-container-highest font-mono text-[10px] text-secondary tracking-widest flex items-center gap-2">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></svg>
-            {tasks.filter(t => t.status === "pending").length} ANCHORS ACTIVE
-          </div>
-          <div className="px-4 py-2.5 rounded-full bg-surface-container-low border border-surface-container-highest font-mono text-[10px] text-secondary tracking-widest">
-            SORT: SEQUENCE CHRONO
-          </div>
-        </div>
       </div>
 
-      {/* Action Cards Grid (2 cols) */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-space-lg">
-        
-        {/* 
-          // MOCK CARDS COMMENTED OUT 
-          Task 1 
-        <div className="card-elevated p-space-xl flex flex-col bg-surface-container-low border-surface-container-highest">
-          <div className="flex items-center justify-between mb-8">
-            <div className="font-mono text-[10px] text-secondary tracking-[0.2em] uppercase">STEP 01 • 07:15 UTC</div>
-            <div className="px-3 py-1.5 bg-surface-container-highest rounded-full flex items-center gap-2">
-               <div className="w-1.5 h-1.5 rounded-full bg-primary"></div>
-               <span className="font-mono text-[9px] text-primary tracking-[0.2em] font-bold">COMPLETED</span>
-            </div>
-          </div>
-          
-          <div className="flex items-start justify-between mb-3">
-            <h3 className="font-serif text-[26px] text-primary font-normal">Morning Window Ventilation<MockAsterisk /></h3>
-            <div className="w-12 h-12 rounded-lg bg-surface-container-highest flex items-center justify-center shrink-0">
-               <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-primary"><path d="M9.59 4.59A2 2 0 1 1 11 8H2m10.59 11.41A2 2 0 1 0 14 16H2m15.73-8.27A2.5 2.5 0 1 1 19.5 12H2"/></svg>
-            </div>
-          </div>
-          <p className="font-sans text-body-md text-secondary mb-10 tracking-wide">Latched closed after 20m air exchange protocol in primary study.</p>
-
-          <div className="bg-[#121316] border border-surface-container-highest rounded-lg p-space-lg mb-8">
-            <div className="flex items-center justify-between mb-6">
-               <div className="font-mono text-[9px] text-secondary uppercase tracking-widest">ACOUSTIC ANCHOR REGISTERED</div>
-               <div className="font-mono text-[9px] text-secondary uppercase tracking-widest">99.4% CONFIDENCE</div>
-            </div>
-            <div className="flex items-center gap-3 text-primary text-[12px] font-sans mb-6">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-              Double-hung sash lock engagement • 1.2 kHz resonant spike
-            </div>
-            <svg width="100%" height="40" viewBox="0 0 400 40" preserveAspectRatio="none" className="text-secondary stroke-current" fill="none" strokeWidth="1.5">
-               <path d="M0,20 L150,20 L160,10 L170,30 L180,5 L190,20 L400,20"/>
-            </svg>
-          </div>
-          
-          <div className="mt-auto flex items-center justify-between font-mono text-[10px] text-secondary tracking-widest uppercase">
-            <span>ZONE: EAST FACADE (SENSOR NODE_02)</span>
-            <span className="text-primary font-bold">RE-CHECK PASSED</span>
-          </div>
+      {/* Routines Grid */}
+      {filteredTasks.length === 0 ? (
+        <div className="p-12 text-center border border-dashed border-surface-container-highest rounded-2xl bg-[#121419]">
+          <div className="text-3xl mb-3">📋</div>
+          <div className="font-serif text-xl text-primary mb-2">No Monitored Routines Match Filter</div>
+          <p className="font-sans text-secondary text-sm mb-6 max-w-md mx-auto">
+            {searchQuery
+              ? `No routines found matching "${searchQuery}". Try clearing search or choosing another filter.`
+              : "No routines in this domain yet. Add a new monitored routine to start tracking."}
+          </p>
+          <button
+            onClick={() => setShowAddModal(true)}
+            className="px-5 py-2.5 rounded-lg bg-primary text-background font-mono text-[10px] tracking-widest font-bold uppercase"
+          >
+            + Create Routine
+          </button>
         </div>
+      ) : (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-space-lg">
+          {filteredTasks.map((task, idx) => {
+            const isCompleted = task.status === "completed";
+            const isAudioActive = activeAudioIndex === idx;
 
-        Task 2 
-        <div className="card-elevated p-space-xl flex flex-col bg-surface-container-low border-surface-container-highest">
-          <div className="flex items-center justify-between mb-8">
-            <div className="font-mono text-[10px] text-secondary tracking-[0.2em] uppercase">STEP 02 • 07:38 UTC</div>
-            <div className="px-3 py-1.5 bg-surface-container-highest rounded-full flex items-center gap-2">
-               <div className="w-1.5 h-1.5 rounded-full bg-primary"></div>
-               <span className="font-mono text-[9px] text-primary tracking-[0.2em] font-bold">COMPLETED</span>
-            </div>
-          </div>
-          
-          <div className="flex items-start justify-between mb-3">
-            <h3 className="font-serif text-[26px] text-primary font-normal">Espresso Boiler Isolation<MockAsterisk /></h3>
-            <div className="w-12 h-12 rounded-lg bg-surface-container-highest flex items-center justify-center shrink-0">
-               <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-primary"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg>
-            </div>
-          </div>
-          <p className="font-sans text-body-md text-secondary mb-10 tracking-wide">Dual-boiler heating element cut; thermostatic draw dropped to zero.</p>
+            return (
+              <div
+                key={task.id}
+                className={`card-elevated p-space-xl flex flex-col rounded-2xl transition-all duration-200 border ${
+                  isCompleted
+                    ? "bg-[#101317] border-emerald-950/60 hover:border-emerald-500/40"
+                    : "bg-[#14161c] border-surface-container-highest hover:border-amber-500/40"
+                }`}
+              >
+                {/* Card Top Row */}
+                <div className="flex items-center justify-between mb-6 pb-3 border-b border-white/5">
+                  <div className="font-mono text-[10px] text-secondary tracking-[0.2em] uppercase flex items-center gap-2">
+                    <span>STEP {String(idx + 1).padStart(2, "0")}</span>
+                    <span className="opacity-40">•</span>
+                    <span className="text-primary font-bold">
+                      {task.scheduled_time || "SCHEDULED"} UTC
+                    </span>
+                  </div>
 
-          <div className="bg-[#121316] border border-surface-container-highest rounded-lg p-space-lg mb-8">
-            <div className="flex items-center justify-between mb-6">
-               <div className="font-mono text-[9px] text-secondary uppercase tracking-widest">ACOUSTIC ANCHOR REGISTERED</div>
-               <div className="font-mono text-[9px] text-secondary uppercase tracking-widest">98.9% CONFIDENCE</div>
-            </div>
-            <div className="flex items-center gap-3 text-primary text-[12px] font-sans mb-6">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-              Machine toggle click + solenoid cooling hiss decay
-            </div>
-            <svg width="100%" height="40" viewBox="0 0 400 40" preserveAspectRatio="none" className="text-secondary stroke-current" fill="none" strokeWidth="1.5">
-               <path d="M0,20 L180,20 L190,35 L200,5 L210,20 L400,20"/>
-            </svg>
-          </div>
-          
-          <div className="mt-auto flex items-center justify-between font-mono text-[10px] text-secondary tracking-widest uppercase">
-            <span>ZONE: KITCHEN GALLEY (SENSOR NODE_01)</span>
-            <span className="text-primary font-bold">THERMAL: SAFE (21.4°C)</span>
-          </div>
+                  <div className="flex items-center gap-2">
+                    <DomainBadge domain={task.domain} />
+                    <button
+                      onClick={() => handleToggleRoutine(task)}
+                      className="cursor-pointer transition-transform hover:scale-105"
+                      title="Click to toggle status"
+                    >
+                      <StatusBadge status={task.status} />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Title & Icon */}
+                <div className="flex items-start justify-between mb-3">
+                  <div>
+                    <h3
+                      className={`font-serif text-[26px] leading-tight transition-colors ${
+                        isCompleted ? "text-primary/90" : "text-primary font-semibold"
+                      }`}
+                    >
+                      {task.title}
+                    </h3>
+                    <div className="font-mono text-[9px] text-secondary tracking-widest uppercase mt-1">
+                      Recurrence: {task.recurrence || "daily"} • Created {task.created_at ? task.created_at.split("T")[0] : "today"}
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={() => handleToggleRoutine(task)}
+                    className={`w-12 h-12 rounded-xl flex items-center justify-center shrink-0 transition-all ${
+                      isCompleted
+                        ? "bg-emerald-950/60 border border-emerald-500/40 text-emerald-400"
+                        : "bg-surface-container-highest border border-white/5 text-secondary hover:text-amber-400"
+                    }`}
+                    title={isCompleted ? "Mark Pending" : "Mark Completed"}
+                  >
+                    {isCompleted ? (
+                      <span className="text-xl">✓</span>
+                    ) : (
+                      <span className="text-lg">○</span>
+                    )}
+                  </button>
+                </div>
+
+                <p className="font-sans text-body-sm text-secondary mb-6 leading-relaxed">
+                  {isCompleted
+                    ? `Passive acoustic verification completed at ${task.completed_at ? task.completed_at.split("T")[1]?.substring(0, 8) : "nominal time"}. Resonance signature locked.`
+                    : `Passively monitoring environmental acoustic signatures for domain: ${task.domain}. Waiting for closure latch.`}
+                </p>
+
+                {/* Waveform Acoustic Anchor Box */}
+                <div
+                  className={`border rounded-xl p-4 mb-6 transition-all ${
+                    isCompleted
+                      ? "bg-[#0b0f12] border-emerald-900/40"
+                      : "bg-[#0c0d10] border-surface-container-highest/60"
+                  }`}
+                >
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="font-mono text-[9px] text-secondary uppercase tracking-widest flex items-center gap-2">
+                      <span
+                        className={`w-1.5 h-1.5 rounded-full ${
+                          isCompleted ? "bg-emerald-400" : "bg-amber-400 animate-pulse"
+                        }`}
+                      />
+                      <span>
+                        {isCompleted ? "ACOUSTIC ANCHOR REGISTERED" : "ACOUSTIC SENSING ARMED"}
+                      </span>
+                    </div>
+                    <div className="font-mono text-[9px] text-secondary uppercase tracking-widest">
+                      {isCompleted ? "99.4% CONFIDENCE" : "CONTINUOUS SCAN"}
+                    </div>
+                  </div>
+
+                  {/* SVG Waveform Simulation */}
+                  <div className="h-9 flex items-center">
+                    <svg
+                      width="100%"
+                      height="36"
+                      viewBox="0 0 400 36"
+                      preserveAspectRatio="none"
+                      className={`transition-colors ${
+                        isCompleted
+                          ? "text-emerald-400"
+                          : isAudioActive
+                          ? "text-amber-400"
+                          : "text-zinc-600"
+                      }`}
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.5"
+                    >
+                      {isCompleted ? (
+                        <path d="M0,18 L140,18 L155,6 L170,30 L185,2 L200,24 L215,18 L400,18" />
+                      ) : isAudioActive ? (
+                        <path d="M0,18 L120,18 L135,2 L150,34 L165,6 L180,30 L195,18 L400,18" />
+                      ) : (
+                        <path d="M0,18 L180,18 L190,14 L200,22 L210,18 L400,18" strokeDasharray="3 3" />
+                      )}
+                    </svg>
+                  </div>
+                </div>
+
+                {/* Footer Controls */}
+                <div className="mt-auto flex items-center justify-between font-mono text-[10px] text-secondary tracking-widest uppercase border-t border-white/5 pt-4">
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => handleSimulateCheck(idx)}
+                      className="px-3 py-1.5 rounded-md bg-white/5 hover:bg-white/10 text-primary transition-colors flex items-center gap-1.5"
+                      title="Play simulated acoustic verification audio"
+                    >
+                      <span>🔊</span>
+                      <span>Test Chime</span>
+                    </button>
+                    {handleDeleteRoutine && (
+                      <button
+                        onClick={() => handleDeleteRoutine(task.id)}
+                        className="p-1.5 rounded-md hover:bg-rose-950/60 text-secondary hover:text-rose-400 transition-colors"
+                        title="Delete routine"
+                        aria-label="Delete routine"
+                      >
+                        🗑️
+                      </button>
+                    )}
+                  </div>
+
+                  <button
+                    onClick={() => handleToggleRoutine(task)}
+                    className="hover:text-primary transition-colors cursor-pointer text-amber-400 font-bold"
+                  >
+                    {isCompleted ? "Mark Pending ↺" : "Verify Complete ✓"}
+                  </button>
+                </div>
+              </div>
+            );
+          })}
         </div>
-        */}
-
-        {/* Dynamic Mapping for additional routines from DB */}
-        {filteredTasks.map((task, idx) => (
-          <div key={task.id} className="card-elevated p-space-xl flex flex-col bg-surface-container-low border-surface-container-highest">
-            <div className="flex items-center justify-between mb-8">
-              <div className="font-mono text-[10px] text-secondary tracking-[0.2em] uppercase">STEP 0{3 + idx} • {task.scheduled_time || 'PENDING'}</div>
-              <button onClick={() => handleToggleRoutine(task)} className="px-3 py-1.5 bg-surface-container-highest rounded-full border border-transparent flex items-center gap-2 cursor-pointer hover:border-primary transition-colors">
-                 <div className={`w-1.5 h-1.5 rounded-full ${task.status === 'completed' ? 'bg-primary' : 'bg-outline-variant'}`}></div>
-                 <span className={`font-mono text-[9px] tracking-[0.2em] font-bold ${task.status === 'completed' ? 'text-primary' : 'text-secondary'}`}>
-                   {task.status === 'completed' ? 'COMPLETED' : 'WATCHING'}
-                 </span>
-              </button>
-            </div>
-            
-            <div className="flex items-start justify-between mb-3">
-              <h3 className="font-serif text-[26px] text-primary font-normal">{task.title}</h3>
-              <div className="w-12 h-12 rounded-lg bg-surface-container-highest flex items-center justify-center shrink-0">
-                 <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-primary"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
-              </div>
-            </div>
-            <p className="font-sans text-body-md text-secondary mb-10 tracking-wide">Waiting for acoustic anchor confirmation in domain: {task.domain}.</p>
-
-            <div className="bg-[#121316] border border-surface-container-highest rounded-lg p-space-lg mb-8 opacity-50">
-              <div className="flex items-center justify-between mb-6">
-                 <div className="font-mono text-[9px] text-secondary uppercase tracking-widest">ACOUSTIC ANCHOR PENDING</div>
-                 <div className="font-mono text-[9px] text-secondary uppercase tracking-widest">--.-% CONFIDENCE</div>
-              </div>
-              <div className="flex items-center gap-3 text-primary text-[12px] font-sans mb-6">
-                Listening for signature matching routine constraints...
-              </div>
-              <svg width="100%" height="40" viewBox="0 0 400 40" preserveAspectRatio="none" className="text-secondary stroke-current" fill="none" strokeWidth="1">
-                 <path d="M0,20 L400,20"/>
-              </svg>
-            </div>
-            
-            <div className="mt-auto flex items-center justify-between font-mono text-[10px] text-secondary tracking-widest uppercase">
-              <span>ZONE: GLOBAL SENSOR MESH</span>
-              <span>RE-CHECK PENDING</span>
-            </div>
-          </div>
-        ))}
-
-      </div>
+      )}
     </div>
   );
 }

@@ -1,9 +1,9 @@
-import { useState } from "react";
+import React, { useState } from "react";
 import { BriefingReport } from "@/types/schemas";
 import { ScreenHeader } from "../ui/ScreenHeader";
-import { FilterButton } from "../ui/FilterButton";
-import { Badge } from "../ui/Badge";
-import { MockAsterisk } from "../ui/MockAsterisk";
+import { StatusBadge } from "../ui/StatusBadge";
+import { TopicDetailModal } from "../ui/TopicDetailModal";
+import { speakAlexaReassurance } from "@/utils/audioEffects";
 
 interface TopicDossiersProps {
   topicsData: { topics: BriefingReport[] } | undefined;
@@ -12,208 +12,253 @@ interface TopicDossiersProps {
 export function TopicDossiers({ topicsData }: TopicDossiersProps) {
   const [activeFilter, setActiveFilter] = useState<string>("ALL");
   const [searchQuery, setSearchQuery] = useState("");
+  const [selectedTopic, setSelectedTopic] = useState<BriefingReport | null>(null);
+  const [broadcastedId, setBroadcastedId] = useState<string | null>(null);
 
   const topics = topicsData?.topics || [];
-  const uniqueContexts = Array.from(new Set(topics.map(t => t.context_type))).filter(Boolean);
+  const uniqueContexts = Array.from(new Set(topics.map((t) => t.context_type))).filter(Boolean);
 
-  const filteredTopics = topics.filter(t => {
+  const filteredTopics = topics.filter((t) => {
     const matchesFilter = activeFilter === "ALL" || t.context_type === activeFilter;
-    const matchesSearch = t.topic_title.toLowerCase().includes(searchQuery.toLowerCase()) || 
-                          (t.executive_summary?.some(s => s.toLowerCase().includes(searchQuery.toLowerCase())));
+    const searchLower = searchQuery.toLowerCase();
+    const matchesSearch =
+      !searchQuery ||
+      t.topic_title.toLowerCase().includes(searchLower) ||
+      (t.explanatory_synthesis || "").toLowerCase().includes(searchLower) ||
+      (t.executive_summary || []).some((s) => s.toLowerCase().includes(searchLower)) ||
+      (t.action_items || []).some((a) => a.toLowerCase().includes(searchLower)) ||
+      (t.context_type || "").toLowerCase().includes(searchLower);
+
     return matchesFilter && matchesSearch;
   });
 
+  const handleBroadcast = (topic: BriefingReport) => {
+    setBroadcastedId(topic.id);
+    const text = `Topic briefing for ${topic.topic_title}: ${topic.explanatory_synthesis || topic.executive_summary?.[0] || "Synthesized analysis completed."}`;
+    speakAlexaReassurance(text);
+    setTimeout(() => setBroadcastedId(null), 3000);
+  };
+
   return (
     <div className="space-y-space-lg animate-in fade-in max-w-[1400px] mx-auto">
-      <ScreenHeader 
-        icon={<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M12 2a9 9 0 0 0-9 9c0 4.97 4 9 9 9s9-4.03 9-9a9 9 0 0 0-9-9z"/><path d="M9 16v2"/><path d="M15 16v2"/><path d="M12 12v6"/><path d="M8 12a4 4 0 0 1 8 0"/></svg>}
-        directive={<>COGNITIVE TELEMETRY SUBSYSTEM <span className="mx-2 opacity-50">•</span> <Badge variant="outline" className="!py-0.5 !px-2 border-white/10 opacity-70">AWS BEDROCK ZERO-SHOT AGENT</Badge></>}
-        title="SCREEN PURPOSE: AUTONOMOUS TOPIC RESEARCH & ENRICHED DOSSIERS"
-        description={<>Topic Dossiers act as your automated research organizer. When the Bee wearable listens to university class lectures, dense work calls, or technical discussions, EXAMEN's background agent automatically initiates deep research on the subjects mentioned. It synthesizes the ambient arguments into organized, citation-backed dossiers, perfect for reviewing study notes or catching up on complex meeting topics.</>}
+      {/* Detail Modal */}
+      <TopicDetailModal
+        topic={selectedTopic}
+        isOpen={!!selectedTopic}
+        onClose={() => setSelectedTopic(null)}
+      />
+
+      {/* Screen Header */}
+      <ScreenHeader
+        directive="COGNITIVE TELEMETRY SUBSYSTEM // AWS BEDROCK AGENTCORE"
+        title="AUTONOMOUS TOPIC RESEARCH & ENRICHED DOSSIERS"
+        description={
+          <>
+            Topic Dossiers serve as your ambient academic and technical research assistant. When listening to lectures, technical standups, or architectural debates, EXAMEN initiates deep background research, synthesizing ambient arguments into structured, citation-backed dossiers with core explanatory syntheses.
+          </>
+        }
         rightElement={
           <div className="flex flex-col items-end gap-1">
-            <Badge variant="outline" dot="active" className="border-white/10 opacity-70 mb-1">
-              SYNTHESIS ENGINE RUNNING
-            </Badge>
-            <div className="font-mono text-[9px] text-secondary tracking-[0.2em] uppercase">CADENCE: 14 SEC LATENCY</div>
+            <StatusBadge status="nominal" label="SYNTHESIS ENGINE RUNNING" size="md" />
+            <div className="font-mono text-[9px] text-secondary tracking-[0.2em] uppercase">
+              CADENCE: 14 SEC LATENCY
+            </div>
           </div>
         }
       />
 
-      {/* Search / Filter Row */}
-      <div className="flex flex-col md:flex-row items-center gap-space-md mb-space-xl">
-        <div className="flex-1 w-full relative">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="absolute left-4 top-1/2 -translate-y-1/2 text-secondary"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-          <input 
-            type="text" 
-            placeholder="Filter dossiers by thesis, author, protocol, or runtime token..." 
+      {/* Search & Filter Row */}
+      <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4 mb-space-xl border-b border-surface-container-highest pb-6">
+        {/* Search */}
+        <div className="flex-1 max-w-md relative">
+          <span className="absolute left-4 top-1/2 -translate-y-1/2 text-secondary text-sm">🔍</span>
+          <input
+            type="text"
+            placeholder="Search dossiers by topic, thesis, keywords, or citations..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full bg-surface-container-low border border-surface-container-highest rounded-md py-3 pl-12 pr-4 text-body-sm font-sans text-primary placeholder-secondary focus:outline-none focus:border-outline-variant" 
+            className="w-full bg-[#121419] border border-surface-container-highest rounded-full py-2.5 pl-10 pr-4 text-body-sm font-sans text-primary placeholder-zinc-500 focus:outline-none focus:border-primary transition-colors"
           />
         </div>
-        <div className="flex flex-wrap items-center gap-2 shrink-0">
-          <FilterButton active={activeFilter === "ALL"} onClick={() => setActiveFilter("ALL")}>
+
+        {/* Filters */}
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={() => setActiveFilter("ALL")}
+            className={`px-4 py-2 rounded-full font-mono text-[10px] font-bold tracking-widest transition-colors ${
+              activeFilter === "ALL"
+                ? "bg-primary text-background shadow"
+                : "text-secondary hover:bg-surface-container hover:text-primary"
+            }`}
+          >
             ALL ({topics.length})
-          </FilterButton>
-          {uniqueContexts.map(ctx => (
-            <FilterButton key={ctx} active={activeFilter === ctx} onClick={() => setActiveFilter(ctx as string)}>
-              {ctx?.replace(/_/g, ' ').toUpperCase()} ({topics.filter(t => t.context_type === ctx).length})
-            </FilterButton>
+          </button>
+          {uniqueContexts.map((ctx) => (
+            <button
+              key={ctx}
+              onClick={() => setActiveFilter(ctx as string)}
+              className={`px-4 py-2 rounded-full font-mono text-[10px] font-bold tracking-widest transition-colors ${
+                activeFilter === ctx
+                  ? "bg-amber-500 text-black shadow"
+                  : "text-secondary hover:bg-surface-container hover:text-primary"
+              }`}
+            >
+              {ctx?.replace(/_/g, " ").toUpperCase()} ({topics.filter((t) => t.context_type === ctx).length})
+            </button>
           ))}
         </div>
       </div>
 
-      <div className="space-y-space-lg">
-        {/* 
-          // MOCK CARDS COMMENTED OUT
-          Mock Card 
-        <div className="card-elevated p-space-xl bg-surface-container-low border-surface-container-highest flex flex-col gap-6">
-          <div className="flex items-start justify-between">
-             <div className="flex flex-col">
-                <div className="font-mono text-[9px] text-primary tracking-[0.2em] uppercase flex items-center gap-2 mb-4 font-bold">
-                  DOSSIER #418 • HARVESTED AT BREAKFAST <span className="opacity-50 mx-1">•</span> <span className="text-secondary font-normal">SYNTHESIZED 08:14 UTC</span>
-                </div>
-                <h3 className="font-serif text-[36px] text-primary leading-none mb-3">The Anxious Generation<MockAsterisk /></h3>
-                <div className="font-sans text-body-lg text-secondary">Jonathan Haidt (Penguin Press, 2024 Analysis)</div>
-             </div>
-             <div className="flex gap-2 shrink-0">
-                <button className="px-5 py-2.5 rounded border border-surface-container-highest bg-transparent hover:bg-surface-container text-secondary hover:text-primary font-mono text-[9px] tracking-[0.2em] flex items-center gap-2 transition-colors">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/></svg>
-                  ABSTRACT
-                </button>
-                <button className="px-5 py-2.5 rounded border border-surface-container-highest bg-surface-container-highest text-primary font-mono text-[9px] tracking-[0.2em] font-bold flex items-center gap-2 hover:bg-outline-variant transition-colors">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
-                  BROADCAST
-                </button>
-             </div>
-          </div>
-
-          <div className="bg-[#121316] border border-surface-container-highest rounded-lg p-space-md flex gap-4 mt-2">
-             <div className="shrink-0 pt-1 text-secondary">
-               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2v20M17 5v14M22 10v4M7 5v14M2 10v4"/></svg>
-             </div>
-             <div>
-               <div className="font-mono text-[9px] text-secondary tracking-[0.2em] uppercase mb-2">CONVERSATION ORIGIN SNIPPET</div>
-               <div className="font-sans text-body-md text-primary italic">“Mentioned during 08:14 conversation with Elena regarding smartphone policies in primary schools and the collapse of unstructured play.”</div>
-             </div>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-space-md mt-4">
-             <div className="bg-[#121316] border border-surface-container-highest rounded-lg p-space-lg flex flex-col">
-               <div className="flex items-center justify-between mb-6 font-mono text-[9px] text-secondary tracking-[0.2em] uppercase">
-                 <span>THESIS 01</span>
-                 <span>2010-2015</span>
-               </div>
-               <div className="font-serif text-[20px] text-primary mb-4">The Great Rewiring</div>
-               <p className="font-sans text-body-sm text-secondary leading-relaxed mb-12 flex-1">
-                 The fundamental migration of early adolescent development from a physical play-based reality to a continuous phone-based existence, causing systematic disruption in sleep, physical sociality, and sustained cognitive focus.
-               </p>
-               <div className="flex items-center gap-2 font-mono text-[8px] text-secondary tracking-[0.2em] uppercase border-t border-surface-container-highest pt-4">
-                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
-                 EPIDEMIOLOGICAL CORRELATION: 0.88
-               </div>
-             </div>
-
-             <div className="bg-[#121316] border border-surface-container-highest rounded-lg p-space-lg flex flex-col">
-               <div className="flex items-center justify-between mb-6 font-mono text-[9px] text-secondary tracking-[0.2em] uppercase">
-                 <span>THESIS 02</span>
-                 <span>FRAMEWORK</span>
-               </div>
-               <div className="font-serif text-[20px] text-primary mb-4">Four Norm Reforms</div>
-               <div className="font-sans text-body-sm text-secondary leading-relaxed mb-12 flex-1 space-y-2">
-                 <div>1. Zero smartphones prior to high school.</div>
-                 <div>2. Zero social media platforms prior to age 16.</div>
-                 <div>3. Strictly phone-free campus architecture.</div>
-                 <div>4. Restored community-level unsupervised autonomy.</div>
-               </div>
-               <div className="flex items-center gap-2 font-mono text-[8px] text-secondary tracking-[0.2em] uppercase border-t border-surface-container-highest pt-4">
-                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>
-                 SYSTEMIC COLLECTIVE ACTION
-               </div>
-             </div>
-
-             <div className="bg-[#121316] border border-surface-container-highest rounded-lg p-space-lg flex flex-col">
-               <div className="flex items-center justify-between mb-6 font-mono text-[9px] text-secondary tracking-[0.2em] uppercase">
-                 <span>EXAMEN SYNTHESIS</span>
-                 <span>LOCAL OS</span>
-               </div>
-               <div className="font-serif text-[20px] text-primary mb-4">Calm Computing Counterpoint</div>
-               <p className="font-sans text-body-sm text-secondary leading-relaxed mb-12 flex-1">
-                 Hardware-native ambient monitors act as grounding physical anchors. By replacing infinite pull-to-refresh feeds with deterministic glanceability, EXAMEN neutralizes dopaminergic behavioral conditioning.
-               </p>
-               <div className="flex items-center gap-2 font-mono text-[8px] text-secondary tracking-[0.2em] uppercase border-t border-surface-container-highest pt-4">
-                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="20 6 9 17 4 12"/></svg>
-                 ALIGNMENT METRIC: 99.4%
-               </div>
-             </div>
-          </div>
+      {/* Dossiers List */}
+      {filteredTopics.length === 0 ? (
+        <div className="p-12 text-center border border-dashed border-surface-container-highest rounded-2xl bg-[#121419]">
+          <div className="text-3xl mb-3">📚</div>
+          <div className="font-serif text-xl text-primary mb-2">No Topic Dossiers Found</div>
+          <p className="font-sans text-secondary text-sm mb-6 max-w-md mx-auto">
+            {searchQuery
+              ? `No dossiers matched "${searchQuery}".`
+              : "No dossiers synthesized yet. Run a tech discussion in the ambient simulator to trigger deep topic research."}
+          </p>
         </div>
-        */}
+      ) : (
+        <div className="space-y-space-lg">
+          {filteredTopics.map((topic) => {
+            const isBroadcasting = broadcastedId === topic.id;
 
-        {/* Dynamic Mapping from topicsData */}
-        {filteredTopics.map(topic => (
-          <div key={topic.id} className="card-elevated p-space-xl bg-surface-container-low border-surface-container-highest flex flex-col gap-6">
-            <div className="flex items-start justify-between">
-               <div className="flex flex-col">
-                  <div className="font-mono text-[9px] text-primary tracking-[0.2em] uppercase flex items-center gap-2 mb-4 font-bold">
-                    DOSSIER #{topic.id.substring(0,6).toUpperCase()} • DYNAMIC CAPTURE <span className="opacity-50 mx-1">•</span> <span className="text-secondary font-normal">SYNTHESIZED {topic.created_at?.split('T')[1]?.substring(0,5) || '-'} UTC</span>
+            return (
+              <div
+                key={topic.id}
+                className="card-elevated p-space-xl bg-surface-container-low border-surface-container-highest rounded-2xl flex flex-col gap-6 hover:border-amber-500/40 transition-all duration-200"
+              >
+                {/* Header Row */}
+                <div className="flex flex-col md:flex-row items-start justify-between gap-4 pb-4 border-b border-white/5">
+                  <div className="flex flex-col">
+                    <div className="font-mono text-[9px] text-amber-400 tracking-[0.2em] uppercase flex items-center gap-2 mb-2 font-bold">
+                      <span>DOSSIER #{topic.id.substring(0, 6).toUpperCase()}</span>
+                      <span className="opacity-40">•</span>
+                      <span className="text-secondary font-normal">
+                        SYNTHESIZED {topic.created_at ? topic.created_at.split("T")[1]?.substring(0, 5) : "RECENT"} UTC
+                      </span>
+                    </div>
+
+                    <h3 className="font-serif text-[32px] sm:text-[36px] text-primary leading-tight mb-2">
+                      {topic.topic_title}
+                    </h3>
+
+                    <div className="flex items-center gap-2">
+                      <span className="px-2.5 py-1 rounded bg-[#1c1f26] border border-white/5 font-mono text-[9px] text-secondary tracking-widest uppercase">
+                        {topic.context_type?.replace(/_/g, " ").toUpperCase() || "GENERAL RESEARCH"}
+                      </span>
+                      <StatusBadge status="completed" label="SYNTHESIS COMPLETE" />
+                    </div>
                   </div>
-                  <h3 className="font-serif text-[36px] text-primary leading-none mb-3">{topic.topic_title}</h3>
-                  <div className="font-sans text-body-lg text-secondary">
-                    {topic.context_type?.replace(/_/g, ' ').toUpperCase() || 'GENERAL RESEARCH'}
+
+                  {/* Buttons */}
+                  <div className="flex items-center gap-2 shrink-0 self-end md:self-center">
+                    <button
+                      onClick={() => setSelectedTopic(topic)}
+                      className="px-5 py-2.5 rounded-lg border border-surface-container-highest bg-transparent hover:bg-surface-container text-secondary hover:text-primary font-mono text-[9px] tracking-[0.2em] flex items-center gap-2 transition-colors uppercase font-bold"
+                      title="Open full research report"
+                    >
+                      <span>📖</span>
+                      <span>ABSTRACT & DEEP DIVE</span>
+                    </button>
+
+                    <button
+                      onClick={() => handleBroadcast(topic)}
+                      className="px-5 py-2.5 rounded-lg border border-amber-500/50 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 font-mono text-[9px] tracking-[0.2em] font-bold flex items-center gap-2 transition-colors uppercase shadow-sm"
+                      title="Broadcast topic to Alexa Echo Show"
+                    >
+                      <span>🔊</span>
+                      <span>{isBroadcasting ? "SPEAKING..." : "BROADCAST TO ALEXA"}</span>
+                    </button>
                   </div>
-               </div>
-               <div className="flex gap-2 shrink-0">
-                  <button className="px-5 py-2.5 rounded border border-surface-container-highest bg-transparent hover:bg-surface-container text-secondary hover:text-primary font-mono text-[9px] tracking-[0.2em] flex items-center gap-2 transition-colors">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/></svg>
-                    ABSTRACT
-                  </button>
-                  <button className="px-5 py-2.5 rounded border border-surface-container-highest bg-surface-container-highest text-primary font-mono text-[9px] tracking-[0.2em] font-bold flex items-center gap-2 hover:bg-outline-variant transition-colors">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
-                    BROADCAST
-                  </button>
-               </div>
-            </div>
+                </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-space-md mt-2">
-               {/* Summary */}
-               <div className="bg-[#121316] border border-surface-container-highest rounded-lg p-space-lg flex flex-col">
-                 <div className="flex items-center justify-between mb-6 font-mono text-[9px] text-secondary tracking-[0.2em] uppercase">
-                   <span>EXECUTIVE SUMMARY</span>
-                 </div>
-                 <div className="font-sans text-body-sm text-secondary leading-relaxed flex-1 space-y-2">
-                   {topic.executive_summary?.map((sum, i) => <div key={i}>• {sum}</div>) || <div>No summary available</div>}
-                 </div>
-               </div>
+                {/* Explanatory Synthesis Box (Next_steps highlight) */}
+                {topic.explanatory_synthesis && (
+                  <div className="bg-gradient-to-r from-amber-950/30 to-[#121419] border border-amber-500/30 rounded-xl p-4">
+                    <div className="font-mono text-[9px] text-amber-300 tracking-[0.2em] uppercase font-bold mb-1 flex items-center gap-1.5">
+                      <span>⚡</span>
+                      <span>EXPLANATORY CONTEXTUAL SYNTHESIS</span>
+                    </div>
+                    <p className="font-sans text-body-sm text-amber-100/90 leading-relaxed">
+                      {topic.explanatory_synthesis}
+                    </p>
+                  </div>
+                )}
 
-               {/* Action Items / Sources */}
-               <div className="bg-[#121316] border border-surface-container-highest rounded-lg p-space-lg flex flex-col">
-                 <div className="flex items-center justify-between mb-6 font-mono text-[9px] text-secondary tracking-[0.2em] uppercase">
-                   <span>ACTION ITEMS & SOURCES</span>
-                 </div>
-                 <div className="font-sans text-body-sm text-secondary leading-relaxed flex-1 space-y-4">
-                   {topic.action_items && topic.action_items.length > 0 && (
-                     <div>
-                       <strong className="text-primary font-mono text-[9px] tracking-widest uppercase mb-2 block">Action Items</strong>
-                       {topic.action_items.map((act, i) => <div key={i}>• {act}</div>)}
-                     </div>
-                   )}
-                   {topic.web_sources && topic.web_sources.length > 0 && (
-                     <div>
-                       <strong className="text-primary font-mono text-[9px] tracking-widest uppercase mb-2 block">Citations</strong>
-                       {topic.web_sources.map((src, i) => (
-                         <a key={i} href={src} target="_blank" className="block text-primary hover:underline truncate" title={src}>🔗 {src}</a>
-                       ))}
-                     </div>
-                   )}
-                 </div>
-               </div>
-            </div>
-          </div>
-        ))}
-        
-      </div>
+                {/* 2 Columns: Executive Summary & Action Items/Sources */}
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-space-md">
+                  {/* Summary */}
+                  <div className="bg-[#121419] border border-surface-container-highest rounded-xl p-5 flex flex-col justify-between">
+                    <div>
+                      <div className="font-mono text-[9px] text-secondary tracking-[0.2em] uppercase mb-4 font-bold">
+                        EXECUTIVE SUMMARY & INSIGHTS
+                      </div>
+                      <div className="font-sans text-body-sm text-secondary leading-relaxed space-y-2.5">
+                        {topic.executive_summary?.map((sum, i) => (
+                          <div key={i} className="flex items-start gap-2.5 text-primary">
+                            <span className="text-amber-400 select-none">▪</span>
+                            <span>{sum}</span>
+                          </div>
+                        )) || <div>No summary available</div>}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Actions & Citations */}
+                  <div className="bg-[#121419] border border-surface-container-highest rounded-xl p-5 flex flex-col justify-between">
+                    <div>
+                      <div className="font-mono text-[9px] text-secondary tracking-[0.2em] uppercase mb-4 font-bold">
+                        ACTION ITEMS & CITATIONS
+                      </div>
+
+                      {topic.action_items && topic.action_items.length > 0 && (
+                        <div className="mb-4">
+                          <strong className="text-primary font-mono text-[9px] tracking-widest uppercase mb-2 block">
+                            Key Action Items
+                          </strong>
+                          <div className="space-y-1.5">
+                            {topic.action_items.map((act, i) => (
+                              <div key={i} className="flex items-start gap-2 text-body-xs font-sans text-primary">
+                                <span className="text-emerald-400">✓</span>
+                                <span>{act}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {topic.web_sources && topic.web_sources.length > 0 && (
+                        <div>
+                          <strong className="text-primary font-mono text-[9px] tracking-widest uppercase mb-2 block">
+                            Corroborating Citations
+                          </strong>
+                          <div className="space-y-1">
+                            {topic.web_sources.slice(0, 3).map((src, i) => (
+                              <a
+                                key={i}
+                                href={src}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="block text-amber-200/90 hover:text-amber-300 font-mono text-[10px] truncate hover:underline"
+                                title={src}
+                              >
+                                🔗 {src}
+                              </a>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

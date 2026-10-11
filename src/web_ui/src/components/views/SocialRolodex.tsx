@@ -1,267 +1,393 @@
-import { useState } from "react";
+import React, { useState } from "react";
 import { SocialEntity } from "@/types/schemas";
 import { ScreenHeader } from "../ui/ScreenHeader";
-import { Badge } from "../ui/Badge";
-import { FilterButton } from "../ui/FilterButton";
-import { MockAsterisk } from "../ui/MockAsterisk";
+import { StatusBadge } from "../ui/StatusBadge";
+import { ExecutiveDossierModal } from "../ui/ExecutiveDossierModal";
+import { FollowUpModal } from "../ui/FollowUpModal";
 
 interface SocialRolodexProps {
   socialData: { contacts: SocialEntity[] } | undefined;
+  onEnrichContact?: (contactId: string) => Promise<void>;
+  onToggleCommitment?: (commitmentId: string, action: "fulfill" | "cancel") => Promise<void>;
 }
 
-export function SocialRolodex({ socialData }: SocialRolodexProps) {
+export function SocialRolodex({
+  socialData,
+  onEnrichContact,
+  onToggleCommitment,
+}: SocialRolodexProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [activeFilter, setActiveFilter] = useState<string>("ALL");
+  const [selectedDossierContact, setSelectedDossierContact] = useState<SocialEntity | null>(null);
+  const [selectedFollowUpContact, setSelectedFollowUpContact] = useState<SocialEntity | null>(null);
 
   const contacts = socialData?.contacts || [];
-  
-  const filteredContacts = contacts.filter(c => {
+
+  const needsActionCount = contacts.filter((c) => c.commitments && c.commitments.length > 0).length;
+  const enrichedCount = contacts.filter((c) => !!c.web_profile).length;
+  const todayDateStr = new Date().toISOString().split("T")[0];
+
+  const filteredContacts = contacts.filter((c) => {
     let matchesFilter = true;
     if (activeFilter === "NEEDS_ACTION") {
       matchesFilter = !!(c.commitments && c.commitments.length > 0);
+    } else if (activeFilter === "ENRICHED") {
+      matchesFilter = !!c.web_profile;
+    } else if (activeFilter === "TODAY") {
+      matchesFilter = !!(c.timestamp && c.timestamp.includes(todayDateStr));
     }
-    
+
     const searchLower = searchQuery.toLowerCase();
-    const matchesSearch = !searchQuery || 
+    const matchesSearch =
+      !searchQuery ||
       c.name.toLowerCase().includes(searchLower) ||
       (c.company_or_role || "").toLowerCase().includes(searchLower) ||
-      (c.key_topics || []).some(t => t.toLowerCase().includes(searchLower));
+      (c.contact_info || "").toLowerCase().includes(searchLower) ||
+      (c.key_topics || []).some((t) => t.toLowerCase().includes(searchLower)) ||
+      (c.commitments || []).some((cmt: any) =>
+        (typeof cmt === "object" ? cmt.description : String(cmt))
+          .toLowerCase()
+          .includes(searchLower)
+      );
 
     return matchesFilter && matchesSearch;
   });
 
-  const needsActionCount = contacts.filter(c => c.commitments && c.commitments.length > 0).length;
-
   return (
-    <div className="space-y-space-lg animate-in fade-in max-w-[1200px] mx-auto">
-      <ScreenHeader 
+    <div className="space-y-space-lg animate-in fade-in max-w-[1300px] mx-auto">
+      {/* Executive Dossier Modal */}
+      <ExecutiveDossierModal
+        contact={selectedDossierContact}
+        isOpen={!!selectedDossierContact}
+        onClose={() => setSelectedDossierContact(null)}
+        onEnrich={onEnrichContact}
+        onToggleCommitment={onToggleCommitment}
+      />
+
+      {/* Follow-Up Composer Modal */}
+      <FollowUpModal
+        contact={selectedFollowUpContact}
+        isOpen={!!selectedFollowUpContact}
+        onClose={() => setSelectedFollowUpContact(null)}
+      />
+
+      {/* Screen Header */}
+      <ScreenHeader
         directive="SCREEN PURPOSE // SUB-SYSTEM DIRECTORY"
         title="PASSIVE CONVERSATIONAL CRM & SOCIAL MEMORY"
-        description={<>The Social Rolodex is your automated networking assistant. When you meet new people or attend introductions, the Bee wearable passively listens to the conversation, extracting names, roles, contact details, and mutual commitments. It automatically builds a private, sanitized contact card for every new encounter, so you never forget who you met or what you promised.</>}
+        description={
+          <>
+            The Social Rolodex acts as your ambient networking assistant. During meetings and conferences, the Bee wearable passively extracts interlocutor names, roles, contact channels, and bilateral promises. It grounds mutual commitments and synthesizes executive web dossiers in your local private enclave.
+          </>
+        }
         rightElement={
-          <Badge variant="outline" className="border-white/10 opacity-70">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-            PII SANITIZED LOCAL ENCLAVE
-          </Badge>
+          <div className="flex flex-col items-end gap-1">
+            <StatusBadge status="verified" label="PII SANITIZED LOCAL ENCLAVE" size="md" />
+            <div className="font-mono text-[9px] text-secondary tracking-widest uppercase">
+              ZERO TELEMETRY EGRESS
+            </div>
+          </div>
         }
       />
 
       {/* 3 KPI Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-space-md mb-space-lg">
-        <div className="card-elevated p-space-lg flex flex-col justify-between">
-          <div className="font-mono text-[9px] text-secondary tracking-[0.2em] uppercase mb-6">INGESTED TODAY</div>
-          <div className="flex items-center justify-between">
-            <div className="font-serif text-[44px] text-primary">{contacts.filter(c => c.timestamp && c.timestamp.includes(new Date().toISOString().split('T')[0])).length.toString().padStart(2, '0')}</div>
-            <div className="w-12 h-12 rounded-lg bg-surface-container-highest flex items-center justify-center text-primary">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/></svg>
-            </div>
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-space-md mb-space-lg">
+        {/* Card 1 */}
+        <div className="card-elevated p-space-lg flex flex-col justify-between bg-[#121419] border border-white/5 rounded-2xl">
+          <div className="font-mono text-[9px] text-secondary tracking-[0.2em] uppercase mb-4">
+            TOTAL ENCOUNTERS INDEXED
           </div>
-        </div>
-        <div className="card-elevated p-space-lg flex flex-col justify-between">
-          <div className="font-mono text-[9px] text-secondary tracking-[0.2em] uppercase mb-6">TOTAL ENCOUNTERS INDEXED</div>
           <div className="flex items-center justify-between">
             <div className="font-serif text-[44px] text-primary">{contacts.length}</div>
-            <div className="w-12 h-12 rounded-lg bg-surface-container-highest flex items-center justify-center text-primary">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+            <div className="w-12 h-12 rounded-xl bg-surface-container-highest flex items-center justify-center text-primary text-xl">
+              👥
             </div>
           </div>
         </div>
-        <div className="card-elevated p-space-lg flex flex-col justify-between">
-          <div className="font-mono text-[9px] text-secondary tracking-[0.2em] uppercase mb-6">PENDING FOLLOW-UPS</div>
+
+        {/* Card 2 */}
+        <div className="card-elevated p-space-lg flex flex-col justify-between bg-[#121419] border border-white/5 rounded-2xl">
+          <div className="font-mono text-[9px] text-secondary tracking-[0.2em] uppercase mb-4">
+            BILATERAL COMMITMENTS DUE
+          </div>
           <div className="flex items-center justify-between">
             <div className="flex items-baseline gap-2">
-              <span className="font-serif text-[44px] text-primary">{needsActionCount.toString().padStart(2, '0')}</span>
-              <span className="font-mono text-[9px] text-error tracking-[0.2em] uppercase">NEEDS ACTION</span>
+              <span className="font-serif text-[44px] text-primary">{needsActionCount}</span>
+              <span className="font-mono text-[9px] text-amber-400 tracking-[0.2em] uppercase">
+                ACTION NEEDED
+              </span>
             </div>
-            <div className="w-12 h-12 rounded-lg bg-surface-container-highest flex items-center justify-center text-primary">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/><circle cx="12" cy="14" r="3"/><path d="M12 11v3l2 1"/></svg>
+            <div className="w-12 h-12 rounded-xl bg-surface-container-highest flex items-center justify-center text-amber-400 text-xl">
+              🤝
+            </div>
+          </div>
+        </div>
+
+        {/* Card 3 */}
+        <div className="card-elevated p-space-lg flex flex-col justify-between bg-[#121419] border border-white/5 rounded-2xl">
+          <div className="font-mono text-[9px] text-secondary tracking-[0.2em] uppercase mb-4">
+            AI WEB DOSSIERS ENRICHED
+          </div>
+          <div className="flex items-center justify-between">
+            <div className="flex items-baseline gap-2">
+              <span className="font-serif text-[44px] text-primary">{enrichedCount}</span>
+              <span className="font-mono text-[9px] text-cyan-400 tracking-[0.2em] uppercase">
+                INTELLIGENCE
+              </span>
+            </div>
+            <div className="w-12 h-12 rounded-xl bg-surface-container-highest flex items-center justify-center text-cyan-400 text-xl">
+              ⚡
             </div>
           </div>
         </div>
       </div>
 
-      {/* Search / Filter Row */}
-      <div className="flex flex-col md:flex-row items-center gap-space-md mb-space-xl">
-        <div className="flex-1 w-full relative">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="absolute left-4 top-1/2 -translate-y-1/2 text-secondary"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-          <input 
-            type="text" 
-            placeholder="Search contacts, organizations, mutual commitments, or tags..." 
+      {/* Search & Filter Row */}
+      <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4 mb-space-xl border-b border-surface-container-highest pb-6">
+        {/* Search Input */}
+        <div className="flex-1 max-w-md relative">
+          <span className="absolute left-4 top-1/2 -translate-y-1/2 text-secondary text-sm">🔍</span>
+          <input
+            type="text"
+            placeholder="Search contacts, roles, tags, or commitments..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full bg-surface-container-low border border-surface-container-highest rounded-md py-3 pl-12 pr-4 text-body-sm font-sans text-primary placeholder-secondary focus:outline-none focus:border-outline-variant" 
+            className="w-full bg-[#121419] border border-surface-container-highest rounded-full py-2.5 pl-10 pr-4 text-body-sm font-sans text-primary placeholder-zinc-500 focus:outline-none focus:border-primary transition-colors"
           />
         </div>
-        <div className="flex items-center gap-2 shrink-0">
-          <FilterButton active={activeFilter === "ALL"} onClick={() => setActiveFilter("ALL")}>ALL ({contacts.length})</FilterButton>
-          <FilterButton active={activeFilter === "NEEDS_ACTION"} onClick={() => setActiveFilter("NEEDS_ACTION")}>COMMITMENTS DUE ({needsActionCount})</FilterButton>
-          <button className="w-10 h-10 rounded-md bg-surface-container-low border border-surface-container-highest flex items-center justify-center text-secondary hover:text-primary transition-colors ml-2">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
+
+        {/* Filter Buttons */}
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={() => setActiveFilter("ALL")}
+            className={`px-4 py-2 rounded-full font-mono text-[10px] font-bold tracking-widest transition-colors ${
+              activeFilter === "ALL"
+                ? "bg-primary text-background shadow"
+                : "text-secondary hover:bg-surface-container hover:text-primary"
+            }`}
+          >
+            ALL ({contacts.length})
+          </button>
+          <button
+            onClick={() => setActiveFilter("NEEDS_ACTION")}
+            className={`px-4 py-2 rounded-full font-mono text-[10px] font-bold tracking-widest transition-colors ${
+              activeFilter === "NEEDS_ACTION"
+                ? "bg-amber-500 text-black shadow"
+                : "text-secondary hover:bg-surface-container hover:text-primary"
+            }`}
+          >
+            COMMITMENTS DUE ({needsActionCount})
+          </button>
+          <button
+            onClick={() => setActiveFilter("ENRICHED")}
+            className={`px-4 py-2 rounded-full font-mono text-[10px] font-bold tracking-widest transition-colors ${
+              activeFilter === "ENRICHED"
+                ? "bg-cyan-500 text-black shadow"
+                : "text-secondary hover:bg-surface-container hover:text-primary"
+            }`}
+          >
+            AI ENRICHED ({enrichedCount})
+          </button>
+          <button
+            onClick={() => setActiveFilter("TODAY")}
+            className={`px-4 py-2 rounded-full font-mono text-[10px] font-bold tracking-widest transition-colors ${
+              activeFilter === "TODAY"
+                ? "bg-emerald-500 text-black shadow"
+                : "text-secondary hover:bg-surface-container hover:text-primary"
+            }`}
+          >
+            NEW TODAY
           </button>
         </div>
       </div>
 
-      <div className="flex items-center justify-between font-mono text-[9px] text-secondary tracking-[0.2em] uppercase mb-4 border-b border-surface-container-highest pb-4">
-        <span>SOCIAL INDEX FEED / SORTED BY RECENCY</span>
-        <span>{socialData?.contacts?.length || 1} DISPLAYED</span>
-      </div>
-
-      {/* Action Cards Grid */}
-      <div className="space-y-space-lg">
-        {/* 
-          // MOCK CARDS COMMENTED OUT
-          Hardcoded mock for visual parity 
-        <div className="card-elevated p-space-xl flex flex-col gap-8 bg-surface-container-lowest border-surface-container-highest">
-          <div className="flex flex-col md:flex-row justify-between items-start gap-4">
-            <div className="flex items-start gap-4">
-              <div className="w-14 h-14 rounded-lg bg-surface-container-highest border border-outline-variant flex items-center justify-center text-primary font-serif text-[20px]">
-                AV
-              </div>
-              <div>
-                <div className="flex items-center gap-3 mb-1">
-                  <h3 className="font-serif text-[24px] text-primary font-normal">Andrea<MockAsterisk /></h3>
-                  <Badge variant="filled" className="text-background bg-primary">FIRST ENCOUNTER TODAY</Badge>
-                </div>
-                <div className="font-sans text-body-sm text-secondary mb-3">DevOps Lead at <span className="text-primary">Almaviva</span></div>
-                <div className="flex items-center gap-3 font-mono text-[9px] text-secondary tracking-[0.2em] uppercase">
-                  <span className="flex items-center gap-1"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg> OCT 06, 2026 • HUB CORRIDOR</span>
-                  <span className="opacity-40">•</span>
-                  <span>DURATION: 11M 40S</span>
-                </div>
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              <button className="px-4 py-2 rounded border border-surface-container-highest bg-transparent hover:bg-surface-container text-secondary hover:text-primary font-mono text-[9px] tracking-[0.2em] flex items-center gap-2 transition-colors">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                EXPORT CARD
-              </button>
-              <button className="px-4 py-2 rounded border border-surface-container-highest bg-transparent hover:bg-surface-container text-secondary hover:text-primary font-mono text-[9px] tracking-[0.2em] flex items-center gap-2 transition-colors">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
-                DRAFT FOLLOW-UP
-              </button>
-              <button className="px-4 py-2 rounded border border-primary bg-primary text-background font-mono text-[9px] font-bold tracking-[0.2em] flex items-center gap-2 hover:bg-surface-tint transition-colors">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
-                VIEW TRACE
-              </button>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-space-lg">
-            <div className="flex flex-col">
-              <div className="font-mono text-[9px] text-secondary tracking-[0.2em] uppercase mb-3">EXTRACTED AGENT CONTEXT</div>
-              <div className="bg-[#121316] border border-surface-container-highest rounded-lg p-space-md mb-4 text-body-md text-secondary leading-relaxed font-sans">
-                “Discussed branch test automation and Bedrock Mantle pipeline deployment strategies. Noted mutual preference for trunk-based continuous delivery and acoustic isolation in open layouts.”
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="px-2 py-1 rounded bg-surface-container-low border border-surface-container-highest font-mono text-[10px] text-secondary hover:text-primary transition-colors cursor-pointer">#DevOps</span>
-                <span className="px-2 py-1 rounded bg-surface-container-low border border-surface-container-highest font-mono text-[10px] text-secondary hover:text-primary transition-colors cursor-pointer">#GitHub</span>
-                <span className="px-2 py-1 rounded bg-surface-container-low border border-surface-container-highest font-mono text-[10px] text-secondary hover:text-primary transition-colors cursor-pointer">#Branch-Testing</span>
-                <span className="px-2 py-1 rounded bg-surface-container-low border border-surface-container-highest font-mono text-[10px] text-secondary hover:text-primary transition-colors cursor-pointer">#Bedrock-Mantle</span>
-                <span className="px-2 py-1 rounded bg-surface-container-low border border-surface-container-highest font-mono text-[10px] text-secondary hover:text-primary transition-colors cursor-pointer">#Almaviva</span>
-              </div>
-            </div>
-
-            <div className="flex flex-col h-full bg-[#121316] border border-surface-container-highest rounded-lg p-space-lg">
-              <div className="flex items-center justify-between mb-4">
-                <div className="font-mono text-[9px] text-primary tracking-[0.2em] uppercase flex items-center gap-2 font-bold">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
-                  BILATERAL COMMITMENT
-                </div>
-                <div className="px-2 py-1 rounded border border-error/30 text-error font-mono text-[9px] tracking-[0.2em]">
-                  DUE THURSDAY
-                </div>
-              </div>
-              <div className="text-body-md text-primary leading-relaxed font-sans mb-8">
-                “Agreed to send Bedrock Mantle fastmcp schema over Slack before Thursday.”
-              </div>
-              <div className="mt-auto flex items-center justify-between font-mono text-[9px] text-secondary tracking-[0.2em] border-t border-surface-container-highest pt-4">
-                <span>SYNAPSE STATE: UNFULFILLED</span>
-                <span className="text-primary hover:underline cursor-pointer">MARK DISPATCHED</span>
-              </div>
-            </div>
-          </div>
+      {/* Contacts List */}
+      {filteredContacts.length === 0 ? (
+        <div className="p-12 text-center border border-dashed border-surface-container-highest rounded-2xl bg-[#121419]">
+          <div className="text-3xl mb-3">👤</div>
+          <div className="font-serif text-xl text-primary mb-2">No Contacts Found</div>
+          <p className="font-sans text-secondary text-sm mb-6 max-w-md mx-auto">
+            {searchQuery
+              ? `No contacts matched "${searchQuery}".`
+              : "No contacts ingested in this view yet. Run a social conversation in the simulator to test."}
+          </p>
         </div>
-        */}
+      ) : (
+        <div className="space-y-space-lg">
+          {filteredContacts.map((contact) => {
+            const hasCommitments = contact.commitments && contact.commitments.length > 0;
+            const isToday = contact.timestamp && contact.timestamp.includes(todayDateStr);
 
-        {/* Dynamic Mapping */}
-        {filteredContacts.map(contact => (
-          <div key={contact.id} className="card-elevated p-space-xl flex flex-col gap-8 bg-surface-container-lowest border-surface-container-highest">
-            <div className="flex flex-col md:flex-row justify-between items-start gap-4">
-              <div className="flex items-start gap-4">
-                <div className="w-14 h-14 rounded-lg bg-surface-container-highest border border-outline-variant flex items-center justify-center text-primary font-serif text-[20px]">
-                  {contact.name.substring(0, 2).toUpperCase()}
+            return (
+              <div
+                key={contact.id}
+                className="card-elevated p-space-xl flex flex-col gap-6 bg-surface-container-lowest border-surface-container-highest rounded-2xl hover:border-amber-500/40 transition-all duration-200"
+              >
+                {/* Header row */}
+                <div className="flex flex-col md:flex-row justify-between items-start gap-4 pb-4 border-b border-white/5">
+                  <div className="flex items-start gap-4">
+                    <div className="w-14 h-14 rounded-2xl bg-surface-container-highest border border-outline-variant flex items-center justify-center text-primary font-serif text-2xl font-bold shrink-0 shadow-md">
+                      {contact.name.substring(0, 2).toUpperCase()}
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-3 mb-1">
+                        <h3 className="font-serif text-[24px] text-primary font-normal">
+                          {contact.name}
+                        </h3>
+                        {isToday && (
+                          <StatusBadge status="verified" label="NEW ENCOUNTER TODAY" />
+                        )}
+                        {contact.web_profile && (
+                          <span className="px-2 py-0.5 rounded bg-cyan-950/70 border border-cyan-500/30 text-cyan-300 font-mono text-[8px] uppercase tracking-wider">
+                            ⚡ AI DOSSIER
+                          </span>
+                        )}
+                      </div>
+                      <div className="font-sans text-body-sm text-secondary mb-2">
+                        {contact.company_or_role || "Independent Contact"}
+                      </div>
+                      <div className="flex flex-wrap items-center gap-4 font-mono text-[9px] text-secondary tracking-widest uppercase">
+                        {contact.contact_info && (
+                          <span className="flex items-center gap-1">
+                            <span>✉️</span> {contact.contact_info}
+                          </span>
+                        )}
+                        {contact.location_encountered && (
+                          <span className="flex items-center gap-1">
+                            <span>📍</span> {contact.location_encountered}
+                          </span>
+                        )}
+                        <span className="flex items-center gap-1">
+                          <span>📅</span> {contact.timestamp ? contact.timestamp.split("T")[0] : "Recent"}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Top Action Buttons */}
+                  <div className="flex items-center gap-2 self-end md:self-center shrink-0">
+                    <button
+                      onClick={() => setSelectedFollowUpContact(contact)}
+                      className="px-4 py-2 rounded-lg border border-surface-container-highest bg-transparent hover:bg-surface-container text-secondary hover:text-primary font-mono text-[9px] tracking-[0.2em] flex items-center gap-1.5 transition-colors uppercase font-bold"
+                      title="Draft follow-up email/Slack"
+                    >
+                      <span>✉️</span>
+                      <span>DRAFT FOLLOW-UP</span>
+                    </button>
+
+                    <button
+                      onClick={() => setSelectedDossierContact(contact)}
+                      className="px-4 py-2 rounded-lg border border-amber-500/50 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 font-mono text-[9px] font-bold tracking-[0.2em] flex items-center gap-1.5 transition-colors uppercase"
+                      title="Open Executive Dossier"
+                    >
+                      <span>⚡</span>
+                      <span>VIEW DOSSIER</span>
+                    </button>
+                  </div>
                 </div>
-                <div>
-                  <div className="flex items-center gap-3 mb-1">
-                    <h3 className="font-serif text-[24px] text-primary font-normal">{contact.name}</h3>
-                    {contact.timestamp && contact.timestamp.includes(new Date().toISOString().split('T')[0]) && (
-                      <Badge variant="filled" className="text-background bg-primary">NEW ENCOUNTER TODAY</Badge>
+
+                {/* Grid for Topics & Commitments */}
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-space-lg">
+                  {/* Left Column: Topics */}
+                  <div className="flex flex-col justify-between">
+                    <div>
+                      <div className="font-mono text-[9px] text-secondary tracking-[0.2em] uppercase mb-3">
+                        DISCUSSED TOPICS & KEYWORDS
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2 mb-4">
+                        {contact.key_topics?.length ? (
+                          contact.key_topics.map((topic, i) => (
+                            <span
+                              key={i}
+                              className="px-3 py-1.5 rounded-lg bg-[#121419] border border-surface-container-highest font-mono text-[10px] text-amber-200/90 hover:border-amber-400 transition-colors cursor-pointer"
+                            >
+                              #{topic.replace(/\s+/g, "-")}
+                            </span>
+                          ))
+                        ) : (
+                          <span className="text-secondary text-body-sm italic opacity-50">
+                            No topics extracted yet.
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    {contact.web_profile?.executive_summary && (
+                      <div className="bg-[#101217] border border-[#232731] rounded-xl p-3.5 mt-2">
+                        <div className="font-mono text-[8px] text-cyan-400 tracking-widest uppercase mb-1 flex items-center gap-1">
+                          <span>⚡</span>
+                          <span>AI Executive Brief</span>
+                        </div>
+                        <p className="font-sans text-xs text-secondary leading-relaxed line-clamp-3">
+                          {contact.web_profile.executive_summary}
+                        </p>
+                      </div>
                     )}
                   </div>
-                  <div className="font-sans text-body-sm text-secondary mb-3">{contact.company_or_role || 'Independent Contact'}</div>
-                  <div className="flex items-center gap-3 font-mono text-[9px] text-secondary tracking-[0.2em] uppercase">
-                    <span className="flex items-center gap-1"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg> {contact.timestamp?.split('T')[0] || '-'}</span>
-                    <span className="opacity-40">•</span>
-                    <span>{contact.contact_info || 'NO CONTACT DATA'}</span>
-                  </div>
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
-                <button className="px-4 py-2 rounded border border-surface-container-highest bg-transparent hover:bg-surface-container text-secondary hover:text-primary font-mono text-[9px] tracking-[0.2em] flex items-center gap-2 transition-colors">
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
-                  DRAFT FOLLOW-UP
-                </button>
-              </div>
-            </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-space-lg">
-              <div className="flex flex-col">
-                <div className="font-mono text-[9px] text-secondary tracking-[0.2em] uppercase mb-3">EXTRACTED KEY TOPICS</div>
-                <div className="flex flex-wrap items-center gap-2 mb-4">
-                  {contact.key_topics?.length ? contact.key_topics.map(topic => (
-                    <span key={topic} className="px-3 py-1.5 rounded bg-surface-container-low border border-surface-container-highest font-mono text-[10px] text-secondary hover:text-primary transition-colors cursor-pointer">
-                      #{topic.replace(/\s+/g, '-')}
-                    </span>
-                  )) : (
-                    <span className="text-secondary text-body-sm italic opacity-50">No topics extracted</span>
-                  )}
-                </div>
-              </div>
-
-              {contact.commitments && contact.commitments.length > 0 ? (
-                <div className="flex flex-col h-full bg-[#121316] border border-surface-container-highest rounded-lg p-space-lg">
-                  <div className="flex items-center justify-between mb-4">
-                    <div className="font-mono text-[9px] text-primary tracking-[0.2em] uppercase flex items-center gap-2 font-bold">
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
-                      BILATERAL COMMITMENT
+                  {/* Right Column: Bilateral Commitments */}
+                  <div className="flex flex-col">
+                    <div className="font-mono text-[9px] text-secondary tracking-[0.2em] uppercase mb-3">
+                      BILATERAL SOCIAL COMMITMENTS
                     </div>
-                    <div className="px-2 py-1 rounded border border-error/30 text-error font-mono text-[9px] tracking-[0.2em]">
-                      ACTION NEEDED
-                    </div>
-                  </div>
-                  <ul className="list-none space-y-3 text-body-md text-primary leading-relaxed font-sans mb-8">
-                    {contact.commitments.map((cmt, i) => (
-                      <li key={i} className="flex gap-2">
-                        <span className="text-secondary select-none">—</span>
-                        <span>{cmt}</span>
-                      </li>
-                    ))}
-                  </ul>
-                  <div className="mt-auto flex items-center justify-between font-mono text-[9px] text-secondary tracking-[0.2em] border-t border-surface-container-highest pt-4">
-                    <span>SYNAPSE STATE: UNFULFILLED</span>
-                    <span className="text-primary hover:underline cursor-pointer">MARK DISPATCHED</span>
-                  </div>
-                </div>
-              ) : (
-                <div className="flex flex-col h-full bg-transparent border border-dashed border-surface-container-highest rounded-lg p-space-lg items-center justify-center opacity-40">
-                   <div className="font-mono text-[9px] text-secondary tracking-[0.2em] uppercase text-center">NO COMMITMENTS LOGGED</div>
-                </div>
-              )}
-            </div>
-          </div>
-        ))}
 
-      </div>
+                    {hasCommitments ? (
+                      <div className="space-y-3">
+                        {contact.commitments.map((cmt: any, i: number) => {
+                          const isObj = typeof cmt === "object" && cmt !== null;
+                          const desc = isObj ? cmt.description : String(cmt);
+                          const debtor = isObj ? cmt.debtor : "user";
+                          const status = isObj ? cmt.status : "open";
+                          const commId = isObj ? cmt.id : null;
+
+                          return (
+                            <div
+                              key={i}
+                              className="bg-[#121419] border border-surface-container-highest rounded-xl p-4 flex flex-col justify-between gap-3"
+                            >
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="flex items-start gap-2.5">
+                                  <span className="text-base mt-0.5">
+                                    {debtor === "user" ? "📤" : "📥"}
+                                  </span>
+                                  <div>
+                                    <div className="font-mono text-[8px] text-secondary tracking-widest uppercase mb-1">
+                                      {debtor === "user" ? "YOU PROMISED" : `${contact.name.toUpperCase()} PROMISED`}
+                                    </div>
+                                    <p className="font-sans text-body-sm text-primary leading-snug">
+                                      "{desc}"
+                                    </p>
+                                  </div>
+                                </div>
+                                <StatusBadge status={status} size="sm" />
+                              </div>
+
+                              {commId && onToggleCommitment && status === "open" && (
+                                <div className="flex justify-end pt-2 border-t border-white/5">
+                                  <button
+                                    onClick={() => onToggleCommitment(commId, "fulfill")}
+                                    className="px-3 py-1 rounded bg-emerald-950/70 border border-emerald-500/40 text-emerald-300 font-mono text-[9px] tracking-wider uppercase hover:bg-emerald-900 transition-colors"
+                                  >
+                                    Mark Fulfilled ✓
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div className="bg-[#121419]/50 border border-dashed border-surface-container-highest rounded-xl p-6 text-center text-secondary text-sm font-sans italic opacity-60">
+                        No active commitments logged with this contact.
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

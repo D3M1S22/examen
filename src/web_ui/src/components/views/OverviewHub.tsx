@@ -1,5 +1,8 @@
+import React, { useState } from "react";
 import { PlannedTask, VerifiedAction, SocialEntity, BriefingReport } from "@/types/schemas";
-import { MockAsterisk } from "../ui/MockAsterisk";
+import { StatusBadge, DomainBadge } from "../ui/StatusBadge";
+import { EchoShowModal } from "../ui/EchoShowModal";
+import { speakAlexaReassurance } from "@/utils/audioEffects";
 
 interface OverviewHubProps {
   routinesData: { tasks: PlannedTask[] } | undefined;
@@ -11,155 +14,286 @@ interface OverviewHubProps {
   handleToggleRoutine: (task: PlannedTask) => void;
 }
 
-export function OverviewHub({ routinesData, actionsData, socialData, topicsData, setActiveTab, setSimText, handleToggleRoutine }: OverviewHubProps) {
+export function OverviewHub({
+  routinesData,
+  actionsData,
+  socialData,
+  topicsData,
+  setActiveTab,
+  setSimText,
+  handleToggleRoutine,
+}: OverviewHubProps) {
+  const [showEchoModal, setShowEchoModal] = useState(false);
+  const [activeEchoTemplate, setActiveEchoTemplate] = useState("DEEP_BRIEFING_VIEWER");
+
+  const tasks = routinesData?.tasks || [];
+  const actions = actionsData?.actions || [];
+  const contacts = socialData?.contacts || [];
+  const topics = topicsData?.topics || [];
+
+  const completedTasks = tasks.filter((t) => t.status === "completed").length;
+  const pendingTasks = tasks.filter((t) => t.status === "pending").length;
+
+  const handleOpenEchoModal = (template: string) => {
+    setActiveEchoTemplate(template);
+    setShowEchoModal(true);
+  };
+
+  const handleAlexaVoiceQuery = () => {
+    const text = `EXAMEN Ambient Status: Domestic posture is all clear. You have ${actions.length} verified acoustic actions, ${completedTasks} of ${tasks.length} routines completed, and ${contacts.length} social contacts indexed.`;
+    speakAlexaReassurance(text);
+    handleOpenEchoModal("ACTION_VERIFIED_BADGE");
+  };
+
   return (
     <div className="space-y-space-xl animate-in fade-in max-w-[1400px] mx-auto">
-      {/* Top Status Panel */}
-      <div className="card-elevated p-space-xl flex flex-col md:flex-row md:items-center justify-between gap-space-lg bg-surface-container-low border-surface-container-highest">
-        <div className="flex items-center gap-space-xl flex-1">
-          <div className="flex items-center gap-4 border-r border-surface-container-highest pr-space-xl">
-            <div className="w-6 h-6 rounded-full border-4 border-primary flex items-center justify-center shrink-0">
-               <div className="w-2 h-2 rounded-full bg-background"></div>
+      {/* Echo Show 15 Multimodal Ext-App Modal */}
+      <EchoShowModal
+        isOpen={showEchoModal}
+        onClose={() => setShowEchoModal(false)}
+        initialTemplate={activeEchoTemplate}
+      />
+
+      {/* Top Status Banner */}
+      <div className="card-elevated p-space-xl flex flex-col md:flex-row md:items-center justify-between gap-space-lg bg-surface-container-low border-surface-container-highest rounded-2xl">
+        <div className="flex flex-col lg:flex-row items-start lg:items-center gap-space-xl flex-1">
+          <div className="flex items-center gap-4 lg:border-r border-surface-container-highest lg:pr-space-xl">
+            <div className="w-8 h-8 rounded-full border-4 border-emerald-400 flex items-center justify-center shrink-0 shadow-lg shadow-emerald-950/60">
+              <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping"></div>
             </div>
             <div>
-              <div className="font-mono text-[9px] text-secondary tracking-[0.2em] uppercase mb-1">DOMESTIC POSTURE</div>
-              <div className="font-sans text-display-lg-mobile text-primary leading-none">All Clear •<br/>Calibrated</div>
+              <div className="font-mono text-[9px] text-emerald-400 tracking-[0.2em] uppercase mb-1 font-bold">
+                DOMESTIC POSTURE // ALL CLEAR
+              </div>
+              <div className="font-serif text-[28px] text-primary leading-none">
+                All Anchors Calibrated
+              </div>
             </div>
           </div>
-          
-          <div className="grid grid-cols-2 gap-y-2 gap-x-8 text-[9px] font-mono tracking-[0.2em] text-secondary uppercase py-2">
-            <div>0 PENDING ALERTS •</div>
-            <div>4 VERIFIED ANCHORS •</div>
-            <div>1 SOCIAL CAPTURE •</div>
-            <div>1 DOSSIER COMPILED</div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-y-2 gap-x-6 text-[10px] font-mono tracking-widest text-secondary uppercase py-2">
+            <div className="flex items-center gap-1.5">
+              <span className="text-emerald-400 font-bold">•</span>
+              <span>{pendingTasks} PENDING CHECKS</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="text-emerald-400 font-bold">•</span>
+              <span>{actions.length} VERIFIED ANCHORS</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="text-amber-400 font-bold">•</span>
+              <span>{contacts.length} SOCIAL CONTACTS</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="text-cyan-400 font-bold">•</span>
+              <span>{topics.length} DOSSIERS COMPILED</span>
+            </div>
           </div>
         </div>
-        
-        <div className="flex items-center gap-space-md shrink-0">
-          <button className="px-6 py-3 rounded border border-surface-container-highest bg-surface-container hover:bg-surface-container-high text-secondary hover:text-primary font-mono text-[9px] tracking-[0.2em] flex items-center gap-3 transition-colors">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>
-            ALEXA VOICE<br/>QUERY
+
+        {/* Global Action Buttons */}
+        <div className="flex items-center gap-3 shrink-0">
+          <button
+            onClick={handleAlexaVoiceQuery}
+            className="px-5 py-3 rounded-xl border border-cyan-500/40 bg-cyan-950/30 hover:bg-cyan-950/60 text-cyan-300 font-mono text-[10px] font-bold tracking-widest uppercase flex items-center gap-2.5 transition-all shadow-md"
+            title="Trigger Alexa Ext-App voice report & display"
+          >
+            <span>🎙️</span>
+            <span>ALEXA VOICE QUERY</span>
           </button>
-          <button onClick={() => setActiveTab('simulator')} className="px-6 py-3 rounded border border-primary bg-background hover:bg-primary hover:text-background text-primary font-mono text-[9px] font-bold tracking-[0.2em] flex items-center gap-3 transition-colors">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-            RUN<br/>SIMULATOR
+
+          <button
+            onClick={() => setActiveTab("simulator")}
+            className="px-5 py-3 rounded-xl bg-primary hover:bg-surface-tint text-background font-mono text-[10px] font-bold tracking-widest uppercase flex items-center gap-2.5 transition-all shadow-md"
+          >
+            <span>▶</span>
+            <span>RUN SIMULATOR</span>
           </button>
         </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-space-lg">
         {/* SECTOR 01: Peace of Mind */}
-        <div className="lg:col-span-8 card-elevated p-space-xl bg-surface-container-low border-surface-container-highest flex flex-col">
-          <div className="flex items-center justify-between mb-8">
-            <div className="font-mono text-[10px] text-primary tracking-[0.2em] uppercase flex items-center gap-2">
-              <span className="text-secondary opacity-50">SECTOR 01 //</span> Peace of Mind (Acoustic Corroborations)
+        <div className="lg:col-span-8 card-elevated p-space-xl bg-surface-container-low border-surface-container-highest rounded-2xl flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between mb-6 pb-3 border-b border-white/5">
+              <div className="font-mono text-[10px] text-primary tracking-[0.2em] uppercase flex items-center gap-2 font-bold">
+                <span className="text-amber-400">SECTOR 01 //</span> Peace of Mind (Acoustic Corroborations)
+              </div>
+              <button
+                onClick={() => setActiveTab("peace")}
+                className="font-mono text-[9px] text-amber-400 hover:underline uppercase tracking-widest"
+              >
+                VIEW ALL ({actions.length}) →
+              </button>
             </div>
-            <div className="font-mono text-[9px] text-secondary tracking-[0.2em] uppercase">ECHO MIC ARRAY • AGENT ACTIVE</div>
-          </div>
-          
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-space-md flex-1">
-            {/* 
-              // MOCK CARDS COMMENTED OUT
-              {[
-              { title: "Iron & Styling Wand", badge: "UNPLUGGED", label: "APPLIANCE SENSOR", time: "07:42:11 CET", desc: "Dual-channel verification: Wall receptacle detent snap + vocal self-affirmation.", conf: "99.4%" },
-              { title: "Stove & Cooktop", badge: "COLD / OFF", label: "RANGE & HEATING", time: "07:55:04 CET", desc: "Rotary switch hard detent latching corroborated with induction cooling slope.", conf: "98.9%" },
-              { title: "Front Deadbolt", badge: "SECURED", label: "PERIMETER ACCESS", time: "08:14:30 CET", desc: "Tumbler throw click and frame acoustic contact cycle confirmed via Bee wearable.", conf: "99.8%" },
-              { title: "Morning Medications", badge: "COMPLETED", label: "HEALTH PROTOCOL", time: "08:02:45 CET", desc: "Pill organizer chamber hatch click and water glass draw acoustic profile.", conf: "97.5%" }
-            ].map(item => ( ... ))}
-            */}
 
-            {/* Dynamic Actions */}
-            {actionsData?.actions?.slice(0, 4).map(action => (
-              <div key={action.id} className="bg-[#121316] border border-surface-container-highest rounded-lg p-space-lg flex flex-col justify-between">
-                <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <div className="font-mono text-[8px] text-secondary tracking-[0.2em] uppercase">{action.domain.replace(/_/g, ' ')}</div>
-                    <div className="font-mono text-[8px] text-primary tracking-[0.2em] flex items-center gap-1.5 px-2 py-1 rounded bg-surface-container-highest">
-                      <div className="w-1 h-1 rounded-full bg-primary"></div> VERIFIED
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-space-md">
+              {actions.slice(0, 4).map((action, idx) => (
+                <div
+                  key={action.id || idx}
+                  className="bg-[#121419] border border-surface-container-highest hover:border-emerald-500/40 rounded-xl p-space-lg flex flex-col justify-between transition-colors"
+                >
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <DomainBadge domain={action.domain} />
+                      <StatusBadge status="verified" size="sm" />
+                    </div>
+                    <div className="font-serif text-[20px] text-primary mb-2 capitalize">
+                      {action.action_type.replace(/_/g, " ")}
+                    </div>
+
+                    <div className="bg-[#0b0c0f] border border-white/5 rounded-lg p-3 mb-4">
+                      <div className="font-mono text-[8px] text-secondary tracking-widest mb-1 uppercase">
+                        Verified {action.timestamp ? action.timestamp.split("T")[1]?.substring(0, 8) : "Recently"}
+                      </div>
+                      <p className="font-sans text-body-xs text-secondary leading-relaxed italic line-clamp-2">
+                        "{action.raw_statement}"
+                      </p>
                     </div>
                   </div>
-                  <div className="font-serif text-[20px] text-primary mb-4 capitalize">{action.action_type.replace(/_/g, ' ')}</div>
-                  
-                  <div className="bg-surface-container-low border border-surface-container-highest rounded p-3 mb-6">
-                    <div className="font-mono text-[9px] text-secondary tracking-[0.2em] mb-2">Verified {action.timestamp?.split('T')[1]?.substring(0,8) || action.timestamp}</div>
-                    <div className="font-sans text-body-sm text-secondary leading-relaxed italic">"{action.raw_statement}"</div>
+
+                  <div className="flex items-center justify-between pt-2 border-t border-white/5">
+                    <div className="font-mono text-[9px] text-secondary tracking-widest uppercase">
+                      {(action.confidence * 100).toFixed(1)}% CONFIDENCE
+                    </div>
+                    <button
+                      onClick={() => {
+                        speakAlexaReassurance(
+                          `EXAMEN Corroboration: Your ${action.action_type.replace(/_/g, " ")} is verified safe.`
+                        );
+                      }}
+                      className="text-amber-400 hover:text-amber-300 font-mono text-[9px] tracking-wider uppercase flex items-center gap-1"
+                    >
+                      <span>💬</span>
+                      <span>REASSURE</span>
+                    </button>
                   </div>
                 </div>
-                <div className="flex items-center justify-between">
-                   <div className="font-mono text-[9px] text-secondary tracking-[0.2em] uppercase">CONFIDENCE {(action.confidence * 100).toFixed(1)}%</div>
-                   <button className="flex items-center gap-2 font-mono text-[9px] tracking-[0.2em] text-secondary hover:text-primary transition-colors">
-                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
-                     ECHO REASSURANCE
-                   </button>
-                </div>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
         </div>
 
         {/* SECTOR 02: Daily Routines */}
-        <div className="lg:col-span-4 card-elevated p-space-xl bg-surface-container-low border-surface-container-highest flex flex-col">
-          <div className="flex items-center justify-between mb-8 pb-4 border-b border-surface-container-highest">
-            <div className="font-mono text-[10px] text-primary tracking-[0.2em] uppercase">
-              <span className="text-secondary opacity-50">SECTOR 02 //</span> Daily Routines
-            </div>
-            <div className="font-mono text-[9px] text-primary tracking-[0.2em] uppercase font-bold">
-              {routinesData?.tasks?.filter(t => t.status === "completed").length || 0} / {routinesData?.tasks?.length || 0} COMPLETE
-            </div>
-          </div>
-          
-          <div className="h-1 bg-surface-container-highest rounded-full mb-6 overflow-hidden">
-            <div 
-              className="h-full bg-primary transition-all" 
-              style={{ width: `${routinesData?.tasks?.length ? (routinesData.tasks.filter(t => t.status === "completed").length / routinesData.tasks.length) * 100 : 0}%` }}
-            ></div>
-          </div>
-          
-          <div className="space-y-4 flex-1">
-            {/*
-              // MOCK CARDS COMMENTED OUT
-            */}
-
-            {routinesData?.tasks?.slice(0, 4).map(task => (
-              <div 
-                key={task.id} 
-                onClick={() => handleToggleRoutine(task)}
-                className="flex items-start gap-4 p-3 rounded hover:bg-surface-container-highest transition-colors cursor-pointer"
-              >
-                 <div className={`w-5 h-5 rounded flex items-center justify-center shrink-0 mt-0.5 ${task.status === 'completed' ? 'bg-primary text-background' : 'border border-surface-container-highest text-surface-container-highest'}`}>
-                   {task.status === 'completed' && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>}
-                 </div>
-                 <div className="flex-1">
-                   <div className={`font-sans text-body-sm mb-1 flex items-center justify-between ${task.status === 'completed' ? 'text-secondary line-through opacity-70' : 'text-primary'}`}>
-                     {task.title}
-                     <span className="font-mono text-[8px] text-secondary no-underline">{task.scheduled_time || 'PENDING'}</span>
-                   </div>
-                   <div className="font-sans text-[11px] text-secondary opacity-60">Domain: {task.domain}</div>
-                 </div>
+        <div className="lg:col-span-4 card-elevated p-space-xl bg-surface-container-low border-surface-container-highest rounded-2xl flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between mb-6 pb-3 border-b border-white/5">
+              <div className="font-mono text-[10px] text-primary tracking-[0.2em] uppercase font-bold">
+                <span className="text-amber-400">SECTOR 02 //</span> Daily Routines
               </div>
-            ))}
+              <span className="font-mono text-[9px] text-emerald-400 font-bold tracking-widest uppercase">
+                {completedTasks} / {tasks.length} COMPLETE
+              </span>
+            </div>
+
+            {/* Progress Bar */}
+            <div className="h-1.5 bg-surface-container-highest rounded-full mb-6 overflow-hidden">
+              <div
+                className="h-full bg-emerald-400 transition-all duration-500"
+                style={{
+                  width: `${tasks.length ? (completedTasks / tasks.length) * 100 : 0}%`,
+                }}
+              />
+            </div>
+
+            <div className="space-y-3">
+              {tasks.slice(0, 4).map((task) => {
+                const isDone = task.status === "completed";
+                return (
+                  <div
+                    key={task.id}
+                    onClick={() => handleToggleRoutine(task)}
+                    className="flex items-start gap-3 p-3 rounded-xl bg-[#121419] border border-white/5 hover:border-amber-400/50 transition-all cursor-pointer"
+                  >
+                    <div
+                      className={`w-5 h-5 rounded-lg flex items-center justify-center shrink-0 mt-0.5 transition-colors ${
+                        isDone
+                          ? "bg-emerald-500 text-black font-bold"
+                          : "border border-zinc-600 text-transparent"
+                      }`}
+                    >
+                      {isDone && <span className="text-xs">✓</span>}
+                    </div>
+
+                    <div className="flex-1 min-w-0">
+                      <div
+                        className={`font-sans text-body-sm mb-0.5 flex items-center justify-between ${
+                          isDone ? "text-secondary line-through opacity-70" : "text-primary font-medium"
+                        }`}
+                      >
+                        <span className="truncate">{task.title}</span>
+                        <span className="font-mono text-[8px] text-secondary no-underline shrink-0 ml-2">
+                          {task.scheduled_time || "DAILY"}
+                        </span>
+                      </div>
+                      <div className="font-mono text-[9px] text-secondary uppercase opacity-60">
+                        {task.domain}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </div>
 
-          <div className="mt-6 pt-4 border-t border-surface-container-highest font-mono text-[8px] text-secondary tracking-[0.2em] uppercase flex justify-between">
-            <span>CYCLE: MORNING DEPARTURE</span>
-            <span>NEXT: 18:30 EVENING INGRESS</span>
+          <div className="mt-6 pt-4 border-t border-white/5 flex items-center justify-between font-mono text-[9px] text-secondary uppercase tracking-widest">
+            <button
+              onClick={() => setActiveTab("routines")}
+              className="text-amber-400 hover:underline"
+            >
+              MANAGE ROUTINES ({tasks.length}) →
+            </button>
+            <span>NEXT: 18:30 INGRESS</span>
           </div>
         </div>
 
-        {/* BOTTOM ROW (Social & Topic) */}
-        <div className="lg:col-span-12 grid grid-cols-1 md:grid-cols-2 gap-space-lg">
-          <div className="card-elevated p-space-xl bg-surface-container-low border-surface-container-highest flex items-center justify-between cursor-pointer hover:border-outline-variant transition-colors" onClick={() => setActiveTab('social')}>
-            <div className="font-mono text-[10px] text-primary tracking-[0.2em] uppercase">
-              <span className="text-secondary opacity-50">SECTOR 03 //</span> Social Rolodex (Passive Ingestion)
+        {/* BOTTOM ROW: Social & Topics Fast Navigation */}
+        <div className="lg:col-span-12 grid grid-cols-1 sm:grid-cols-2 gap-space-lg">
+          {/* Social Rolodex Card */}
+          <div
+            onClick={() => setActiveTab("social")}
+            className="card-elevated p-space-xl bg-surface-container-low border-surface-container-highest rounded-2xl flex items-center justify-between cursor-pointer hover:border-amber-400 transition-all group"
+          >
+            <div className="flex items-center gap-4">
+              <div className="w-12 h-12 rounded-xl bg-surface-container-highest flex items-center justify-center text-primary text-xl group-hover:scale-110 transition-transform">
+                👤
+              </div>
+              <div>
+                <div className="font-mono text-[9px] text-amber-400 tracking-[0.2em] uppercase font-bold mb-1">
+                  SECTOR 03 // SOCIAL ROLODEX
+                </div>
+                <div className="font-serif text-[22px] text-primary">
+                  {contacts.length} Encounters & Bilateral Promises
+                </div>
+              </div>
             </div>
-            <div className="font-mono text-[9px] text-secondary tracking-[0.2em] uppercase">1 SYNTHESIZED TODAY</div>
+            <span className="font-mono text-[10px] text-secondary group-hover:text-primary transition-colors">
+              OPEN →
+            </span>
           </div>
-          
-          <div className="card-elevated p-space-xl bg-surface-container-low border-surface-container-highest flex items-center justify-between cursor-pointer hover:border-outline-variant transition-colors" onClick={() => setActiveTab('topics')}>
-            <div className="font-mono text-[10px] text-primary tracking-[0.2em] uppercase">
-              <span className="text-secondary opacity-50">SECTOR 04 //</span> Topic Dossiers
+
+          {/* Topic Dossiers Card */}
+          <div
+            onClick={() => setActiveTab("topics")}
+            className="card-elevated p-space-xl bg-surface-container-low border-surface-container-highest rounded-2xl flex items-center justify-between cursor-pointer hover:border-cyan-400 transition-all group"
+          >
+            <div className="flex items-center gap-4">
+              <div className="w-12 h-12 rounded-xl bg-surface-container-highest flex items-center justify-center text-primary text-xl group-hover:scale-110 transition-transform">
+                📚
+              </div>
+              <div>
+                <div className="font-mono text-[9px] text-cyan-400 tracking-[0.2em] uppercase font-bold mb-1">
+                  SECTOR 04 // TOPIC DOSSIERS
+                </div>
+                <div className="font-serif text-[22px] text-primary">
+                  {topics.length} Citation-Backed Intelligence Reports
+                </div>
+              </div>
             </div>
-            <div className="font-mono text-[9px] text-secondary tracking-[0.2em] uppercase">HARVESTED AT BREAKFAST</div>
+            <span className="font-mono text-[10px] text-secondary group-hover:text-primary transition-colors">
+              OPEN →
+            </span>
           </div>
         </div>
       </div>
