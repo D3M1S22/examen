@@ -37,6 +37,7 @@ RULES:
 - Do NOT hallucinate names or commitments not grounded in the text.
 - If no clear person or introduction is detected, return null.
 - Extract commitments as concise action statements.
+- Multilingual capability: Support Italian introductions and roles (e.g. "ciao sono francesco faccio il sales assistant per una big 3" -> Person Name: "Francesco", Company or Role: "Sales Assistant at Big 3").
 """
 
 
@@ -66,9 +67,9 @@ def _heuristic_extract_social(
     # e.g. "Nice to meet you, my name is Sarah Connor from Cyberdyne Systems."
     # e.g. "Piacere, sono Marco Bianchi, CTO di Acme."
     name_patterns = [
-        r"(?:i am|i['’]m|my name is|this is|sono|mi chiamo)\s+(?:(?:dr\.|prof\.|mr\.|ms\.|mrs\.)\s+)?([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)",
-        r"(?:nice to meet you|pleased to meet you|great to meet you|piacere di conoscerti|piacere),?\s+(?:(?:dr\.|prof\.|mr\.|ms\.|mrs\.)\s+)?([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)",
-        r"(?:meet|with|incontrato)\s+(?!you\b|me\b|us\b|them\b|him\b|her\b)(?:(?:dr\.|prof\.|mr\.|ms\.|mrs\.)\s+)?([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)",
+        r"(?:i am|i['’]m|my name is|this is|sono|mi chiamo)\s+(?:(?:dr\.|prof\.|mr\.|ms\.|mrs\.)\s+)?([A-Za-z]+(?:\s+[A-Za-z]+)?)",
+        r"(?:nice to meet you|pleased to meet you|great to meet you|piacere di conoscerti|piacere),?\s+(?:(?:dr\.|prof\.|mr\.|ms\.|mrs\.)\s+)?([A-Za-z]+(?:\s+[A-Za-z]+)?)",
+        r"(?:meet|with|incontrato)\s+(?!you\b|me\b|us\b|them\b|him\b|her\b)(?:(?:dr\.|prof\.|mr\.|ms\.|mrs\.)\s+)?([A-Za-z]+(?:\s+[A-Za-z]+)?)",
     ]
 
     person_name = None
@@ -92,21 +93,25 @@ def _heuristic_extract_social(
     # Extract company or role
     company_or_role = None
     combined_context = f"{historical_context or ''} {text}"
-    m_role = re.search(r"(?:,\s*|\s+)(?:a\s+|an\s+)?([A-Za-z\s]+(?:Architect|Lead|Engineer|Director|Manager|CTO|CEO|Founder|Researcher)\s*(?:at|di|in)?\s*[A-Za-z0-9_\-\.]*)", text, re.IGNORECASE)
-    if m_role:
-        company_or_role = m_role.group(1).strip()
+    m_it_role = re.search(r"(?:faccio il|faccio la|lavoro come|lavoro per|lavoro in|lavoro da)\s+([A-Za-z0-9\s_\-\.]+)", text, re.IGNORECASE)
+    if m_it_role:
+        company_or_role = m_it_role.group(1).strip()
     else:
-        m_co = re.search(r"(?:at|di|presso|from)\s+([A-Z][A-Za-z0-9_\-\.]+)", text)
-        if m_co:
-            company_or_role = f"at {m_co.group(1)}"
-        elif historical_context:
-            m_hist_role = re.search(r"(?:,\s*|\s+)(?:a\s+|an\s+)?([A-Za-z\s]+(?:Architect|Lead|Engineer|Director|Manager|CTO|CEO|Founder|Researcher)\s*(?:at|di|in)?\s*[A-Za-z0-9_\-\.]*)", historical_context, re.IGNORECASE)
-            if m_hist_role:
-                company_or_role = m_hist_role.group(1).strip()
-            else:
-                m_hist_co = re.search(r"(?:at|di|presso|from)\s+([A-Z][A-Za-z0-9_\-\.]+)", historical_context)
-                if m_hist_co:
-                    company_or_role = f"at {m_hist_co.group(1)}"
+        m_role = re.search(r"(?:,\s*|\s+)(?:a\s+|an\s+)?([A-Za-z\s]+(?:Architect|Lead|Engineer|Director|Manager|CTO|CEO|Founder|Researcher|Assistant|Consultant|Developer)\s*(?:at|di|in|per)?\s*[A-Za-z0-9_\-\.\s]*)", text, re.IGNORECASE)
+        if m_role:
+            company_or_role = m_role.group(1).strip()
+        else:
+            m_co = re.search(r"(?:at|di|presso|from)\s+([A-Z][A-Za-z0-9_\-\.]+)", text)
+            if m_co:
+                company_or_role = f"at {m_co.group(1)}"
+            elif historical_context:
+                m_hist_role = re.search(r"(?:,\s*|\s+)(?:a\s+|an\s+)?([A-Za-z\s]+(?:Architect|Lead|Engineer|Director|Manager|CTO|CEO|Founder|Researcher)\s*(?:at|di|in)?\s*[A-Za-z0-9_\-\.]*)", historical_context, re.IGNORECASE)
+                if m_hist_role:
+                    company_or_role = m_hist_role.group(1).strip()
+                else:
+                    m_hist_co = re.search(r"(?:at|di|presso|from)\s+([A-Z][A-Za-z0-9_\-\.]+)", historical_context)
+                    if m_hist_co:
+                        company_or_role = f"at {m_hist_co.group(1)}"
 
     # Extract bilateral commitments
     commitments: List[SocialCommitment] = []

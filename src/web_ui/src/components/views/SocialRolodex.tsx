@@ -7,12 +7,14 @@ import { FollowUpModal } from "../ui/FollowUpModal";
 
 interface SocialRolodexProps {
   socialData: { contacts: SocialEntity[] } | undefined;
+  statusData?: any;
   onEnrichContact?: (contactId: string) => Promise<void>;
   onToggleCommitment?: (commitmentId: string, action: "fulfill" | "cancel") => Promise<void>;
 }
 
 export function SocialRolodex({
   socialData,
+  statusData,
   onEnrichContact,
   onToggleCommitment,
 }: SocialRolodexProps) {
@@ -21,7 +23,11 @@ export function SocialRolodex({
   const [selectedDossierContact, setSelectedDossierContact] = useState<SocialEntity | null>(null);
   const [selectedFollowUpContact, setSelectedFollowUpContact] = useState<SocialEntity | null>(null);
 
-  const contacts = socialData?.contacts || [];
+  // Deduplicate contacts by normalized person name to prevent duplicate card rendering
+  const rawContacts = socialData?.contacts || [];
+  const contacts = rawContacts.filter((c, idx, arr) => {
+    return idx === arr.findIndex((other) => other.name.trim().toLowerCase() === c.name.trim().toLowerCase());
+  });
 
   const needsActionCount = contacts.filter((c) => c.commitments && c.commitments.length > 0).length;
   const enrichedCount = contacts.filter((c) => !!c.web_profile).length;
@@ -84,7 +90,7 @@ export function SocialRolodex({
           <div className="flex flex-col items-end gap-1">
             <StatusBadge status="verified" label="PII SANITIZED LOCAL ENCLAVE" size="md" />
             <div className="font-mono text-[9px] text-secondary tracking-widest uppercase">
-              ZERO TELEMETRY EGRESS
+              {statusData?.telemetry?.bee_device?.account ? `EDGE IDENTITY: ${statusData.telemetry.bee_device.account.toUpperCase()}` : "ZERO TELEMETRY EGRESS"}
             </div>
           </div>
         }
@@ -343,56 +349,74 @@ export function SocialRolodex({
                       BILATERAL SOCIAL COMMITMENTS
                     </div>
 
-                    {hasCommitments ? (
-                      <div className="space-y-3">
-                        {contact.commitments.map((cmt: any, i: number) => {
-                          const isObj = typeof cmt === "object" && cmt !== null;
-                          const desc = isObj ? cmt.description : String(cmt);
-                          const debtor = isObj ? cmt.debtor : "user";
-                          const status = isObj ? cmt.status : "open";
-                          const commId = isObj ? cmt.id : null;
+                    {(() => {
+                      const rawCommitments = contact.commitments || [];
+                      // Deduplicate by ID and description to prevent duplicate commitment cards
+                      const uniqueCommitments = rawCommitments.filter((cmt: any, index: number, self: any[]) => {
+                        const desc = (typeof cmt === "object" && cmt !== null ? cmt.description : String(cmt)).trim().toLowerCase();
+                        const id = typeof cmt === "object" && cmt !== null ? cmt.id : null;
+                        return index === self.findIndex((c: any) => {
+                          const cDesc = (typeof c === "object" && c !== null ? c.description : String(c)).trim().toLowerCase();
+                          const cId = typeof c === "object" && c !== null ? c.id : null;
+                          return (id && cId && id === cId) || (cDesc === desc);
+                        });
+                      });
 
-                          return (
-                            <div
-                              key={i}
-                              className="bg-[#121419] border border-surface-container-highest rounded-xl p-4 flex flex-col justify-between gap-3"
-                            >
-                              <div className="flex items-start justify-between gap-2">
-                                <div className="flex items-start gap-2.5">
-                                  <span className="text-base mt-0.5">
-                                    {debtor === "user" ? "📤" : "📥"}
-                                  </span>
-                                  <div>
-                                    <div className="font-mono text-[8px] text-secondary tracking-widest uppercase mb-1">
-                                      {debtor === "user" ? "YOU PROMISED" : `${contact.name.toUpperCase()} PROMISED`}
+                      if (uniqueCommitments.length === 0) {
+                        return (
+                          <div className="bg-[#121419]/50 border border-dashed border-surface-container-highest rounded-xl p-6 text-center text-secondary text-sm font-sans italic opacity-60">
+                            No active commitments logged with this contact.
+                          </div>
+                        );
+                      }
+
+                      return (
+                        <div className="space-y-3">
+                          {uniqueCommitments.map((cmt: any, i: number) => {
+                            const isObj = typeof cmt === "object" && cmt !== null;
+                            const desc = isObj ? cmt.description : String(cmt);
+                            const debtor = isObj ? cmt.debtor : "user";
+                            const status = isObj ? cmt.status : "open";
+                            const commId = isObj ? cmt.id : null;
+
+                            return (
+                              <div
+                                key={commId || i}
+                                className="bg-[#121419] border border-surface-container-highest rounded-xl p-4 flex flex-col justify-between gap-3"
+                              >
+                                <div className="flex items-start justify-between gap-2">
+                                  <div className="flex items-start gap-2.5">
+                                    <span className="text-base mt-0.5">
+                                      {debtor === "user" ? "📤" : "📥"}
+                                    </span>
+                                    <div>
+                                      <div className="font-mono text-[8px] text-secondary tracking-widest uppercase mb-1">
+                                        {debtor === "user" ? "YOU PROMISED" : `${contact.name.toUpperCase()} PROMISED`}
+                                      </div>
+                                      <p className="font-sans text-body-sm text-primary leading-snug">
+                                        "{desc}"
+                                      </p>
                                     </div>
-                                    <p className="font-sans text-body-sm text-primary leading-snug">
-                                      "{desc}"
-                                    </p>
                                   </div>
+                                  <StatusBadge status={status} size="sm" />
                                 </div>
-                                <StatusBadge status={status} size="sm" />
-                              </div>
 
-                              {commId && onToggleCommitment && status === "open" && (
-                                <div className="flex justify-end pt-2 border-t border-white/5">
-                                  <button
-                                    onClick={() => onToggleCommitment(commId, "fulfill")}
-                                    className="px-3 py-1 rounded bg-emerald-950/70 border border-emerald-500/40 text-emerald-300 font-mono text-[9px] tracking-wider uppercase hover:bg-emerald-900 transition-colors"
-                                  >
-                                    Mark Fulfilled ✓
-                                  </button>
-                                </div>
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    ) : (
-                      <div className="bg-[#121419]/50 border border-dashed border-surface-container-highest rounded-xl p-6 text-center text-secondary text-sm font-sans italic opacity-60">
-                        No active commitments logged with this contact.
-                      </div>
-                    )}
+                                {commId && onToggleCommitment && status === "open" && (
+                                  <div className="flex justify-end pt-2 border-t border-white/5">
+                                    <button
+                                      onClick={() => onToggleCommitment(commId, "fulfill")}
+                                      className="px-3 py-1 rounded bg-emerald-950/70 border border-emerald-500/40 text-emerald-300 font-mono text-[9px] tracking-wider uppercase hover:bg-emerald-900 transition-colors"
+                                    >
+                                      Mark Fulfilled ✓
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      );
+                    })()}
                   </div>
                 </div>
               </div>

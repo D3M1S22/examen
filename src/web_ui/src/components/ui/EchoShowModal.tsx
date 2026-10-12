@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import useSWR from "swr";
 import { EchoShowCardResponse } from "@/types/schemas";
 import { speakAlexaReassurance } from "@/utils/audioEffects";
+import { getApiBaseUrl } from "@/utils/api";
 
 interface EchoShowModalProps {
   isOpen: boolean;
@@ -10,8 +11,7 @@ interface EchoShowModalProps {
   initialTemplate?: string;
 }
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "";
-const fetcher = (url: string) => fetch(`${API_URL}${url}`).then((res) => res.json());
+const fetcher = (url: string) => fetch(`${getApiBaseUrl()}${url}`).then((res) => res.json());
 
 export function EchoShowModal({
   isOpen,

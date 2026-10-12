@@ -7,13 +7,25 @@ import { speakAlexaReassurance } from "@/utils/audioEffects";
 
 interface TopicDossiersProps {
   topicsData: { topics: BriefingReport[] } | undefined;
+  statusData?: any;
 }
 
-export function TopicDossiers({ topicsData }: TopicDossiersProps) {
+export function TopicDossiers({ topicsData, statusData }: TopicDossiersProps) {
   const [activeFilter, setActiveFilter] = useState<string>("ALL");
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedTopic, setSelectedTopic] = useState<BriefingReport | null>(null);
   const [broadcastedId, setBroadcastedId] = useState<string | null>(null);
+
+  // Dynamic Telemetry State
+  const reasonerModel = (
+    statusData?.telemetry?.processing_model?.reasoner ||
+    statusData?.config?.reasoner_model ||
+    "AWS BEDROCK AGENTCORE"
+  ).toUpperCase();
+  const latencyMetrics = statusData?.telemetry?.latency;
+  const avgLatency = latencyMetrics?.average_ms
+    ? `${latencyMetrics.average_ms}MS (AVG)`
+    : "BACKGROUND STANDBY";
 
   const topics = topicsData?.topics || [];
   const uniqueContexts = Array.from(new Set(topics.map((t) => t.context_type))).filter(Boolean);
@@ -61,7 +73,7 @@ export function TopicDossiers({ topicsData }: TopicDossiersProps) {
           <div className="flex flex-col items-end gap-1">
             <StatusBadge status="nominal" label="SYNTHESIS ENGINE RUNNING" size="md" />
             <div className="font-mono text-[9px] text-secondary tracking-[0.2em] uppercase">
-              CADENCE: 14 SEC LATENCY
+              CADENCE: {avgLatency} • {reasonerModel}
             </div>
           </div>
         }

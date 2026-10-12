@@ -142,6 +142,32 @@ class SQLiteContextStore(AbstractContextStore):
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_commitments_debtor ON social_commitments (debtor);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_commitments_status ON social_commitments (status);")
 
+            # Purge duplicate commitments keeping earliest record to maintain clean relational state
+            try:
+                cursor.execute("""
+                    DELETE FROM social_commitments
+                    WHERE rowid NOT IN (
+                        SELECT MIN(rowid)
+                        FROM social_commitments
+                        GROUP BY LOWER(contact_name), LOWER(description), debtor
+                    );
+                """)
+            except Exception:
+                pass
+
+            # Purge duplicate contacts keeping most recent record
+            try:
+                cursor.execute("""
+                    DELETE FROM social_contacts
+                    WHERE rowid NOT IN (
+                        SELECT MAX(rowid)
+                        FROM social_contacts
+                        GROUP BY LOWER(person_name)
+                    );
+                """)
+            except Exception:
+                pass
+
             # 3. Topic Briefings Table
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS topic_briefings (
@@ -202,7 +228,21 @@ class SQLiteContextStore(AbstractContextStore):
             except Exception:
                 pass
 
-            # 4. FTS5 Virtual Tables (if supported by SQLite runtime)
+            # 4. System Telemetry Table (Real Execution Latencies & Averages)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS system_telemetry (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    latency_ms REAL NOT NULL,
+                    model_id TEXT,
+                    details_json TEXT
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_telemetry_time ON system_telemetry (timestamp DESC);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_telemetry_type ON system_telemetry (event_type);")
+
+            # 5. FTS5 Virtual Tables (if supported by SQLite runtime)
             try:
                 cursor.execute("""
                     CREATE VIRTUAL TABLE IF NOT EXISTS fts_actions USING fts5(
@@ -545,20 +585,39 @@ class SQLiteContextStore(AbstractContextStore):
     # Social Recall
     # =========================================================================
     def save_social_contact(self, contact: SocialEntity) -> str:
-        rec_id = contact.id or str(uuid.uuid4())
+        rec_id = contact.id
+        if not rec_id and contact.person_name:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                existing = cursor.execute(
+                    "SELECT id FROM social_contacts WHERE LOWER(person_name) = LOWER(?) LIMIT 1",
+                    (contact.person_name.strip(),),
+                ).fetchone()
+                if existing:
+                    rec_id = existing["id"]
+
+        if not rec_id:
+            rec_id = str(uuid.uuid4())
         contact.id = rec_id
 
         # Normalize commitments and persist structured bilateral commitments
         structured_commitments = contact.get_commitments_as_objects()
+        unique_commitments: List[SocialCommitment] = []
+        seen_keys = set()
         for com in structured_commitments:
-            if not com.contact_name:
-                com.contact_name = contact.person_name
-            self.save_social_commitment(com)
+            key = (com.description.strip().lower(), com.debtor)
+            if key not in seen_keys:
+                seen_keys.add(key)
+                if not com.contact_name:
+                    com.contact_name = contact.person_name
+                unique_id = self.save_social_commitment(com)
+                com.id = unique_id
+                unique_commitments.append(com)
 
         # Retain json representation in contact record for fast retrieval/backward compatibility
         commitments_payload = [
             c.model_dump() if hasattr(c, "model_dump") else c
-            for c in structured_commitments
+            for c in unique_commitments
         ]
         commitments_str = json.dumps(commitments_payload, ensure_ascii=False)
         topics_str = json.dumps(contact.key_topics, ensure_ascii=False)
@@ -710,7 +769,29 @@ class SQLiteContextStore(AbstractContextStore):
         return results
 
     def save_social_commitment(self, commitment: SocialCommitment) -> str:
-        rec_id = commitment.id or str(uuid.uuid4())
+        rec_id = commitment.id
+        # Always check for existing commitment for this person and description to avoid duplicates
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            existing = cursor.execute(
+                """
+                SELECT id, auto_scheduled_task_id, created_at FROM social_commitments
+                WHERE LOWER(contact_name) = LOWER(?)
+                  AND LOWER(description) = LOWER(?)
+                  AND debtor = ?
+                LIMIT 1
+                """,
+                (commitment.contact_name, commitment.description, commitment.debtor),
+            ).fetchone()
+            if existing:
+                rec_id = existing["id"]
+                if not commitment.auto_scheduled_task_id and existing["auto_scheduled_task_id"]:
+                    commitment.auto_scheduled_task_id = existing["auto_scheduled_task_id"]
+                if not commitment.created_at and existing["created_at"]:
+                    commitment.created_at = existing["created_at"]
+
+        if not rec_id:
+            rec_id = str(uuid.uuid4())
         commitment.id = rec_id
         if not commitment.created_at:
             commitment.created_at = datetime.now().isoformat()
@@ -1193,6 +1274,82 @@ class SQLiteContextStore(AbstractContextStore):
 
         self.save_session_dossier(dossier)
         return dossier
+
+    def record_latency(
+        self,
+        event_type: str,
+        latency_ms: float,
+        model_id: Optional[str] = None,
+        details: Optional[dict] = None,
+    ) -> None:
+        """Records an execution latency sample into system_telemetry."""
+        details_str = json.dumps(details or {}, ensure_ascii=False)
+        ts = datetime.now().isoformat()
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    INSERT INTO system_telemetry (timestamp, event_type, latency_ms, model_id, details_json)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (ts, event_type, float(latency_ms), model_id, details_str),
+                )
+                conn.commit()
+        except Exception as e:
+            logger.warning(f"Failed to record system telemetry: {e}")
+
+    def get_latency_metrics(
+        self, event_type: Optional[str] = None, limit: int = 50
+    ) -> dict:
+        """Retrieves aggregated execution latency metrics (average, latest, min, max, count)."""
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                if event_type:
+                    rows = cursor.execute(
+                        """
+                        SELECT latency_ms FROM system_telemetry
+                        WHERE event_type = ?
+                        ORDER BY timestamp DESC LIMIT ?
+                        """,
+                        (event_type, limit),
+                    ).fetchall()
+                else:
+                    rows = cursor.execute(
+                        """
+                        SELECT latency_ms FROM system_telemetry
+                        ORDER BY timestamp DESC LIMIT ?
+                        """,
+                        (limit,),
+                    ).fetchall()
+
+                if not rows:
+                    return {
+                        "sample_count": 0,
+                        "average_ms": 0.0,
+                        "latest_ms": 0.0,
+                        "min_ms": 0.0,
+                        "max_ms": 0.0,
+                    }
+
+                vals = [float(r["latency_ms"]) for r in rows]
+                return {
+                    "sample_count": len(vals),
+                    "average_ms": round(sum(vals) / len(vals), 1),
+                    "latest_ms": round(vals[0], 1),
+                    "min_ms": round(min(vals), 1),
+                    "max_ms": round(max(vals), 1),
+                }
+        except Exception as e:
+            logger.warning(f"Failed to query latency metrics: {e}")
+            return {
+                "sample_count": 0,
+                "average_ms": 0.0,
+                "latest_ms": 0.0,
+                "min_ms": 0.0,
+                "max_ms": 0.0,
+            }
 
     def close(self) -> None:
         """Close connection pools or resources if applicable."""

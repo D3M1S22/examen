@@ -7,15 +7,29 @@ import { playAcousticVerificationTone, speakAlexaReassurance } from "@/utils/aud
 
 interface PeaceOfMindProps {
   actionsData: { actions: VerifiedAction[] } | undefined;
+  statusData?: any;
   onAddAction?: (statement: string) => Promise<void>;
 }
 
-export function PeaceOfMind({ actionsData, onAddAction }: PeaceOfMindProps) {
+export function PeaceOfMind({ actionsData, statusData, onAddAction }: PeaceOfMindProps) {
   const [confidenceFilter, setConfidenceFilter] = useState<"ALL" | "HIGH">("ALL");
   const [domainFilter, setDomainFilter] = useState<string>("ALL");
   const [searchQuery, setSearchQuery] = useState("");
   const [showAddModal, setShowAddModal] = useState(false);
   const [activeAudioId, setActiveAudioId] = useState<string | null>(null);
+
+  // Dynamic Telemetry Data
+  const sensorMesh = statusData?.telemetry?.sensor_mesh || "BEE HARDWARE (STANDBY)";
+  const isBeeConnected = statusData?.telemetry?.bee_device?.connected;
+  const procModel = (
+    statusData?.telemetry?.processing_model?.reasoner ||
+    statusData?.config?.reasoner_model ||
+    "AWS BEDROCK AGENTCORE"
+  ).toUpperCase();
+  const latencyMetrics = statusData?.telemetry?.latency;
+  const avgLatency = latencyMetrics?.average_ms
+    ? `${latencyMetrics.average_ms}ms (AVG)`
+    : "PASSIVE STANDBY";
 
   const actions = actionsData?.actions || [];
   const safetyCount = actions.filter((a) => (a.domain || "").toLowerCase() === "safety").length;
@@ -82,18 +96,24 @@ export function PeaceOfMind({ actionsData, onAddAction }: PeaceOfMindProps) {
           </>
         }
         rightElement={
-          <div className="bg-[#121419] border border-surface-container-highest rounded-xl p-4 font-mono w-[300px]">
+          <div className="bg-[#121419] border border-surface-container-highest rounded-xl p-4 font-mono w-[320px]">
             <div className="flex justify-between items-center text-[8px] text-secondary tracking-[0.2em] uppercase mb-2">
               <span>SENSOR MESH</span>
-              <span className="text-emerald-400 font-bold">BEE WEARABLE V4</span>
+              <span className={`font-bold ${isBeeConnected ? "text-emerald-400" : "text-amber-400"}`}>
+                {sensorMesh.toUpperCase()}
+              </span>
             </div>
             <div className="flex justify-between items-center text-[8px] text-secondary tracking-[0.2em] uppercase mb-2">
               <span>PROCESSING MODEL</span>
-              <span className="text-primary font-bold">DSP EMBEDDED EDGE</span>
+              <span className="text-primary font-bold truncate max-w-[180px]" title={procModel}>
+                {procModel}
+              </span>
             </div>
             <div className="flex justify-between items-center text-[8px] text-secondary tracking-[0.2em] uppercase">
               <span>LATENCY OVERHEAD</span>
-              <span className="text-emerald-400 font-bold">12ms PASSIVE</span>
+              <span className="text-emerald-400 font-bold">
+                {avgLatency}
+              </span>
             </div>
           </div>
         }

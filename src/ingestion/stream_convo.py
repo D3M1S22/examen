@@ -1,7 +1,52 @@
 import asyncio
 import json
+import os
+import platform
+import shutil
+from pathlib import Path
+from typing import List, Optional
 
 from src.ingestion.debug import Debug
+
+
+def get_bee_binary_path() -> Optional[str]:
+    """Resolves the best available Bee CLI executable path.
+
+    Checks:
+    1. System PATH ('bee')
+    2. Local precompiled platform binary in resources/bee-cli/dist/platforms/
+    3. resources/bee-cli/bin/bee.js (if bun/node is available)
+    """
+    which_bee = shutil.which("bee")
+    if which_bee:
+        return which_bee
+
+    sys_name = platform.system().lower()
+    machine = platform.machine().lower()
+    base_dir = Path(__file__).resolve().parent.parent.parent
+
+    candidate = None
+    if sys_name == "darwin":
+        if machine in ("arm64", "aarch64"):
+            candidate = base_dir / "resources" / "bee-cli" / "dist" / "platforms" / "mac-arm64" / "bee"
+        else:
+            candidate = base_dir / "resources" / "bee-cli" / "dist" / "platforms" / "mac-x64" / "bee"
+    elif sys_name == "linux":
+        if machine in ("arm64", "aarch64"):
+            candidate = base_dir / "resources" / "bee-cli" / "dist" / "platforms" / "linux-arm64" / "bee"
+        else:
+            candidate = base_dir / "resources" / "bee-cli" / "dist" / "platforms" / "linux-x64" / "bee"
+    elif sys_name == "windows":
+        candidate = base_dir / "resources" / "bee-cli" / "dist" / "platforms" / "windows-x64" / "bee.exe"
+
+    if candidate and candidate.exists() and os.access(candidate, os.X_OK):
+        return str(candidate)
+
+    js_candidate = base_dir / "resources" / "bee-cli" / "bin" / "bee.js"
+    if js_candidate.exists():
+        return str(js_candidate)
+
+    return None
 
 
 class BeeClient(Debug):
@@ -9,26 +54,33 @@ class BeeClient(Debug):
         super().__init__(debug_mode=debug_mode, sector_name="BEE")
         self.cli_path = cli_path
         self.process = None
-    
+
+    def _build_cmd(self, subcmd_args: List[str]) -> List[str]:
+        bin_path = get_bee_binary_path() or self.cli_path
+        if bin_path.endswith(".js"):
+            runner = "bun" if shutil.which("bun") else ("node" if shutil.which("node") else "bun")
+            return [runner, "run", bin_path] + subcmd_args
+        return [bin_path] + subcmd_args
+
     async def get_location(self):
         """Fetches the current location from the Bee CLI."""
-        cmd = ['bun', 'run', self.cli_path, 'location current', '--json']
+        cmd = self._build_cmd(['location', 'current', '--json'])
         process = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             text=True
         )
-        
+
         stdout, stderr = await process.communicate()
-        
+
         if process.returncode != 0:
             self.debug(f"Error fetching location: {stderr.strip()}")
             return None
-        
+
         try:
             data = json.loads(stdout)
-            return data["location"].get("address", "Unknown");
+            return data["location"].get("address", "Unknown")
         except json.JSONDecodeError:
             self.debug("Failed to parse JSON from Bee CLI output.")
             return None
@@ -36,10 +88,10 @@ class BeeClient(Debug):
     async def stream_events(self):
         """Spawns the stream, yields parsed SSE events (utterances, location, diarization updates)."""
         retry_delay = 1
-        
+
         while True:
             try:
-                cmd = ['bun', 'run', self.cli_path, 'stream', '--json']
+                cmd = self._build_cmd(['stream', '--json'])
                 self.process = await asyncio.create_subprocess_exec(
                     *cmd,
                     stdout=asyncio.subprocess.PIPE,
@@ -99,6 +151,11 @@ class BeeClient(Debug):
                                     "speaker": data.get("speaker") or data.get("data", {}).get("speaker"),
                                     "conversation_uuid": data.get("conversation_id") or data.get("data", {}).get("conversation_id") or "default_session",
                                 }
+                            }
+                        elif "timestamp" in data and not msg_type:
+                            yield {
+                                "event": "stream-heartbeat",
+                                "data": data
                             }
                     except json.JSONDecodeError:
                         continue

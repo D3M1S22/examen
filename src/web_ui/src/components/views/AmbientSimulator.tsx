@@ -9,6 +9,7 @@ interface AmbientSimulatorProps {
   simRunning: boolean;
   runSimulation: () => void;
   simResult: any;
+  statusData?: any;
 }
 
 export function AmbientSimulator({
@@ -17,6 +18,7 @@ export function AmbientSimulator({
   simRunning,
   runSimulation,
   simResult,
+  statusData,
 }: AmbientSimulatorProps) {
   const [activeResultTab, setActiveResultTab] = useState<"parsed" | "raw">("parsed");
 
@@ -140,15 +142,24 @@ export function AmbientSimulator({
           </>
         }
         rightElement={
-          <div className="bg-[#121419] border border-surface-container-highest rounded-xl p-4 font-mono w-[280px]">
-            <div className="text-[9px] text-secondary tracking-[0.2em] uppercase mb-1">
-              INSPECTION CADENCE
+          <div className="bg-[#121419] border border-surface-container-highest rounded-xl p-4 font-mono w-[300px]">
+            <div className="flex justify-between items-center text-[8px] text-secondary tracking-[0.2em] uppercase mb-1">
+              <span>AVG PIPELINE LATENCY</span>
+              <span className="text-emerald-400 font-bold">
+                {statusData?.telemetry?.latency?.average_ms ? `${statusData.telemetry.latency.average_ms}ms` : "CALIBRATING"}
+              </span>
             </div>
-            <div className="text-[14px] text-emerald-400 font-bold tracking-wider mb-1">
-              REALTIME ZERO-LAG
+            <div className="flex justify-between items-center text-[8px] text-secondary tracking-[0.2em] uppercase mb-1">
+              <span>SAMPLES RECORDED</span>
+              <span className="text-primary font-bold">
+                {statusData?.telemetry?.latency?.sample_count ?? 0} RUNS
+              </span>
             </div>
-            <div className="text-[9px] text-secondary tracking-[0.2em] uppercase">
-              BUFFER: 2048 SAMPLES
+            <div className="flex justify-between items-center text-[8px] text-secondary tracking-[0.2em] uppercase">
+              <span>REASONING MODEL</span>
+              <span className="text-cyan-400 font-bold truncate max-w-[150px]" title={statusData?.config?.reasoner_model}>
+                {statusData?.config?.reasoner_model?.split(":")?.[0]?.toUpperCase() || "AWS BEDROCK"}
+              </span>
             </div>
           </div>
         }

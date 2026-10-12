@@ -249,7 +249,7 @@ export function OverviewHub({
             >
               MANAGE ROUTINES ({tasks.length}) →
             </button>
-            <span>NEXT: 18:30 INGRESS</span>
+            <span>INGRESS: {statusData?.telemetry?.sensor_mesh?.toUpperCase() || "EDGE STANDBY"}</span>
           </div>
         </div>
 

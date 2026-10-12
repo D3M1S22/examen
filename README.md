@@ -144,4 +144,37 @@ Detailed technical, architectural, and operational documentation is organized ac
 * 📄 [05_tech_stack_resources.md](docs/05_tech_stack_resources.md): Comprehensive tech stack, frameworks, APIs, and submodule references (`agentcore-samples`, `bee-cli`).
 * 📄 [06_aws_cloud_deployment_architecture.md](docs/06_aws_cloud_deployment_architecture.md): AWS Cloud deployment architecture (AgentCore Runtime, AgentCore Memory, S3, DynamoDB, Alexa+ MCP, CloudFront).
 * 📄 [07_repository_structure_modules.md](docs/07_repository_structure_modules.md): Detailed repository layout, modular monorepo mapping by deployment target, and developer quickstart.
+* 📄 [08_real_telemetry_and_bee_hardware_spec.md](docs/08_real_telemetry_and_bee_hardware_spec.md): Real hardware telemetry integration, Bee Wearable CLI capabilities, latency tracking architecture, and sector-by-sector frontend data contracts.
 * 🚀 [ROADMAP.md](docs/next_steps/ROADMAP.md): Evolution Roadmap, pipeline refinements status dashboard, and execution plan for Next Steps.
+
+---
+
+## 📋 Comprehensive Architecture TODO & Future Model Enhancements Roadmap
+
+> **Reference Specification:** For full technical schematics, hardware probe contracts, and telemetry data models, see [docs/08_real_telemetry_and_bee_hardware_spec.md](docs/08_real_telemetry_and_bee_hardware_spec.md).
+
+In strict accordance with the non-modifying model directive, the current LLM model call signatures in `src/pipeline/nodes/` and `src/ingestion/gatekeeper.py` are preserved. Below is the comprehensive master checklist of frontend data expectations, hardware integration points, and future model enhancements:
+
+### 1. Frontend Real Telemetry & Data Expectations
+- [x] **Real Rolling Averages in `/api/status`:** Persisted in SQLite `system_telemetry` and queried via `get_latency_metrics()` (rolling average, sample counts, min/max).
+- [x] **Dynamic Hardware & Sensor Placeholders:**
+  - `PeaceOfMind`: Bound to `telemetry.sensor_mesh`, `telemetry.processing_model.reasoner`, and `telemetry.latency.average_ms`.
+  - `SystemBar`: Dynamic `BEE: STREAMING` / `BEE: STANDBY (${USER})` / `BEE: DISCONNECTED` badges reflecting real `bee status` probes.
+  - `SystemBar`: Dynamic `BEDROCK: ${MODEL} (${REGION})` badge reflecting active AWS Bedrock configuration.
+  - `SystemBar`: Dynamic `SSE: LIVE STREAM` / `SSE: CONNECTING` badge reflecting EventSource state.
+  - `AmbientSimulator`: Live execution latency (`elapsed_ms`), sample count, and model diagnostics.
+  - `OverviewHub`: Dynamic ingress sensor mesh status.
+- [x] **Relational Social Rolodex Deduplication:** Multi-level deduplication across SQLite `social_commitments`, `social_contacts`, and Next.js React views, eliminating duplicate commitments and contact cards.
+- [x] **Cross-Origin Streaming (CORS):** Full CORS support enabled on FastMCP Starlette app and `/api/events` SSE endpoint for local port 3000 / 8000 seamless connectivity.
+- [x] **Ambient Simulator Multi-Key Ingestion:** Support for both `raw_transcript` and `transcript_chunk` across all endpoints and pipeline entrypoints.
+
+### 2. Bee Wearable Hardware & Edge Ingestion (Awaiting Physical Device Link)
+- [x] **Precompiled Standalone Binary Resolution:** Native fallback to `resources/bee-cli/dist/platforms/mac-arm64/bee` (or linux/windows) removing dependency on global `bun`/`node` on host.
+- [ ] **Live Audio Stream Linking:** Run `stream_convo.py` / `BeeStreamOrchestrator` when physical Bee Wearable is actively broadcasting via paired mobile companion.
+- [ ] **Webhook Gateway Ingestion:** Transition from local subprocess polling to Bee Cloud webhook callback ingestion (`bee stream --webhook-endpoint <URL>`).
+- [ ] **Hardware Battery & RSSI Telemetry Bridge:** Track upstream Bee Wearable API updates for battery level and Bluetooth RSSI exposure.
+
+### 3. Future Model Calls & Backend Optimizations (Deferred per Directive)
+- [ ] **Multilingual Gatekeeper Prompt Refinement:** Add explicit Italian few-shot anchors (*"ho staccato il ferro"*, *"gas spento"*, *"chiuso la porta"*) to `src/ingestion/gatekeeper.py` to maximize zero-shot domestic safety recall.
+- [ ] **Streaming Token Generation for Voice Recall:** Stream Bedrock Converse API token chunks directly through FastMCP SSE for instant Echo Show display updates.
+- [ ] **Dynamic Multi-Tier Model Switching:** Programmatic fallback to Amazon Nova Micro for high-frequency domestic screening and Claude 3.5 Sonnet for multi-source academic research.

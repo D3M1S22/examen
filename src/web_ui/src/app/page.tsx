@@ -13,10 +13,9 @@ import { SocialRolodex } from "@/components/views/SocialRolodex";
 import { TopicDossiers } from "@/components/views/TopicDossiers";
 import { AmbientSimulator } from "@/components/views/AmbientSimulator";
 import { EchoShowModal } from "@/components/ui/EchoShowModal";
+import { getApiBaseUrl } from "@/utils/api";
 
-// Use environment variable for API URL or default to empty string (same origin)
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "";
-const fetcher = (url: string) => fetch(`${API_URL}${url}`).then((res) => res.json());
+const fetcher = (url: string) => fetch(`${getApiBaseUrl()}${url}`).then((res) => res.json());
 
 export default function Dashboard() {
   const [activeTab, setActiveTab] = useState("overview");
@@ -72,7 +71,8 @@ export default function Dashboard() {
   useEffect(() => {
     if (typeof window === "undefined" || !("EventSource" in window)) return;
     try {
-      const es = new EventSource(`${API_URL}/api/events`);
+      const baseUrl = getApiBaseUrl();
+      const es = new EventSource(`${baseUrl}/api/events`);
 
       es.onopen = () => {
         setSseConnected(true);
@@ -82,7 +82,7 @@ export default function Dashboard() {
         try {
           const data = JSON.parse(e.data);
           const eventType = (data.type || data.event || "").toLowerCase();
-          
+
           // Revalidate status on any backend change
           mutateStatus();
 
@@ -121,7 +121,8 @@ export default function Dashboard() {
     setSimRunning(true);
     setSimResult(null);
     try {
-      const res = await fetch(`${API_URL}/api/simulate`, {
+      const baseUrl = getApiBaseUrl();
+      const res = await fetch(`${baseUrl}/api/simulate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ transcript_chunk: simText }),
@@ -155,7 +156,8 @@ export default function Dashboard() {
     await mutateRoutines({ tasks: updatedTasks as PlannedTask[] }, false);
 
     try {
-      await fetch(`${API_URL}/api/routines/${task.id}/toggle`, { method: "POST" });
+      const baseUrl = getApiBaseUrl();
+      await fetch(`${baseUrl}/api/routines/${task.id}/toggle`, { method: "POST" });
       mutateRoutines();
       mutateStatus();
       showToast(`Routine marked ${newStatus.toUpperCase()}`);
@@ -173,7 +175,8 @@ export default function Dashboard() {
     recurrence: string = "daily"
   ) => {
     try {
-      const res = await fetch(`${API_URL}/api/routines`, {
+      const baseUrl = getApiBaseUrl();
+      const res = await fetch(`${baseUrl}/api/routines`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ title, domain, scheduled_time, recurrence }),
@@ -192,7 +195,8 @@ export default function Dashboard() {
   // Delete routine
   const handleDeleteRoutine = async (taskId: string) => {
     try {
-      const res = await fetch(`${API_URL}/api/routines/${taskId}`, {
+      const baseUrl = getApiBaseUrl();
+      const res = await fetch(`${baseUrl}/api/routines/${taskId}`, {
         method: "DELETE",
       });
       if (!res.ok) throw new Error("Failed to delete routine");
@@ -208,7 +212,8 @@ export default function Dashboard() {
   // Add quick peace of mind action
   const handleAddAction = async (statement: string) => {
     try {
-      const res = await fetch(`${API_URL}/api/simulate`, {
+      const baseUrl = getApiBaseUrl();
+      const res = await fetch(`${baseUrl}/api/simulate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ transcript_chunk: statement }),
@@ -228,7 +233,8 @@ export default function Dashboard() {
   // Trigger Live AI Web Profiler for contact
   const handleEnrichContact = async (contactId: string) => {
     try {
-      const res = await fetch(`${API_URL}/api/contacts/${contactId}/enrich`, {
+      const baseUrl = getApiBaseUrl();
+      const res = await fetch(`${baseUrl}/api/contacts/${contactId}/enrich`, {
         method: "POST",
       });
       if (!res.ok) throw new Error("Enrichment failed");
@@ -245,7 +251,8 @@ export default function Dashboard() {
   // Toggle commitment fulfillment
   const handleToggleCommitment = async (commitmentId: string, action: "fulfill" | "cancel") => {
     try {
-      const res = await fetch(`${API_URL}/api/commitments/${commitmentId}/${action}`, {
+      const baseUrl = getApiBaseUrl();
+      const res = await fetch(`${baseUrl}/api/commitments/${commitmentId}/${action}`, {
         method: "POST",
       });
       if (!res.ok) throw new Error(`Failed to ${action} commitment`);
@@ -281,6 +288,7 @@ export default function Dashboard() {
           currentTime={currentTime}
           onOpenEchoModal={() => setShowGlobalEchoModal(true)}
           sseConnected={sseConnected}
+          statusData={statusData}
         />
 
         {/* MAIN CONTENT AREA */}
@@ -301,6 +309,7 @@ export default function Dashboard() {
           {activeTab === "peace" && (
             <PeaceOfMind
               actionsData={actionsData}
+              statusData={statusData}
               onAddAction={handleAddAction}
             />
           )}
@@ -308,6 +317,7 @@ export default function Dashboard() {
           {activeTab === "routines" && (
             <DailyRoutines
               routinesData={routinesData}
+              statusData={statusData}
               handleToggleRoutine={handleToggleRoutine}
               handleAddRoutine={handleAddRoutine}
               handleDeleteRoutine={handleDeleteRoutine}
@@ -317,13 +327,14 @@ export default function Dashboard() {
           {activeTab === "social" && (
             <SocialRolodex
               socialData={socialData}
+              statusData={statusData}
               onEnrichContact={handleEnrichContact}
               onToggleCommitment={handleToggleCommitment}
             />
           )}
 
           {activeTab === "topics" && (
-            <TopicDossiers topicsData={topicsData} />
+            <TopicDossiers topicsData={topicsData} statusData={statusData} />
           )}
 
           {activeTab === "simulator" && (
@@ -333,6 +344,7 @@ export default function Dashboard() {
               simRunning={simRunning}
               runSimulation={runSimulation}
               simResult={simResult}
+              statusData={statusData}
             />
           )}
         </main>

@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional
 import uvicorn
 from mcp.server.fastmcp import FastMCP
 from starlette.applications import Starlette
+from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, StreamingResponse
 from starlette.staticfiles import StaticFiles
@@ -81,9 +82,188 @@ mcp.tool()(list_session_dossiers)
 # REST API Endpoints (for the Web UI & Echo Show Ext-App)
 # ---------------------------------------------------------------------------
 
+_bee_status_cache: Dict[str, Any] = {"timestamp": 0.0, "data": None}
+
+
+class OrchestratorManager:
+    """Manages the background execution and telemetry lifecycle of the BeeStreamOrchestrator."""
+    _instance: Optional["OrchestratorManager"] = None
+
+    def __init__(self):
+        self.orchestrator = None
+        self.task: Optional[asyncio.Task] = None
+        self.is_started = False
+
+    @classmethod
+    def get_instance(cls) -> "OrchestratorManager":
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    def ensure_started(self) -> None:
+        """Launches the background orchestrator task if not already active."""
+        if self.task is None or self.task.done():
+            try:
+                loop = asyncio.get_running_loop()
+                self.task = loop.create_task(self._run_orchestrator())
+                self.is_started = True
+            except RuntimeError:
+                pass
+
+    async def _run_orchestrator(self) -> None:
+        try:
+            from src.ingestion.orchestrator import BeeStreamOrchestrator
+            store = get_storage_store()
+            self.orchestrator = BeeStreamOrchestrator(debug_mode="none", store=store)
+            logger.info("Ingestion Orchestrator background service started.")
+            await self.orchestrator.run()
+        except asyncio.CancelledError:
+            logger.info("Ingestion Orchestrator background service stopped.")
+        except Exception as e:
+            logger.warning(f"Ingestion Orchestrator background service error: {e}")
+        finally:
+            self.is_started = False
+
+    def stop(self) -> None:
+        """Stops the running orchestrator background task."""
+        if self.task and not self.task.done():
+            self.task.cancel()
+        self.is_started = False
+
+    def get_status(self) -> Dict[str, Any]:
+        """Returns real-time status of the orchestrator stream and buffers."""
+        self.ensure_started()
+        if self.orchestrator and hasattr(self.orchestrator, "get_status_dict"):
+            st = self.orchestrator.get_status_dict()
+            st["service_managed"] = True
+            return st
+        return {
+            "running": self.is_started and (self.task is not None and not self.task.done()),
+            "status": "LISTENING" if self.is_started else "STANDBY",
+            "mode": "ambient_sse",
+            "buffer_chars": 0,
+            "chunks_screened": 0,
+            "utterances_received": 0,
+            "detail": "Orchestrator initializing background stream",
+            "service_managed": True,
+        }
+
+
+def _get_bee_device_telemetry() -> Dict[str, Any]:
+    """Probes the Bee CLI for real authentication and joins it with Orchestrator stream state."""
+    import time
+    now = time.time()
+    orch_mgr = OrchestratorManager.get_instance()
+    orch_status = orch_mgr.get_status()
+
+    if _bee_status_cache["data"] and (now - _bee_status_cache["timestamp"] < 10.0):
+        res = dict(_bee_status_cache["data"])
+        # Update dynamic streaming status from orchestrator
+        if orch_status.get("status") == "STREAMING":
+            res["status"] = "STREAMING"
+            res["connected"] = True
+            res["detail"] = f"Bee Wearable streaming ({orch_status.get('utterances_received', 0)} utterances)"
+        elif orch_status.get("status") == "LISTENING" and res.get("account"):
+            res["status"] = "LISTENING"
+            res["connected"] = False
+            res["detail"] = f"Bee account verified as {res['account']}; orchestrator listening for audio stream"
+        return res
+
+    from src.ingestion.stream_convo import get_bee_binary_path
+    bee_bin = get_bee_binary_path()
+    if not bee_bin:
+        res = {
+            "connected": False,
+            "status": "DISCONNECTED",
+            "account": None,
+            "device_paired": False,
+            "detail": "Bee CLI binary not found in resources/bee-cli/dist or PATH",
+        }
+    else:
+        try:
+            import subprocess
+            proc = subprocess.run(
+                [bee_bin, "status"],
+                capture_output=True,
+                text=True,
+                timeout=2.0,
+            )
+            out = proc.stdout.strip()
+            if "Verified as" in out:
+                import re
+                m = re.search(r"Verified as (.*?)(?:\s*\(id|\.|$)", out)
+                user_name = m.group(1).strip() if m else "Authenticated User"
+                
+                is_streaming = orch_status.get("status") == "STREAMING"
+                is_listening = orch_status.get("status") == "LISTENING" or orch_status.get("running")
+
+                res = {
+                    "connected": is_streaming,
+                    "status": "STREAMING" if is_streaming else ("LISTENING" if is_listening else "STANDBY"),
+                    "account": user_name,
+                    "device_paired": is_streaming,
+                    "detail": (
+                        f"Bee Wearable streaming audio ({orch_status.get('utterances_received', 0)} chunks)"
+                        if is_streaming
+                        else f"Bee account verified as {user_name}; orchestrator listening for wearable stream"
+                    ),
+                }
+            elif "Not logged in" in out:
+                res = {
+                    "connected": False,
+                    "status": "DISCONNECTED",
+                    "account": None,
+                    "device_paired": False,
+                    "detail": "Bee CLI not logged in. Run 'bee login' to authenticate.",
+                }
+            else:
+                res = {
+                    "connected": False,
+                    "status": "STANDBY",
+                    "account": None,
+                    "device_paired": False,
+                    "detail": out or "Awaiting Bee device link",
+                }
+        except Exception as e:
+            res = {
+                "connected": False,
+                "status": "STANDBY",
+                "account": None,
+                "device_paired": False,
+                "detail": f"Bee CLI probe: {str(e)}",
+            }
+
+    _bee_status_cache["timestamp"] = now
+    _bee_status_cache["data"] = res
+    return res
+
+
+@mcp.custom_route("/api/orchestrator/status", methods=["GET"])
+async def api_orchestrator_status(request: Request) -> JSONResponse:
+    """Returns the live status of the Ingestion Orchestrator background stream."""
+    mgr = OrchestratorManager.get_instance()
+    return JSONResponse(mgr.get_status())
+
+
+@mcp.custom_route("/api/orchestrator/start", methods=["POST"])
+async def api_orchestrator_start(request: Request) -> JSONResponse:
+    """Explicitly launches the Ingestion Orchestrator background loop."""
+    mgr = OrchestratorManager.get_instance()
+    mgr.ensure_started()
+    return JSONResponse({"success": True, "orchestrator": mgr.get_status()})
+
+
+@mcp.custom_route("/api/orchestrator/stop", methods=["POST"])
+async def api_orchestrator_stop(request: Request) -> JSONResponse:
+    """Safely suspends the Ingestion Orchestrator background loop."""
+    mgr = OrchestratorManager.get_instance()
+    mgr.stop()
+    return JSONResponse({"success": True, "status": "STOPPED"})
+
+
 @mcp.custom_route("/api/status", methods=["GET"])
 async def api_status(request: Request) -> JSONResponse:
-    """Returns system status, active models/providers, and entity counts."""
+    """Returns system status, active models/providers, real telemetry averages, and entity counts."""
     store = get_storage_store()
     recent_actions = store.list_recent_actions(limit=100)
     planned_tasks = store.list_planned_tasks()
@@ -95,10 +275,37 @@ async def api_status(request: Request) -> JSONResponse:
     pending_tasks = sum(1 for t in planned_tasks if t.status != "completed")
     open_commitments = sum(1 for c in all_commitments if c.status == "open")
 
+    latency_metrics = store.get_latency_metrics()
+    bee_telemetry = _get_bee_device_telemetry()
+    orch_status = OrchestratorManager.get_instance().get_status()
+
+    # Dynamic sensor mesh description based on live hardware & orchestrator state
+    if bee_telemetry.get("status") == "STREAMING":
+        sensor_mesh_str = "Bee Wearable Audio Mesh (Live Streaming)"
+    elif bee_telemetry.get("status") == "LISTENING":
+        sensor_mesh_str = f"Bee Wearable Audio Mesh (Listening • {bee_telemetry.get('account')})"
+    elif bee_telemetry.get("account"):
+        sensor_mesh_str = f"Bee Wearable (Standby • {bee_telemetry.get('account')})"
+    else:
+        sensor_mesh_str = "Web Simulator / Edge Ingestion (Standby)"
+
     return JSONResponse({
         "status": "online",
         "service": "EXAMEN Ambient Intelligence Engine",
         "timestamp": datetime.now().isoformat(),
+        "telemetry": {
+            "sensor_mesh": sensor_mesh_str,
+            "bee_device": bee_telemetry,
+            "orchestrator": orch_status,
+            "processing_model": {
+                "gatekeeper": settings.gatekeeper_model_id,
+                "reasoner": settings.reasoner_model_id,
+                "gatekeeper_provider": settings.gatekeeper_provider,
+                "reasoner_provider": settings.reasoner_provider,
+                "active_runtime": "AWS Bedrock AgentCore",
+            },
+            "latency": latency_metrics,
+        },
         "config": {
             "gatekeeper_provider": settings.gatekeeper_provider,
             "reasoner_provider": settings.reasoner_provider,
@@ -184,6 +391,8 @@ async def api_events(request: Request) -> StreamingResponse:
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "*",
         },
     )
 
@@ -952,12 +1161,13 @@ async def api_simulate(request: Request) -> JSONResponse:
     except Exception:
         return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
 
-    chunk = body.get("transcript_chunk")
+    chunk = body.get("transcript_chunk") or body.get("raw_transcript") or body.get("text")
     if not chunk or not chunk.strip():
         return JSONResponse({"error": "Field 'transcript_chunk' is required"}, status_code=400)
 
     actor_id = body.get("actor_id", "user_web_sim")
     payload = {
+        "raw_transcript": chunk.strip(),
         "transcript_chunk": chunk.strip(),
         "timestamp": datetime.now().isoformat(),
         "actor_id": actor_id,
@@ -967,13 +1177,28 @@ async def api_simulate(request: Request) -> JSONResponse:
     try:
         result = agent_invocation(payload=payload)
         elapsed_sec = (datetime.now() - start_time).total_seconds()
+        elapsed_ms = round(elapsed_sec * 1000.0, 1)
+
+        try:
+            store = get_storage_store()
+            store.record_latency(
+                event_type="api_simulate",
+                latency_ms=elapsed_ms,
+                model_id=settings.reasoner_model_id,
+                details={"categories": result.get("categories"), "actor_id": actor_id},
+            )
+        except Exception:
+            pass
+
         broadcast_event("pipeline_invoked", {
             "summary": result.get("summary"),
             "elapsed_seconds": round(elapsed_sec, 3),
+            "elapsed_ms": elapsed_ms,
         })
         return JSONResponse({
             "success": True,
             "elapsed_seconds": round(elapsed_sec, 3),
+            "elapsed_ms": elapsed_ms,
             "result": result,
         })
     except Exception as e:
@@ -991,6 +1216,15 @@ async def api_simulate(request: Request) -> JSONResponse:
 def create_app() -> Starlette:
     """Constructs the unified ASGI application serving MCP, API, and Web UI."""
     app = mcp.streamable_http_app()
+
+    # Enable CORS for Next.js dev server and external web callers
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     # Locate static web UI directory (Next.js static export 'out' folder)
     current_dir = os.path.dirname(os.path.abspath(__file__))

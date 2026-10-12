@@ -343,8 +343,19 @@ class TestServerRestApiAndWebUi:
 
     @pytest.fixture
     def client(self):
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+            db_path = f.name
+        temp_store = SQLiteContextStore(db_path=db_path)
+        import src.core.storage as storage_mod
+        old_instance = storage_mod._store_instance
+        storage_mod._store_instance = temp_store
         app = create_app()
-        return TestClient(app)
+        test_client = TestClient(app)
+        yield test_client
+        temp_store.close()
+        storage_mod._store_instance = old_instance
+        if os.path.exists(db_path):
+            os.remove(db_path)
 
     def test_api_status(self, client):
         res = client.get("/api/status")
@@ -682,6 +693,19 @@ class TestServerRestApiAndWebUi:
 
     def test_serving_tools_standardized_card_payloads(self, client):
         store = get_storage_store()
+        store.save_topic_briefing(BriefingReport(
+            topic_title="AWS Bedrock AgentCore & Runtime Architecture",
+            context_type="tech_stack",
+            executive_summary=["Serverless microVM execution runtime for autonomous LLM agents."],
+            explanatory_synthesis="AWS Bedrock AgentCore provides high-performance microVM isolation.",
+            web_sources=["https://aws.amazon.com/bedrock"],
+            action_items=["Review IAM microVM execution policies"],
+        ))
+        store.save_social_contact(SocialEntity(
+            person_name="Preview Contact",
+            company_or_role="Lead Architect",
+            commitments=["Review code"],
+        ))
 
         # 1. Topic briefing tool
         briefing_res = execute_get_topic_briefing(store=store)

@@ -6,6 +6,7 @@ import { playAcousticVerificationTone } from "@/utils/audioEffects";
 
 interface DailyRoutinesProps {
   routinesData: { tasks: PlannedTask[] } | undefined;
+  statusData?: any;
   handleToggleRoutine: (task: PlannedTask) => void;
   handleAddRoutine: (title: string, domain: string, scheduled_time: string, recurrence?: string) => Promise<void>;
   handleDeleteRoutine?: (taskId: string) => Promise<void>;
@@ -13,6 +14,7 @@ interface DailyRoutinesProps {
 
 export function DailyRoutines({
   routinesData,
+  statusData,
   handleToggleRoutine,
   handleAddRoutine,
   handleDeleteRoutine,
@@ -22,6 +24,13 @@ export function DailyRoutines({
   const [searchQuery, setSearchQuery] = useState("");
   const [showAddModal, setShowAddModal] = useState(false);
   const [activeAudioIndex, setActiveAudioIndex] = useState<number | null>(null);
+
+  // Dynamic Telemetry State
+  const sensorMesh = statusData?.telemetry?.sensor_mesh || "ACOUSTIC INGESTION: ACTIVE";
+  const latencyMetrics = statusData?.telemetry?.latency;
+  const avgLatency = latencyMetrics?.average_ms
+    ? `${latencyMetrics.average_ms}MS (AVG)`
+    : "PASSIVE (STANDBY)";
 
   const tasks = routinesData?.tasks || [];
 
@@ -86,9 +95,9 @@ export function DailyRoutines({
           </p>
         </div>
         <div className="shrink-0 flex flex-col items-end gap-3 self-center md:self-auto mt-4 md:mt-0">
-          <StatusBadge status="nominal" label="ACOUSTIC INGESTION: ACTIVE" size="md" />
+          <StatusBadge status="nominal" label={sensorMesh.toUpperCase()} size="md" />
           <div className="font-mono text-[9px] text-secondary uppercase text-right tracking-[0.2em] pr-2">
-            LATENCY: 14MS • LOCAL PRIVACY ENCLAVE
+            LATENCY: {avgLatency} • LOCAL PRIVACY ENCLAVE
           </div>
         </div>
       </div>

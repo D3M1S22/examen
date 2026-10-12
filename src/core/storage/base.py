@@ -189,6 +189,28 @@ class AbstractContextStore(ABC):
         """Mark a session dossier as concluded and link its synthesized briefing report ID."""
         raise NotImplementedError
 
+    def record_latency(
+        self,
+        event_type: str,
+        latency_ms: float,
+        model_id: Optional[str] = None,
+        details: Optional[dict] = None,
+    ) -> None:
+        """Records an execution latency sample for performance and telemetry metrics."""
+        pass
+
+    def get_latency_metrics(
+        self, event_type: Optional[str] = None, limit: int = 50
+    ) -> dict:
+        """Retrieves aggregated execution latency metrics (average, latest, min, max, count)."""
+        return {
+            "sample_count": 0,
+            "average_ms": 0.0,
+            "latest_ms": 0.0,
+            "min_ms": 0.0,
+            "max_ms": 0.0,
+        }
+
     @abstractmethod
     def close(self) -> None:
         """Close database connection / resources."""

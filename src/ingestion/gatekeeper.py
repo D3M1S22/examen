@@ -26,7 +26,8 @@ CATEGORIES TO DETECT:
   * E.g., "I need to call Dr. Smith at 3 PM tomorrow", "Remind me to turn off the irrigation valve in an hour", "I must send the report before Friday", "Don't forget to take blood pressure medication tonight".
   * Doubts or retrospective questions (e.g. "Did I lock the door?", "I wonder if I turned it off") are NOT scheduled tasks and MUST be "noop"!
 - "social": Professional introductions, name/role exchanges, or explicit bilateral promises.
-  * E.g., "Nice to meet you, I'm Marco, Tech Lead at Acme", "Pleased to meet you, let's stay in touch and I'll send you the documentation tomorrow".
+  * E.g., "Nice to meet you, I'm Marco, Tech Lead at Acme", "Ciao sono Francesco faccio il sales assistant per una big 3", "Pleased to meet you, let's stay in touch and I'll send you the documentation tomorrow".
+  * Any self-introduction stating name and professional role (e.g., "sono [name] faccio [role]", "I'm [name], working as [role]") MUST be classified as "social".
   * Casual mentions of third parties without meeting or commitments are NOT "social".
 - "deep_topic": Technical discussions, architectural debates, specific bugs, named libraries/frameworks, or academic lectures.
   * E.g., "In today's meeting we are evaluating AWS Bedrock AgentCore and investigating a memory leak in the runtime", "Today's lecture covers distributed consensus algorithms".
@@ -34,9 +35,9 @@ CATEGORIES TO DETECT:
   * E.g., "What's the weather like today?", "Let's grab a coffee at the corner", "Did I unplug the stove? I wonder if I turned it off.", "Yeah, sure", "See you later", "Sounds good, thanks".
 
 STRICT RULES:
-1. BIAS HEAVILY TOWARDS "noop". Over 90% of daily ambient speech should be classified as "noop".
+1. Always populate 'categories' with a list containing at least one valid category (e.g. ["social"], ["action"], ["scheduled_task"], ["deep_topic"], or ["noop"]). NEVER return an empty object or omit categories.
 2. If uncertain or speech is trivial/banal, return ["noop"].
-3. Return accurate confidence score between 0.0 and 1.0.
+3. Return accurate confidence score between 0.0 and 1.0 (default 0.85 if confident).
 4. Provide a single-line summary_hint describing the detected signal (empty if "noop").
 """
 
@@ -168,6 +169,11 @@ def _heuristic_classify(
         r"\b(nice to meet you|pleased to meet you)\b.*?\b(i'm|my name is)\b",
         r"\b(my name is)\s+[a-z]+",
         r"\b(i'm|i am)\s+[a-z]+(?:\s+[a-z]+)?,?\s+.*?\b(at|for|from|presso|di)\b",
+        # Italian meeting introductions & identity
+        r"\b(ciao sono|piacere sono|piacere mi chiamo|mi chiamo|sono)\s+[a-z]+",
+        r"\b(faccio il|faccio la|lavoro come|lavoro per|lavoro in|lavoro da)\s+[a-z\s]+",
+        r"\b(sales assistant|consulente|sviluppatore|ingegnere|architetto|manager|direttore)\b",
+        r"\b(per una big [0-9]|per la big [0-9]|presso)\b",
         # Professional role exchange
         r"\b(tech lead|cto|ceo|founder|chief|head of|lead engineer|architect|partner architect|director|manager|vp|researcher|scientist)\s+(at|for|in|from)\b",
         r"\b(i work as|i'm the|i am the)\s+[a-z\s]+(at|for)\b",

@@ -82,9 +82,11 @@ class UtteranceChunk(BaseModel):
 # ============================================================================
 class ChunkClassification(BaseModel):
     categories: List[Literal["social", "action", "deep_topic", "scheduled_task", "noop"]] = Field(
+        default_factory=lambda: ["noop"],
         description="Categories detected in the transcript chunk. 'noop' if irrelevant."
     )
     confidence: float = Field(
+        default=0.85,
         ge=0.0, le=1.0,
         description="Overall classification confidence score."
     )
@@ -92,6 +94,18 @@ class ChunkClassification(BaseModel):
         default="",
         description="Single-line concise summary of the useful signal detected."
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def handle_empty_payload(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if "categories" not in data or not data["categories"]:
+                data["categories"] = ["noop"]
+            if "confidence" not in data or data["confidence"] is None:
+                data["confidence"] = 0.85
+            if "summary_hint" not in data:
+                data["summary_hint"] = ""
+        return data
 
 
 # ============================================================================

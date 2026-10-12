@@ -75,13 +75,24 @@ def agent_invocation(payload: Dict[str, Any], context: Any = None) -> Dict[str, 
     logger.info(f"AgentCore invocation received payload keys: {list(payload.keys())}")
 
     # 1. Transcript Resolution
-    raw_transcript = (
+    raw_val = (
         payload.get("raw_transcript")
+        or payload.get("transcript_chunk")
+        or payload.get("transcript")
+        or payload.get("text")
         or payload.get("prompt")
         or payload.get("input")
-        or payload.get("text")
+        or payload.get("content")
+        or payload.get("message")
+        or payload.get("utterance")
         or ""
-    ).strip()
+    )
+    if isinstance(raw_val, dict):
+        raw_transcript = str(raw_val.get("text") or raw_val.get("content") or "").strip()
+    elif isinstance(raw_val, str):
+        raw_transcript = raw_val.strip()
+    else:
+        raw_transcript = str(raw_val or "").strip()
 
     if not raw_transcript:
         logger.warning("AgentCore invocation received empty transcript or prompt.")
@@ -139,8 +150,20 @@ def agent_invocation(payload: Dict[str, Any], context: Any = None) -> Dict[str, 
     }
 
     # 5. Execute LangGraph StateGraph
+    start_time = datetime.now()
     try:
         result_state: Dict[str, Any] = pipeline_graph.invoke(state)
+        elapsed_ms = (datetime.now() - start_time).total_seconds() * 1000.0
+        try:
+            from src.core.storage import get_storage_store
+            get_storage_store().record_latency(
+                event_type="agentcore_pipeline",
+                latency_ms=elapsed_ms,
+                model_id=None,
+                details={"categories": categories, "session_id": session_id},
+            )
+        except Exception:
+            pass
     except Exception as e:
         logger.error(f"AgentCore pipeline execution failed: {e}", exc_info=True)
         return {

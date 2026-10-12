@@ -77,6 +77,37 @@ class BeeStreamOrchestrator(Debug):
         # Milestone 3.2: Macro Session & Micro-Event Decoupling
         self.session_manager = SessionManager(store=self.store)
 
+        # Real-time state & telemetry tracking
+        self.is_running = False
+        self.last_heartbeat_time: Optional[float] = None
+        self.total_utterances_received: int = 0
+        self.status = "IDLE"
+
+    def get_status_dict(self) -> dict:
+        """Returns a snapshot of the orchestrator liveness, buffer state, and telemetry."""
+        now = time.time()
+        is_streaming = (
+            self.total_utterances_received > 0
+            and (now - self.last_input_time < 120.0)
+        )
+        is_listening = self.is_running and (
+            self.last_heartbeat_time is not None or (now - self.last_input_time < 300.0)
+        )
+        
+        status_label = "STREAMING" if is_streaming else ("LISTENING" if is_listening else ("STANDBY" if self.is_running else "STOPPED"))
+        return {
+            "running": self.is_running,
+            "status": status_label,
+            "mode": "ambient_sse",
+            "buffer_chars": len(self.text_buffer),
+            "chunks_screened": self.chunk_counter,
+            "utterances_received": self.total_utterances_received,
+            "last_heartbeat": self.last_heartbeat_time,
+            "last_input_time": self.last_input_time,
+            "has_location": self.latest_telemetry is not None,
+            "detail": f"Orchestrator {status_label.lower()}; {self.chunk_counter} chunks screened, {len(self.text_buffer)} chars in buffer",
+        }
+
     def update_location(self, location_data: dict) -> LocationTelemetry:
         """Parses and updates the latest spatial telemetry from an update-location event."""
         lat = float(location_data.get("latitude", 0.0))
@@ -299,6 +330,8 @@ class BeeStreamOrchestrator(Debug):
     async def run(self):
         """Main loop that ingests the stream and manages triggers."""
         self.main_task = asyncio.current_task()
+        self.is_running = True
+        self.status = "LISTENING"
         
         monitor_task = asyncio.create_task(self.timeout_monitor())
         worker_task = asyncio.create_task(self.response_worker())
@@ -309,10 +342,15 @@ class BeeStreamOrchestrator(Debug):
         
         try:
             async for event in bee.stream_events():
-                self.debug(f"⚡ Received event: {event.get('event')}")
+                evt_name = event.get('event')
+                self.debug(f"⚡ Received event: {evt_name}")
+                if evt_name == "stream-heartbeat":
+                    self.last_heartbeat_time = time.time()
                 await self.handle_event(event)
 
-                if event.get("event") == "new-utterance":
+                if evt_name == "new-utterance":
+                    self.total_utterances_received += 1
+                    self.status = "STREAMING"
                     new_text = event.get("data", {}).get("text", "")
                     if new_text:
                         async with self.lock:
@@ -330,6 +368,8 @@ class BeeStreamOrchestrator(Debug):
         except asyncio.CancelledError:
             pass
         finally:
+            self.is_running = False
+            self.status = "STOPPED"
             bee.stop()
             monitor_task.cancel()
             await self.flush_to_model("Shutdown Flush")
