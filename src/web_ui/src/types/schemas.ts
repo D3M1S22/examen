@@ -73,15 +73,11 @@ export interface SocialWebProfile {
   organization?: string;
   current_role?: string;
   bio_summary?: string;
-  executive_summary?: string;
   areas_of_expertise?: string[];
-  notable_work?: string[];
-  shared_interests?: string[];
   linkedin_url?: string | null;
   github_url?: string | null;
   website_url?: string | null;
   confidence_score?: number;
-  enrichment_source?: string;
   enriched_at: string;
   disambiguation_report?: DisambiguationResult | null;
 }
