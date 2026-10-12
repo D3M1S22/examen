@@ -572,6 +572,90 @@ class TestSocialProfilerNode:
         profile = enrich_social_contact_sync(contact, store=temp_store)
         assert profile is None
 
+    def test_profiler_prompt_placeholders_match_format_kwargs(self):
+        import string
+        from src.pipeline.nodes.social_profiler import (
+            PROFILER_SYSTEM_PROMPT,
+            SOURCE_EVALUATION_SYSTEM_PROMPT,
+        )
+
+        def fields(template):
+            return {f for _, f, _, _ in string.Formatter().parse(template) if f is not None}
+
+        base = {"person_name", "company_or_role", "website_url", "key_topics", "transcript"}
+        assert fields(PROFILER_SYSTEM_PROMPT) <= base | {"search_snippets"}
+        assert fields(SOURCE_EVALUATION_SYSTEM_PROMPT) <= base | {"numbered_candidates"}
+
+    def test_disambiguation_result_coerces_malformed_llm_output(self):
+        from src.core.schemas import DisambiguationResult
+
+        res = DisambiguationResult.model_validate({
+            "canonical_linkedin_url": ["https://www.linkedin.com/in/ada"],
+            "canonical_github_url": [],
+            "verified_source_indices": "0, 2",
+            "rejected_source_indices": None,
+            "clean_combined_facts": "Ada has a LinkedIn profile",
+        })
+        assert res.canonical_linkedin_url == "https://www.linkedin.com/in/ada"
+        assert res.canonical_github_url is None
+        assert res.verified_source_indices == [0, 2]
+        assert res.rejected_source_indices == []
+        assert res.clean_combined_facts == ["Ada has a LinkedIn profile"]
+
+    def test_synthesized_profile_schema_ignores_disambiguation_report(self):
+        from src.pipeline.nodes.social_profiler import SynthesizedWebProfile
+
+        assert "disambiguation_report" not in SynthesizedWebProfile.model_fields
+        res = SynthesizedWebProfile.model_validate({
+            "headline": "Ada | Analytical Engines",
+            "linkedin_url": "https://www.linkedin.com/in/ada",
+            "disambiguation_report": {"canonical_github_url": [[]], "confidence_score": "high"},
+        })
+        assert res.headline == "Ada | Analytical Engines"
+        assert res.linkedin_url == "https://www.linkedin.com/in/ada"
+
+    def test_enrich_live_keeps_verified_linkedin_when_synthesis_fails(self, temp_store, monkeypatch):
+        from src.pipeline.nodes import social_profiler
+        from src.pipeline.tools.web_search import QueryEvaluation, SearchResultItem, WebSearchBatchResult
+        from src.core.schemas import SocialEntity
+
+        linkedin = "https://www.linkedin.com/in/luca-bianchi-cloud"
+        batch = WebSearchBatchResult(evaluations=[
+            QueryEvaluation(
+                query="q",
+                normalized_query="q",
+                is_empty=False,
+                results=[SearchResultItem(
+                    title="Luca Bianchi - VP of Infrastructure - CloudScale | LinkedIn",
+                    url=linkedin,
+                    snippet="Luca Bianchi, VP of Infrastructure at CloudScale.",
+                )],
+            )
+        ])
+
+        def failing_model():
+            raise RuntimeError("model unavailable")
+
+        monkeypatch.setattr(settings, "mock_ai", False)
+        monkeypatch.setattr(social_profiler, "has_active_model_credentials", lambda *a, **k: True)
+        monkeypatch.setattr(social_profiler, "execute_search_batch", lambda *a, **k: batch)
+        monkeypatch.setattr(social_profiler, "get_fast_model", failing_model)
+
+        contact = SocialEntity(
+            person_name="Luca Bianchi",
+            company_or_role="VP of Infrastructure at CloudScale",
+            key_topics=["Distributed Systems", "AWS"],
+        )
+        temp_store.save_social_contact(contact)
+        profile = social_profiler.enrich_social_contact_sync(contact, store=temp_store, force=True)
+
+        assert profile is not None
+        assert profile.linkedin_url and "linkedin.com/in/luca-bianchi-cloud" in profile.linkedin_url
+        assert profile.disambiguation_report is not None
+
+        persisted = temp_store.get_social_contact("Luca Bianchi")
+        assert persisted.web_profile.linkedin_url == profile.linkedin_url
+
     def test_node_extract_social_with_profiler(self, temp_store):
         from src.pipeline.nodes.social import node_extract_social
         from src.core.schemas import ExamenState

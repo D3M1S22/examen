@@ -229,6 +229,38 @@ class DisambiguationResult(BaseModel):
                 return int(stripped)
         return v
 
+    @field_validator("canonical_linkedin_url", "canonical_github_url", mode="before")
+    @classmethod
+    def coerce_url_to_str(cls, v):
+        """Accept LLM outputs like [], ['https://...'], '' or 'null' for single URL fields."""
+        if isinstance(v, list):
+            v = next((x for x in v if isinstance(x, str) and x.strip()), None)
+        if isinstance(v, str) and v.strip().lower() in ("", "none", "null", "[]"):
+            return None
+        return v
+
+    @field_validator("verified_source_indices", "rejected_source_indices", mode="before")
+    @classmethod
+    def coerce_indices_to_list(cls, v):
+        """Accept LLM outputs like null, 3 or '1, 2' for index lists."""
+        if v is None:
+            return []
+        if isinstance(v, int):
+            return [v]
+        if isinstance(v, str):
+            return [int(d) for d in re.findall(r"\d+", v)]
+        return v
+
+    @field_validator("clean_combined_facts", mode="before")
+    @classmethod
+    def coerce_facts_to_list(cls, v):
+        """Accept a single fact string (or null) instead of a list of facts."""
+        if v is None:
+            return []
+        if isinstance(v, str):
+            return [v] if v.strip() and v.strip().lower() not in ("none", "null", "[]") else []
+        return v
+
 
 class SocialWebProfile(BaseModel):
     headline: Optional[str] = Field(default=None, description="e.g. 'VP of Infrastructure at CloudScale | ex-AWS'")

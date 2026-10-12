@@ -23,9 +23,11 @@ from __future__ import annotations
 import argparse
 from datetime import datetime
 import json
+import logging
 import os
 import sys
 import time
+import traceback
 import uuid
 from typing import Any, Dict, List, Optional
 
@@ -49,6 +51,8 @@ from src.core.storage import get_storage_store
 from src.core.storage.sqlite_store import SQLiteContextStore
 from src.ingestion.gatekeeper import classify_chunk, is_noop
 from src.pipeline.graph import pipeline_graph
+
+logger = logging.getLogger("examen.scripts.live_tester")
 
 # ANSI Terminal Colors
 RESET = "\033[0m"
@@ -455,7 +459,15 @@ def run_pipeline_test(
     if action_data:
         persisted_items.append(f"VerifiedAction ('{action_data.action_type}')")
     if social_data:
-        persisted_items.append(f"SocialEntity ('{social_data.person_name}')")
+        # node_persist swallows storage errors, so confirm the contact actually landed
+        try:
+            social_persisted = store.get_social_contact(social_data.person_name) is not None
+        except Exception:
+            social_persisted = False
+        if social_persisted:
+            persisted_items.append(f"SocialEntity ('{social_data.person_name}')")
+        else:
+            print(f"  {RED}✗ SocialEntity ('{social_data.person_name}') was NOT persisted (see logs above).{RESET}")
     if briefing_report:
         persisted_items.append(f"BriefingReport ('{briefing_report.topic_title}')")
 
@@ -538,7 +550,8 @@ def interactive_loop():
         except KeyboardInterrupt:
             print(f"\n\n{YELLOW}Interrupted. Type /exit to quit or continue testing.{RESET}\n")
         except Exception as e:
-            print(f"\n{RED}{BOLD}Error executing pipeline:{RESET} {e}\n", exc_info=True)
+            print(f"\n{RED}{BOLD}Error executing pipeline:{RESET} {e}\n")
+            traceback.print_exc()
 
 
 def main():

@@ -397,3 +397,28 @@ def test_delete_social_commitment(temp_store):
 
 
 
+
+
+def test_schema_recreated_when_db_file_deleted(temp_store):
+    """A live store must recover if the DB file is wiped underneath it (e.g. /reset-db)."""
+    temp_store.save_social_contact(SocialEntity(person_name="Ada Lovelace", company_or_role="Analytical Engines"))
+    os.remove(temp_store.db_path)
+
+    assert temp_store.list_planned_tasks(status="pending") == []
+    temp_store.save_social_contact(SocialEntity(person_name="Grace Hopper", company_or_role="US Navy"))
+    assert temp_store.get_social_contact("Grace Hopper") is not None
+    assert temp_store.get_social_contact("Ada Lovelace") is None
+
+
+def test_reset_database_reinitializes_cached_store(temp_store, monkeypatch):
+    """reset_database must rebuild the schema even when get_storage_store() returns a cached singleton."""
+    import src.core.storage as storage_mod
+    from scripts.reset_db import reset_database
+
+    monkeypatch.setattr(storage_mod, "_store_instance", temp_store)
+    temp_store.save_social_contact(SocialEntity(person_name="Ada Lovelace", company_or_role="Analytical Engines"))
+
+    reset_database(backup=False, seed=True, db_path=temp_store.db_path)
+
+    assert temp_store.get_social_contact("Ada Lovelace") is None
+    assert len(temp_store.list_planned_tasks(status="pending")) == 4
