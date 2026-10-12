@@ -102,7 +102,7 @@ def print_banner(db_path: str):
     print(f" {BOLD}Model:{RESET}        {YELLOW}{model}{RESET}")
     print(f" {BOLD}Credentials:{RESET}  {cred_status}")
     print(f" {BOLD}Storage:{RESET}      {WHITE}SQLite ({db_path}){RESET} — {CYAN}{pending_tasks_count} active planned tasks{RESET}")
-    print(f" {DIM}Commands: /tasks, /actions, /commitments, /sessions, /profiles, /social, /topics, /simulate, /help, /exit{RESET}")
+    print(f" {DIM}Commands: /tasks, /actions, /commitments, /sessions, /profiles, /social, /topics, /simulate, /reset-db, /help, /exit{RESET}")
     print(f"{DIM}──────────────────────────────────────────────────────────────────────────────────{RESET}\n")
 
 
@@ -131,6 +131,7 @@ def handle_subcommand(cmd: str, store: SQLiteContextStore) -> bool:
         print(f"  {CYAN}/social{RESET}                 List stored social contacts and bilateral commitments")
         print(f"  {CYAN}/topics{RESET}                 List recent deep topic briefings and explanatory syntheses [M1.1]")
         print(f"  {CYAN}/simulate [name]{RESET}        Run Phase 1-3 mock conversation scenarios interactively")
+        print(f"  {CYAN}/reset-db [--seed]{RESET}       Reset local SQLite database to clean state (optional baseline seed)")
         print(f"  {CYAN}/clear{RESET}                  Clear terminal screen")
         print(f"  {CYAN}/exit{RESET}                   Exit the interactive tester")
         return True
@@ -278,6 +279,12 @@ def handle_subcommand(cmd: str, store: SQLiteContextStore) -> bool:
             for sc in scenarios:
                 print(f"  • {CYAN}{sc['id']}{RESET} — {sc['title']} ({MAGENTA}{sc['milestone']}{RESET})")
             print(f"Run with: {YELLOW}/simulate <id>{RESET}\n")
+        return True
+
+    elif action == "/reset-db":
+        from scripts.reset_db import reset_database
+        seed = "--seed" in cmd
+        reset_database(backup=True, seed=seed, db_path=store.db_path)
         return True
 
     return False

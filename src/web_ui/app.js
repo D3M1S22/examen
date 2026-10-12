@@ -591,8 +591,9 @@ document.addEventListener("DOMContentLoaded", () => {
         if (wp.github_url) {
           linksHtml += `<a href="${escapeHtml(wp.github_url)}" target="_blank" rel="noopener noreferrer" class="social-link-pill github-pill">🐙 GitHub</a>`;
         }
-        if (wp.website_url) {
-          linksHtml += `<a href="${escapeHtml(wp.website_url)}" target="_blank" rel="noopener noreferrer" class="social-link-pill web-pill">🌐 Website</a>`;
+        const websiteLink = (wp && wp.website_url) || c.website_url;
+        if (websiteLink) {
+          linksHtml += `<a href="${escapeHtml(websiteLink)}" target="_blank" rel="noopener noreferrer" class="social-link-pill web-pill">🌐 Website</a>`;
         }
 
         webProfileHtml = `
@@ -723,7 +724,8 @@ document.addEventListener("DOMContentLoaded", () => {
       let linksHtml = "";
       if (wp.linkedin_url) linksHtml += `<a href="${escapeHtml(wp.linkedin_url)}" target="_blank" rel="noopener noreferrer" class="social-link-pill linkedin-pill">💼 LinkedIn</a>`;
       if (wp.github_url) linksHtml += `<a href="${escapeHtml(wp.github_url)}" target="_blank" rel="noopener noreferrer" class="social-link-pill github-pill">🐙 GitHub</a>`;
-      if (wp.website_url) linksHtml += `<a href="${escapeHtml(wp.website_url)}" target="_blank" rel="noopener noreferrer" class="social-link-pill web-pill">🌐 Website</a>`;
+      const websiteLink = (wp && wp.website_url) || c.website_url;
+      if (websiteLink) linksHtml += `<a href="${escapeHtml(websiteLink)}" target="_blank" rel="noopener noreferrer" class="social-link-pill web-pill">🌐 Website</a>`;
 
       return `
         <div class="social-card executive-card" style="border-color: rgba(139, 92, 246, 0.4);">
@@ -1314,7 +1316,8 @@ document.addEventListener("DOMContentLoaded", () => {
       let linksHtml = "";
       if (wp && wp.linkedin_url) linksHtml += `<a href="${escapeHtml(wp.linkedin_url)}" target="_blank" rel="noopener noreferrer" class="social-link-pill linkedin-pill">💼 LinkedIn</a>`;
       if (wp && wp.github_url) linksHtml += `<a href="${escapeHtml(wp.github_url)}" target="_blank" rel="noopener noreferrer" class="social-link-pill github-pill">🐙 GitHub</a>`;
-      if (wp && wp.website_url) linksHtml += `<a href="${escapeHtml(wp.website_url)}" target="_blank" rel="noopener noreferrer" class="social-link-pill web-pill">🌐 Website</a>`;
+      const websiteLink = (wp && wp.website_url) || contact.website_url;
+      if (websiteLink) linksHtml += `<a href="${escapeHtml(websiteLink)}" target="_blank" rel="noopener noreferrer" class="social-link-pill web-pill">🌐 Website</a>`;
       modalDossierLinks.innerHTML = linksHtml || `<span style="font-size:0.8rem; color:#64748b;">No external web links discovered.</span>`;
     }
 

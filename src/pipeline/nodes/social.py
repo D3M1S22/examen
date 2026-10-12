@@ -24,14 +24,26 @@ logger = logging.getLogger("examen.pipeline.social")
 SOCIAL_SYSTEM_PROMPT = """You are the Social Recall Extractor for the EXAMEN ambient wearable AI engine.
 Your role is to analyze a transcribed audio snippet and extract details regarding personal or professional encounters:
 1. Person Name: Full name or first name of the person encountered or introduced.
-2. Company or Role: Job title, affiliation, or professional context (e.g. "Cloud Architect at AWS", "Tech Lead at Acme").
+2. Company or Role: Job title, organization, or affiliation ONLY (e.g. "Cloud Architect at AWS", "Tech Lead at Acme", "42").
+   - Strip conversational prepositions ("della 42" -> "42", "presso Acme" -> "Acme").
+   - Do NOT include conversational clauses or personal commentary (e.g. "della 42, ultimamente mi occupo di AI" -> company_or_role must be strictly "42").
+   - Extract mentioned technologies, topics, or fields (e.g. "AI", "Machine Learning") into Key Topics, NOT into Company or Role.
 3. Contact Info: Email, phone, or handle if explicitly shared.
-4. Commitments: Explicit bilateral promises or obligations agreed upon. For each commitment:
+4. Website URL: Detect any spoken or verbalized website, portfolio, or personal page URL and normalize it into a canonical HTTPS URL.
+   Transcriptions come from natural speech, so URLs will appear as spoken phrases, NOT formatted links.
+   Examples of spoken URL patterns and their canonical forms:
+     * "il mio sito è mariorossi punto dev" -> "https://mariorossi.dev"
+     * "puoi vedere i miei lavori su lucabianchi punto it" -> "https://lucabianchi.it"
+     * "my portfolio is at alexsmith dot io" -> "https://alexsmith.io"
+     * "vai su github punto com slash dev-alex" -> "https://github.com/dev-alex"
+     * "trovi tutto su w w w punto example punto com" -> "https://www.example.com"
+   If a website is detected, store the normalized URL in website_url.
+5. Commitments: Explicit bilateral promises or obligations agreed upon. For each commitment:
    - debtor: 'user' if the user promised the contact ('user'), OR 'contact' if the contact promised the user ('contact').
    - description: Concrete action or deliverable promised.
    - due_date_raw: The relative or absolute time constraint mentioned (e.g. 'tomorrow at 10 AM', 'by Friday') or null.
    - status: 'open'.
-5. Key Topics: Salient technical or business topics discussed (e.g. ["AgentCore", "Kubernetes", "Hackathon"]).
+6. Key Topics: Salient technical or business topics discussed (e.g. ["AgentCore", "Kubernetes", "AI", "Machine Learning"]).
 
 RULES:
 - Do NOT hallucinate names or commitments not grounded in the text.
@@ -40,9 +52,76 @@ RULES:
 """
 
 
+def sanitize_company_or_role(raw_role: Optional[str]) -> Optional[str]:
+    """Strips conversational prepositions and trailing discursive clauses from role strings.
+
+    Examples:
+        'della 42, ultimamente mi sto occupando di Ai e Machine Learning' -> '42'
+        'at AWS' -> 'AWS'
+        'presso Google' -> 'Google'
+        'Cloud Architect at Cyberdyne' -> 'Cloud Architect at Cyberdyne'
+    """
+    if not raw_role or not isinstance(raw_role, str):
+        return None
+    role = raw_role.strip()
+    if not role:
+        return None
+
+    # Cut off at conversational clauses or secondary commentary
+    role = re.split(
+        r",?\s*(?:ultimamente|attualmente|attivo su|occupando di|mi occupo|lavoro su|working on|dealing with|specializing in|focusing on)",
+        role,
+        flags=re.IGNORECASE,
+    )[0].strip()
+
+    # Strip leading prepositions: "della 42" -> "42", "presso Google" -> "Google", "di Acme" -> "Acme", "at AWS" -> "AWS"
+    role = re.sub(
+        r"^(?:della|dello|del|dei|degli|di|da|presso|at|from)\s+",
+        "",
+        role,
+        flags=re.IGNORECASE,
+    ).strip()
+
+    # Clean trailing punctuation
+    role = role.strip(" ,.-:;")
+    return role if len(role) >= 2 else None
+
+
 def _get_social_extractor():
     """Initializes model with structured output for social entity extraction."""
     return get_fast_model().with_structured_output(SocialEntity)
+
+
+def extract_verbalized_urls(text: str) -> Optional[str]:
+    """Heuristic spoken URL normalizer for offline/mock modes.
+
+    Converts verbalized URL patterns from speech transcription into
+    canonical HTTPS URLs.
+
+    Examples:
+        'mariorossi punto dev' -> 'https://mariorossi.dev'
+        'github dot com slash alex' -> 'https://github.com/alex'
+        'w w w punto example punto it' -> 'https://www.example.it'
+    """
+    t = text.lower()
+    # Normalize spoken URL delimiters
+    t = re.sub(r'\bw\s+w\s+w\b', 'www', t)
+    t = re.sub(r'\s+punto\s+', '.', t)
+    t = re.sub(r'\s+dot\s+', '.', t)
+    t = re.sub(r'\s+slash\s+', '/', t)
+    t = re.sub(r'\s+trattino\s+', '-', t)
+    t = re.sub(r'\s+dash\s+', '-', t)
+    # Try to find a domain-like pattern
+    m = re.search(
+        r'(?:https?://)?(?:www\.)?([a-zA-Z0-9][a-zA-Z0-9_\-]*\.(?:com|it|io|dev|org|net|ai|me|eu|co|tech)(?:/[^\s,;!?]*)?)',
+        t
+    )
+    if m:
+        url = m.group(0).strip().rstrip('.')
+        if not url.startswith('http'):
+            url = f'https://{url}'
+        return url
+    return None
 
 
 def _heuristic_extract_social(
@@ -66,9 +145,9 @@ def _heuristic_extract_social(
     # e.g. "Nice to meet you, my name is Sarah Connor from Cyberdyne Systems."
     # e.g. "Piacere, sono Marco Bianchi, CTO di Acme."
     name_patterns = [
-        r"(?:i am|i['’]m|my name is|this is|sono|mi chiamo)\s+(?:(?:dr\.|prof\.|mr\.|ms\.|mrs\.)\s+)?([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)",
-        r"(?:nice to meet you|pleased to meet you|great to meet you|piacere di conoscerti|piacere),?\s+(?:(?:dr\.|prof\.|mr\.|ms\.|mrs\.)\s+)?([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)",
-        r"(?:meet|with|incontrato)\s+(?!you\b|me\b|us\b|them\b|him\b|her\b)(?:(?:dr\.|prof\.|mr\.|ms\.|mrs\.)\s+)?([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)",
+        r"(?:i am|i['’]m|my name is|this is|sono|mi chiamo)\s+(?:(?:dr\.|prof\.|mr\.|ms\.|mrs\.)\s+)?([A-Z][a-z]+(?:\s+(?:de|di|del|della|van|von)\s+[A-Z][a-z]+|\s+[A-Z][a-z]+)?)",
+        r"(?:nice to meet you|pleased to meet you|great to meet you|piacere di conoscerti|piacere),?\s+(?:(?:dr\.|prof\.|mr\.|ms\.|mrs\.)\s+)?([A-Z][a-z]+(?:\s+(?:de|di|del|della|van|von)\s+[A-Z][a-z]+|\s+[A-Z][a-z]+)?)",
+        r"(?:meet|with|incontrato)\s+(?!you\b|me\b|us\b|them\b|him\b|her\b)(?:(?:dr\.|prof\.|mr\.|ms\.|mrs\.)\s+)?([A-Z][a-z]+(?:\s+(?:de|di|del|della|van|von)\s+[A-Z][a-z]+|\s+[A-Z][a-z]+)?)",
     ]
 
     person_name = None
@@ -96,17 +175,19 @@ def _heuristic_extract_social(
     if m_role:
         company_or_role = m_role.group(1).strip()
     else:
-        m_co = re.search(r"(?:at|di|presso|from)\s+([A-Z][A-Za-z0-9_\-\.]+)", text)
+        m_co = re.search(r"(?:at|di|presso|from|della|del)\s+([A-Za-z0-9_\-\.]+)", text, re.IGNORECASE)
         if m_co:
-            company_or_role = f"at {m_co.group(1)}"
+            company_or_role = m_co.group(1).strip()
         elif historical_context:
             m_hist_role = re.search(r"(?:,\s*|\s+)(?:a\s+|an\s+)?([A-Za-z\s]+(?:Architect|Lead|Engineer|Director|Manager|CTO|CEO|Founder|Researcher)\s*(?:at|di|in)?\s*[A-Za-z0-9_\-\.]*)", historical_context, re.IGNORECASE)
             if m_hist_role:
                 company_or_role = m_hist_role.group(1).strip()
             else:
-                m_hist_co = re.search(r"(?:at|di|presso|from)\s+([A-Z][A-Za-z0-9_\-\.]+)", historical_context)
+                m_hist_co = re.search(r"(?:at|di|presso|from|della|del)\s+([A-Za-z0-9_\-\.]+)", historical_context, re.IGNORECASE)
                 if m_hist_co:
-                    company_or_role = f"at {m_hist_co.group(1)}"
+                    company_or_role = m_hist_co.group(1).strip()
+
+    company_or_role = sanitize_company_or_role(company_or_role)
 
     # Extract bilateral commitments
     commitments: List[SocialCommitment] = []
@@ -158,7 +239,8 @@ def _heuristic_extract_social(
     topics: List[str] = []
     tech_keywords = [
         "Bedrock", "AgentCore", "LangGraph", "DynamoDB", "AWS", "Docker", "Kubernetes",
-        "Python", "Alexa", "MCP", "AI", "Agent", "Architecture", "Microservices"
+        "Python", "Alexa", "MCP", "AI", "Agent", "Architecture", "Microservices",
+        "Machine Learning", "Deep Learning", "Data Science", "Cloud", "Raft", "Distributed Systems"
     ]
     for kw in tech_keywords:
         if re.search(rf"\b{re.escape(kw)}\b", text, re.IGNORECASE):
@@ -170,10 +252,16 @@ def _heuristic_extract_social(
     if m_email:
         contact_info = m_email.group(0)
 
+    # Extract spoken website URL (heuristic fallback for mock/offline mode)
+    spoken_url = extract_verbalized_urls(text)
+    if not spoken_url and historical_context:
+        spoken_url = extract_verbalized_urls(historical_context)
+
     return SocialEntity(
         person_name=person_name,
         company_or_role=company_or_role,
         contact_info=contact_info,
+        website_url=spoken_url,
         commitments=commitments,
         key_topics=topics,
         timestamp=datetime.now().isoformat()
@@ -187,12 +275,34 @@ def _deduplicate_and_merge(extracted: SocialEntity) -> SocialEntity:
         existing = store.search_social_contact(extracted.person_name)
         if existing:
             primary = existing[0]
+
+            # Homonym check: if both have explicit but conflicting organizations, do not merge!
+            if primary.company_or_role and extracted.company_or_role:
+                p_words = set(re.findall(r"\w+", primary.company_or_role.lower()))
+                e_words = set(re.findall(r"\w+", extracted.company_or_role.lower()))
+                stopwords = {
+                    "presso", "from", "with", "lead", "engineer", "officer", "manager",
+                    "director", "specialist", "head", "dell", "della", "chief", "senior", "junior"
+                }
+                p_meaningful = {w for w in p_words if len(w) > 2 and w not in stopwords}
+                e_meaningful = {w for w in e_words if len(w) > 2 and w not in stopwords}
+                if p_meaningful and e_meaningful and not (p_meaningful & e_meaningful):
+                    logger.info(
+                        f"Detected homonym for '{extracted.person_name}': existing '{primary.company_or_role}' "
+                        f"vs new '{extracted.company_or_role}'. Storing as distinct contact."
+                    )
+                    return extracted
+
             # Merge ID
             extracted.id = primary.id
             if not extracted.company_or_role and primary.company_or_role:
                 extracted.company_or_role = primary.company_or_role
             if not extracted.contact_info and primary.contact_info:
                 extracted.contact_info = primary.contact_info
+
+            # Merge website_url: conversational URL has absolute priority
+            if not extracted.website_url and primary.website_url:
+                extracted.website_url = primary.website_url
 
             # Merge commitments
             merged_commitments = list(primary.commitments)
@@ -214,9 +324,11 @@ def _deduplicate_and_merge(extracted: SocialEntity) -> SocialEntity:
                     merged_topics.append(t)
             extracted.key_topics = merged_topics
 
-            # Merge web profile
+            # Merge web profile, propagating conversational website if available
             if not extracted.web_profile and primary.web_profile:
                 extracted.web_profile = primary.web_profile
+            if extracted.web_profile and extracted.website_url and not extracted.web_profile.website_url:
+                extracted.web_profile.website_url = extracted.website_url
 
             logger.info(f"Merged social entity with existing contact '{primary.person_name}' (ID: {primary.id})")
     except Exception as e:
@@ -287,6 +399,7 @@ def node_extract_social(state: ExamenState) -> Dict[str, Any]:
         result: Optional[SocialEntity] = extractor.invoke(messages)
 
         if result and result.person_name and result.person_name.strip().lower() not in ("unknown", "none", "n/a", "null", ""):
+            result.company_or_role = sanitize_company_or_role(result.company_or_role)
             if not result.timestamp:
                 result.timestamp = datetime.now().isoformat()
 

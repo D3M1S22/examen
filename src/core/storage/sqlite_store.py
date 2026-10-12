@@ -123,6 +123,10 @@ class SQLiteContextStore(AbstractContextStore):
                 cursor.execute("ALTER TABLE social_contacts ADD COLUMN session_id TEXT;")
             except Exception:
                 pass
+            try:
+                cursor.execute("ALTER TABLE social_contacts ADD COLUMN website_url TEXT;")
+            except Exception:
+                pass
 
             # 2b. Social Commitments Table (Bilateral Promises - Milestone 1.3)
             cursor.execute("""
@@ -563,26 +567,37 @@ class SQLiteContextStore(AbstractContextStore):
         commitments_str = json.dumps(commitments_payload, ensure_ascii=False)
         topics_str = json.dumps(contact.key_topics, ensure_ascii=False)
 
-        # Preserve existing web_profile_json if not provided in incoming contact
+        # Preserve existing web_profile_json and website_url if not provided in incoming contact
         web_profile_str = None
-        if contact.web_profile:
-            web_profile_str = contact.web_profile.model_dump_json()
-        else:
-            with self._get_connection() as conn:
-                cursor = conn.cursor()
-                existing_row = cursor.execute(
-                    "SELECT web_profile_json FROM social_contacts WHERE id = ? OR LOWER(person_name) = LOWER(?)",
-                    (rec_id, contact.person_name),
-                ).fetchone()
-                if existing_row and "web_profile_json" in existing_row.keys() and existing_row["web_profile_json"]:
+        website_url_val = getattr(contact, "website_url", None) or (
+            getattr(contact.web_profile, "website_url", None) if getattr(contact, "web_profile", None) else None
+        )
+        
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            existing_row = cursor.execute(
+                "SELECT web_profile_json, website_url FROM social_contacts WHERE id = ? OR LOWER(person_name) = LOWER(?)",
+                (rec_id, contact.person_name),
+            ).fetchone()
+            if existing_row:
+                if not getattr(contact, "web_profile", None) and "web_profile_json" in existing_row.keys() and existing_row["web_profile_json"]:
                     web_profile_str = existing_row["web_profile_json"]
+                elif getattr(contact, "web_profile", None):
+                    web_profile_str = contact.web_profile.model_dump_json()
+                if not website_url_val and "website_url" in existing_row.keys() and existing_row["website_url"]:
+                    website_url_val = existing_row["website_url"]
+            elif getattr(contact, "web_profile", None):
+                web_profile_str = contact.web_profile.model_dump_json()
+
+        if website_url_val and hasattr(contact, "website_url"):
+            contact.website_url = website_url_val
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT OR REPLACE INTO social_contacts
-                (id, person_name, company_or_role, contact_info, commitments_json, key_topics_json, timestamp, web_profile_json, location_encountered, session_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (id, person_name, company_or_role, contact_info, commitments_json, key_topics_json, timestamp, web_profile_json, location_encountered, session_id, website_url)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 rec_id,
                 contact.person_name,
@@ -594,6 +609,7 @@ class SQLiteContextStore(AbstractContextStore):
                 web_profile_str,
                 contact.location_encountered,
                 contact.session_id,
+                website_url_val,
             ))
             if self._has_fts:
                 cursor.execute("""
@@ -631,11 +647,16 @@ class SQLiteContextStore(AbstractContextStore):
                     pass
             loc_enc = row["location_encountered"] if ("location_encountered" in row.keys() and row["location_encountered"]) else None
             session_id = row["session_id"] if ("session_id" in row.keys() and row["session_id"]) else None
+            website_url = row["website_url"] if ("website_url" in row.keys() and row["website_url"]) else None
+            if not website_url and web_profile and web_profile.website_url:
+                website_url = web_profile.website_url
+
             return SocialEntity(
                 id=row["id"],
                 person_name=row["person_name"],
                 company_or_role=row["company_or_role"],
                 contact_info=row["contact_info"],
+                website_url=website_url,
                 commitments=commitments,
                 key_topics=topics,
                 web_profile=web_profile,
@@ -651,14 +672,30 @@ class SQLiteContextStore(AbstractContextStore):
         profile_json = profile.model_dump_json()
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(
-                """
-                UPDATE social_contacts
-                SET web_profile_json = ?
-                WHERE id = ? OR LOWER(person_name) = LOWER(?)
-                """,
-                (profile_json, target, target),
-            )
+            is_uuid = bool(re.match(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", target, re.IGNORECASE))
+            if is_uuid:
+                where_clause = "WHERE id = ?"
+            else:
+                where_clause = "WHERE LOWER(person_name) = LOWER(?)"
+
+            if profile.website_url:
+                cursor.execute(
+                    f"""
+                    UPDATE social_contacts
+                    SET web_profile_json = ?, website_url = COALESCE(website_url, ?)
+                    {where_clause}
+                    """,
+                    (profile_json, profile.website_url, target),
+                )
+            else:
+                cursor.execute(
+                    f"""
+                    UPDATE social_contacts
+                    SET web_profile_json = ?
+                    {where_clause}
+                    """,
+                    (profile_json, target),
+                )
             conn.commit()
             return cursor.rowcount > 0
 
@@ -693,12 +730,17 @@ class SQLiteContextStore(AbstractContextStore):
                         pass
                 loc_enc = row["location_encountered"] if ("location_encountered" in row.keys() and row["location_encountered"]) else None
                 session_id = row["session_id"] if ("session_id" in row.keys() and row["session_id"]) else None
+                website_url = row["website_url"] if ("website_url" in row.keys() and row["website_url"]) else None
+                if not website_url and web_profile and web_profile.website_url:
+                    website_url = web_profile.website_url
+
                 results.append(
                     SocialEntity(
                         id=row["id"],
                         person_name=row["person_name"],
                         company_or_role=row["company_or_role"],
                         contact_info=row["contact_info"],
+                        website_url=website_url,
                         commitments=commitments,
                         key_topics=topics,
                         web_profile=web_profile,

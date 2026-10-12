@@ -57,7 +57,7 @@ def execute_query_social_contact(
             "links": {
                 "linkedin": contact.web_profile.linkedin_url if contact.web_profile else None,
                 "github": contact.web_profile.github_url if contact.web_profile else None,
-                "website": contact.web_profile.website_url if contact.web_profile else None,
+                "website": (contact.web_profile.website_url if contact.web_profile else None) or getattr(contact, "website_url", None),
             },
             "key_topics": contact.key_topics,
             "commitments": contact.commitments,
@@ -71,6 +71,7 @@ def execute_query_social_contact(
                 "name": contact.person_name,
                 "company_or_role": contact.company_or_role,
                 "contact_info": contact.contact_info,
+                "website_url": getattr(contact, "website_url", None) or (contact.web_profile.website_url if contact.web_profile else None),
                 "first_met": contact.timestamp,
                 "key_topics": contact.key_topics,
                 "commitments": contact.commitments,
