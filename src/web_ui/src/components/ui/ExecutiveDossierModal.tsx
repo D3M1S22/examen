@@ -45,7 +45,12 @@ export function ExecutiveDossierModal({
   if (!isOpen || !mounted || !contact) return null;
 
   const webProfile = contact.web_profile;
+  const disambiguation = webProfile?.disambiguation_report;
   const rawCommitments = contact.commitments || [];
+
+  const linkedInUrl = webProfile?.linkedin_url || disambiguation?.canonical_linkedin_url;
+  const githubUrl = webProfile?.github_url || disambiguation?.canonical_github_url;
+  const websiteUrl = contact.website_url || webProfile?.website_url;
 
   const handleRunEnrich = async () => {
     if (!onEnrich || isEnriching) return;
@@ -63,6 +68,7 @@ export function ExecutiveDossierModal({
   };
 
   const contactName = contact.name || contact.person_name || "Contact";
+  const matchConfidence = disambiguation?.confidence_score ?? (webProfile ? 0.98 : 0.85);
 
   return createPortal(
     <div
@@ -94,7 +100,10 @@ export function ExecutiveDossierModal({
                 <h2 className="font-serif text-[28px] text-primary leading-tight">
                   {contactName}
                 </h2>
-                <StatusBadge status="verified" label="⚡ 98% MATCH" />
+                <StatusBadge
+                  status="verified"
+                  label={`⚡ ${(matchConfidence * 100).toFixed(0)}% MATCH`}
+                />
               </div>
               <div className="font-sans text-body-md text-amber-200/80 mb-2">
                 {contact.company_or_role || "Professional Contact"}
@@ -120,6 +129,49 @@ export function ExecutiveDossierModal({
 
         {/* Modal Body */}
         <div className="p-6 sm:p-8 space-y-6 max-h-[70vh] overflow-y-auto">
+          {/* Verified External Profiles Bar */}
+          {(linkedInUrl || githubUrl || websiteUrl) && (
+            <div className="flex flex-wrap items-center gap-3 p-3.5 bg-[#0e1014] border border-[#232731] rounded-xl">
+              <span className="font-mono text-[9px] text-secondary tracking-widest uppercase">Verified Profiles:</span>
+              {linkedInUrl && (
+                <a
+                  href={linkedInUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#0077b5]/15 border border-[#0077b5]/40 text-[#70b5f9] font-mono text-[10px] tracking-wider uppercase hover:bg-[#0077b5]/30 transition-colors"
+                >
+                  <span>💼</span>
+                  <span>LinkedIn</span>
+                </a>
+              )}
+              {githubUrl && (
+                <a
+                  href={githubUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#24292e]/60 border border-white/20 text-[#e6edf3] font-mono text-[10px] tracking-wider uppercase hover:bg-white/10 transition-colors"
+                >
+                  <span>🐙</span>
+                  <span>GitHub</span>
+                </a>
+              )}
+              {websiteUrl && (
+                <a
+                  href={websiteUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-emerald-500/15 border border-emerald-500/40 text-emerald-300 font-mono text-[10px] tracking-wider uppercase hover:bg-emerald-500/30 transition-colors"
+                >
+                  <span>🌐</span>
+                  <span>Website</span>
+                  {contact.website_url && !webProfile?.website_url && (
+                    <span className="text-[7px] bg-emerald-400/20 px-1 rounded text-emerald-200">VOICE</span>
+                  )}
+                </a>
+              )}
+            </div>
+          )}
+
           {/* Executive Bio / Web Profile */}
           <div>
             <div className="font-mono text-[9px] text-secondary tracking-widest uppercase mb-2 flex items-center justify-between">
@@ -138,6 +190,67 @@ export function ExecutiveDossierModal({
               )}
             </div>
           </div>
+
+          {/* Disambiguation & Source Integrity Audit Drawer */}
+          {disambiguation && (
+            <div className="bg-[#101217] border border-amber-500/30 rounded-xl p-5 space-y-4">
+              <div className="flex items-center justify-between border-b border-white/5 pb-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-amber-400 text-base">🛡️</span>
+                  <span className="font-mono text-[10px] text-amber-300 tracking-widest uppercase font-bold">
+                    Source Disambiguation & Anti-Contamination Audit
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="font-mono text-[9px] text-secondary">CERTAINTY:</span>
+                  <span className="font-mono text-xs font-bold text-amber-400">
+                    {(disambiguation.confidence_score * 100).toFixed(0)}%
+                  </span>
+                </div>
+              </div>
+
+              {/* Deduplication Rationale */}
+              {disambiguation.rationale && (
+                <div>
+                  <div className="font-mono text-[8px] text-secondary tracking-widest uppercase mb-1">Deduplication Rationale</div>
+                  <p className="font-sans text-xs text-secondary italic leading-relaxed">
+                    "{disambiguation.rationale}"
+                  </p>
+                </div>
+              )}
+
+              {/* Corroborated Facts */}
+              {disambiguation.clean_combined_facts && disambiguation.clean_combined_facts.length > 0 && (
+                <div>
+                  <div className="font-mono text-[8px] text-secondary tracking-widest uppercase mb-1.5">Corroborated Facts</div>
+                  <ul className="space-y-1">
+                    {disambiguation.clean_combined_facts.map((fact, i) => (
+                      <li key={i} className="font-sans text-xs text-emerald-300 flex items-start gap-2">
+                        <span className="text-emerald-400 mt-0.5">✓</span>
+                        <span>{fact}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {/* Source Diagnostics Pill Row */}
+              <div className="flex items-center gap-4 pt-2 font-mono text-[8px]">
+                <div className="flex items-center gap-1.5 text-emerald-400">
+                  <span>Verified Sources:</span>
+                  <span className="px-1.5 py-0.5 rounded bg-emerald-950 border border-emerald-500/40 font-bold">
+                    {disambiguation.verified_source_indices?.length || 0}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1.5 text-rose-400">
+                  <span>Rejected Noise/Homonyms:</span>
+                  <span className="px-1.5 py-0.5 rounded bg-rose-950 border border-rose-500/40 font-bold">
+                    {disambiguation.rejected_source_indices?.length || 0}
+                  </span>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Social Links & Affiliations */}
           {webProfile && (

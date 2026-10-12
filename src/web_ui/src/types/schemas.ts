@@ -46,16 +46,44 @@ export interface SocialCommitment {
   fulfilled_at?: string;
 }
 
+export type SourceType = "direct_profile" | "single_aggregator" | "multi_directory" | "irrelevant";
+
+export interface EvaluatedSource {
+  index: number;
+  source_type: SourceType;
+  is_target_individual: boolean;
+  is_redundant_of_index?: number | null;
+  usable_facts_extracted: string[];
+  reason: string;
+}
+
+export interface DisambiguationResult {
+  primary_direct_profile_index?: number | null;
+  canonical_linkedin_url?: string | null;
+  canonical_github_url?: string | null;
+  verified_source_indices: number[];
+  rejected_source_indices: number[];
+  clean_combined_facts: string[];
+  confidence_score: number;
+  rationale: string;
+}
+
 export interface SocialWebProfile {
-  executive_summary: string;
-  linkedin_url?: string;
-  github_url?: string;
-  current_role?: string;
+  headline?: string;
   organization?: string;
-  notable_work: string[];
-  shared_interests: string[];
-  enrichment_source: string;
+  current_role?: string;
+  bio_summary?: string;
+  executive_summary?: string;
+  areas_of_expertise?: string[];
+  notable_work?: string[];
+  shared_interests?: string[];
+  linkedin_url?: string | null;
+  github_url?: string | null;
+  website_url?: string | null;
+  confidence_score?: number;
+  enrichment_source?: string;
   enriched_at: string;
+  disambiguation_report?: DisambiguationResult | null;
 }
 
 export interface SocialEntity {
@@ -64,6 +92,7 @@ export interface SocialEntity {
   person_name?: string;
   company_or_role?: string;
   contact_info?: string;
+  website_url?: string | null;
   first_met?: string;
   key_topics: string[];
   commitments: (SocialCommitment | string)[];

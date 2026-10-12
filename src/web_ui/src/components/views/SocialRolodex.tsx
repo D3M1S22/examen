@@ -31,6 +31,17 @@ export function SocialRolodex({
 
   const needsActionCount = contacts.filter((c) => c.commitments && c.commitments.length > 0).length;
   const enrichedCount = contacts.filter((c) => !!c.web_profile).length;
+  const verifiedLinksCount = contacts.filter(
+    (c) =>
+      !!(
+        c.website_url ||
+        c.web_profile?.linkedin_url ||
+        c.web_profile?.github_url ||
+        c.web_profile?.website_url ||
+        c.web_profile?.disambiguation_report?.canonical_linkedin_url ||
+        c.web_profile?.disambiguation_report?.canonical_github_url
+      )
+  ).length;
   const todayDateStr = new Date().toISOString().split("T")[0];
 
   const filteredContacts = contacts.filter((c) => {
@@ -39,6 +50,15 @@ export function SocialRolodex({
       matchesFilter = !!(c.commitments && c.commitments.length > 0);
     } else if (activeFilter === "ENRICHED") {
       matchesFilter = !!c.web_profile;
+    } else if (activeFilter === "VERIFIED_LINKS") {
+      matchesFilter = !!(
+        c.website_url ||
+        c.web_profile?.linkedin_url ||
+        c.web_profile?.github_url ||
+        c.web_profile?.website_url ||
+        c.web_profile?.disambiguation_report?.canonical_linkedin_url ||
+        c.web_profile?.disambiguation_report?.canonical_github_url
+      );
     } else if (activeFilter === "TODAY") {
       matchesFilter = !!(c.timestamp && c.timestamp.includes(todayDateStr));
     }
@@ -206,6 +226,17 @@ export function SocialRolodex({
             <span>AI ENRICHED ({enrichedCount})</span>
           </button>
           <button
+            onClick={() => setActiveFilter("VERIFIED_LINKS")}
+            className={`px-4 py-2 rounded-full font-mono text-[10px] font-bold tracking-widest transition-colors flex items-center gap-1.5 ${
+              activeFilter === "VERIFIED_LINKS"
+                ? "bg-purple-500 text-black shadow"
+                : "text-purple-400/80 bg-purple-950/20 border border-purple-500/20 hover:bg-purple-950/40"
+            }`}
+          >
+            <span>🌐</span>
+            <span>VERIFIED WEB ({verifiedLinksCount})</span>
+          </button>
+          <button
             onClick={() => setActiveFilter("TODAY")}
             className={`px-4 py-2 rounded-full font-mono text-[10px] font-bold tracking-widest transition-colors flex items-center gap-1.5 ${
               activeFilter === "TODAY"
@@ -279,6 +310,66 @@ export function SocialRolodex({
                           <span>📅</span> {contact.timestamp ? contact.timestamp.split("T")[0] : "Recent"}
                         </span>
                       </div>
+
+                      {/* Verified Web Intelligence & Links Pill Tray */}
+                      {Boolean(
+                        contact.web_profile?.linkedin_url ||
+                        contact.web_profile?.github_url ||
+                        contact.website_url ||
+                        contact.web_profile?.website_url ||
+                        contact.web_profile?.disambiguation_report
+                      ) && (
+                        <div className="flex flex-wrap items-center gap-2 mt-3 pt-2 border-t border-white/5">
+                          {(contact.web_profile?.linkedin_url || contact.web_profile?.disambiguation_report?.canonical_linkedin_url) && (
+                            <a
+                              href={contact.web_profile?.linkedin_url || contact.web_profile?.disambiguation_report?.canonical_linkedin_url || "#"}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#0077b5]/15 border border-[#0077b5]/40 text-[#70b5f9] font-mono text-[9px] tracking-wider uppercase hover:bg-[#0077b5]/30 transition-colors"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <span>💼</span>
+                              <span>LinkedIn</span>
+                            </a>
+                          )}
+
+                          {(contact.web_profile?.github_url || contact.web_profile?.disambiguation_report?.canonical_github_url) && (
+                            <a
+                              href={contact.web_profile?.github_url || contact.web_profile?.disambiguation_report?.canonical_github_url || "#"}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#24292e]/60 border border-white/20 text-[#e6edf3] font-mono text-[9px] tracking-wider uppercase hover:bg-white/10 transition-colors"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <span>🐙</span>
+                              <span>GitHub</span>
+                            </a>
+                          )}
+
+                          {(contact.website_url || contact.web_profile?.website_url) && (
+                            <a
+                              href={contact.website_url || contact.web_profile?.website_url || "#"}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-emerald-500/15 border border-emerald-500/40 text-emerald-300 font-mono text-[9px] tracking-wider uppercase hover:bg-emerald-500/30 transition-colors"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <span>🌐</span>
+                              <span>Website</span>
+                              {contact.website_url && !contact.web_profile?.website_url && (
+                                <span className="text-[7px] bg-emerald-400/20 px-1 rounded text-emerald-200">VOICE</span>
+                              )}
+                            </a>
+                          )}
+
+                          {contact.web_profile?.disambiguation_report && (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-500/10 border border-amber-500/30 font-mono text-[8px] text-amber-300">
+                              <span>🛡️</span>
+                              <span>{(contact.web_profile.disambiguation_report.confidence_score * 100).toFixed(0)}% Disambiguated</span>
+                            </span>
+                          )}
+                        </div>
+                      )}
                     </div>
                   </div>
 
