@@ -30,11 +30,12 @@ logger = logging.getLogger("examen.pipeline.topic_research")
 TOPIC_EXTRACTOR_SYSTEM_PROMPT = """You are the Technical Topic Extractor for the EXAMEN wearable AI engine.
 Your role is to analyze a transcribed audio snippet discussing engineering issues, libraries, system design, bugs, or academic lectures.
 Extract:
-1. topic_title: A concise title of the core technical topic, bug, library, or methodology.
+1. topic_title: A concise title of the core technical topic, bug, library, or methodology (e.g. "Raft Consensus Algorithm", "Bedrock AgentCore Timeout").
 2. context_type: One of "bug", "feature_discussion", "tech_stack", "academic_lecture", "system_incident", "general_meeting".
 3. search_queries: 1 to 2 high-precision, focused web search queries to retrieve documentation, code patterns, or solutions.
-   * Strip conversational words (e.g. do not include "how to", "please find", "what is").
-   * Focus on distinctive library names, error messages, or architectural keywords.
+   * STRICT CONSTRAINT: Never generate conversational sentences, questions, or transcript chunks as search queries.
+   * Format queries as 2 to 5 targeted technical keywords (e.g. "Raft consensus leader election", "Bedrock AgentCore 504 gateway timeout").
+   * Strip all discursive filler words (e.g. do not include "how to", "please find", "what is", "abbiamo parlato di", "spiegazione").
 4. key_questions: 2 to 3 core questions or technical aspects to resolve in the final dossier.
 """
 
@@ -105,7 +106,10 @@ def _heuristic_extract_topic(transcript: str) -> TopicExtraction:
     tech_keywords = [
         "Bedrock AgentCore", "LangGraph StateGraph", "LangGraph", "AWS Bedrock",
         "FastMCP", "DuckDuckGo Search", "DynamoDB", "SQLite FTS5", "Bee Wearable AI",
-        "Docker", "Kubernetes", "OpenTelemetry"
+        "Docker", "Kubernetes", "OpenTelemetry", "Raft Consensus", "Raft Algorithm",
+        "Raft", "Distributed Consensus", "Machine Learning", "Deep Learning",
+        "Artificial Intelligence", "PostgreSQL", "Redis", "Kafka", "RabbitMQ",
+        "Microservices", "REST API", "GraphQL"
     ]
     topic_title = None
     for kw in tech_keywords:
@@ -114,8 +118,23 @@ def _heuristic_extract_topic(transcript: str) -> TopicExtraction:
             break
 
     if not topic_title:
-        # Fallback to first 4-5 words as title
-        topic_title = " ".join(words[:4]).title() if len(words) >= 4 else "Technical Discussion"
+        # Filter out common conversational stopwords in Italian and English
+        stopwords = {
+            "oggi", "a", "lezione", "abbiamo", "parlato", "spiegato", "visto", "con",
+            "il", "la", "i", "gli", "le", "un", "una", "uno", "per", "di", "da", "in",
+            "su", "nel", "nella", "dei", "del", "della", "stiamo", "avendo", "problemi",
+            "today", "in", "class", "we", "discussed", "talked", "about", "covered",
+            "having", "issues", "with", "the", "a", "an", "is", "are", "was", "were",
+        }
+        content_words = [
+            w.strip(".,;:?!'\"")
+            for w in words
+            if w.lower().strip(".,;:?!'\"") not in stopwords and len(w.strip(".,;:?!'\"")) > 2
+        ]
+        if content_words:
+            topic_title = " ".join(content_words[:3]).title()
+        else:
+            topic_title = "Technical Discussion"
 
     # Formulate 1-2 search queries
     search_queries = [f"{topic_title} documentation best practices"]

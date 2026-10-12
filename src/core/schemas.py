@@ -1,8 +1,9 @@
+from enum import Enum
 import re
 import uuid
 from datetime import datetime
 from typing import Annotated, Any, List, Literal, Optional, Union
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from typing_extensions import TypedDict
 
 
@@ -150,6 +151,85 @@ class SocialCommitment(BaseModel):
         return item in self.description
 
 
+class SourceType(str, Enum):
+    DIRECT_PROFILE = "direct_profile"
+    SINGLE_ENTITY_AGGREGATOR = "single_aggregator"
+    MULTI_ENTITY_DIRECTORY = "multi_directory"
+    IRRELEVANT = "irrelevant"
+
+
+class EvaluatedSource(BaseModel):
+    """Evaluation of an individual candidate web search snippet/URL."""
+    index: int
+    source_type: SourceType = Field(default=SourceType.IRRELEVANT)
+    is_target_individual: bool = Field(default=False)
+    is_redundant_of_index: Optional[int] = Field(
+        default=None,
+        description="Index of direct profile that makes this aggregator redundant."
+    )
+    usable_facts_extracted: List[str] = Field(
+        default_factory=list,
+        description="Verified facts extracted strictly from this source."
+    )
+    reason: str = Field(default="", description="Reason for matching, redundancy, or rejection.")
+
+
+class DisambiguationResult(BaseModel):
+    """Structured report produced by LLM source evaluator & deduplicator."""
+    primary_direct_profile_index: Optional[int] = Field(
+        default=None,
+        description="Index of primary direct profile if found."
+    )
+    canonical_linkedin_url: Optional[str] = Field(
+        default=None,
+        description="Canonical verified LinkedIn profile URL."
+    )
+    canonical_github_url: Optional[str] = Field(
+        default=None,
+        description="Canonical verified GitHub profile URL."
+    )
+    verified_source_indices: List[int] = Field(
+        default_factory=list,
+        description="Indices of verified, non-redundant sources for target individual."
+    )
+    rejected_source_indices: List[int] = Field(
+        default_factory=list,
+        description="Indices of rejected homonyms, redundant directories, or noise."
+    )
+    clean_combined_facts: List[str] = Field(
+        default_factory=list,
+        description="Consolidated list of isolated facts belonging strictly to target."
+    )
+    confidence_score: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+        description="Confidence score of disambiguation (0.0 to 1.0)."
+    )
+    rationale: str = Field(
+        default="",
+        description="Explanation of entity clustering and source evaluation."
+    )
+
+    @field_validator("primary_direct_profile_index", mode="before")
+    @classmethod
+    def coerce_empty_to_none(cls, v):
+        """Prevent Pydantic crash when LLM returns [], '', 'none', or 'null' instead of null."""
+        if v is None:
+            return None
+        if isinstance(v, list):
+            if len(v) == 1 and isinstance(v[0], int):
+                return v[0]
+            return None
+        if isinstance(v, str):
+            stripped = v.strip().lower()
+            if stripped in ("", "none", "null", "[]"):
+                return None
+            if stripped.isdigit():
+                return int(stripped)
+        return v
+
+
 class SocialWebProfile(BaseModel):
     headline: Optional[str] = Field(default=None, description="e.g. 'VP of Infrastructure at CloudScale | ex-AWS'")
     organization: Optional[str] = Field(default=None, description="Current company, lab, or institution.")
@@ -167,6 +247,10 @@ class SocialWebProfile(BaseModel):
         default_factory=lambda: datetime.now().isoformat(),
         description="ISO timestamp when the web profile was synthesized."
     )
+    disambiguation_report: Optional[DisambiguationResult] = Field(
+        default=None,
+        description="Structured disambiguation and source evaluation audit report."
+    )
 
 
 class SocialEntity(BaseModel):
@@ -174,6 +258,10 @@ class SocialEntity(BaseModel):
     person_name: str = Field(description="Full name of person encountered.")
     company_or_role: Optional[str] = Field(default=None, description="Company, title, or professional context.")
     contact_info: Optional[str] = Field(default=None, description="Email, social handle, phone if mentioned.")
+    website_url: Optional[str] = Field(
+        default=None,
+        description="Personal portfolio, company website, or blog URL explicitly stated in conversation."
+    )
     commitments: List[Union[SocialCommitment, str]] = Field(
         default_factory=list,
         description="Bilateral commitments made to or by the interlocutor (structured SocialCommitment or raw string)."

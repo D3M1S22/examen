@@ -611,6 +611,7 @@ async def api_contacts(request: Request) -> JSONResponse:
             "name": c.person_name,
             "company_or_role": c.company_or_role,
             "contact_info": c.contact_info,
+            "website_url": getattr(c, "website_url", None) or (c.web_profile.website_url if c.web_profile else None),
             "key_topics": c.key_topics,
             "commitments": comms_list,
             "web_profile": c.web_profile.model_dump() if c.web_profile else None,
@@ -657,6 +658,7 @@ async def api_enrich_contact(request: Request) -> JSONResponse:
         "id": contact.id,
         "name": contact.person_name,
         "company_or_role": contact.company_or_role,
+        "website_url": getattr(contact, "website_url", None) or profile.website_url,
         "web_profile": profile.model_dump(),
     }
     broadcast_event("contact_enriched", contact_dict)

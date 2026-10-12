@@ -12,13 +12,19 @@ import json
 import logging
 import re
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from src.core.config import settings
 from src.core.models import get_fast_model, has_active_model_credentials
-from src.core.schemas import SocialEntity, SocialWebProfile
+from src.core.schemas import (
+    DisambiguationResult,
+    EvaluatedSource,
+    SocialEntity,
+    SocialWebProfile,
+    SourceType,
+)
 from src.core.storage import get_storage_store
 from src.core.storage.base import AbstractContextStore
 from src.pipeline.tools.web_search import (
@@ -33,20 +39,75 @@ PROFILER_SYSTEM_PROMPT = """You are an Executive Intelligence Researcher for the
 Your mission is to construct an accurate, authoritative professional web dossier (SocialWebProfile) for an individual
 encountered during professional networking, conferences, or meetings.
 
-Input Context:
+TARGET PERSON CONTEXT (CONVERSATIONAL GROUND TRUTH - TIER 1):
 - Target Name: {person_name}
-- Stated Role / Affiliation: {company_or_role}
-- Salient Topics: {key_topics}
+- Corroborated Affiliation (Tier 1 Organization): {company_or_role}
+- Stated Portfolio / Website: {website_url}
+- Topics Discussed: {key_topics}
+- Original Spoken Encounter: "{transcript}"
 
-Web Research Results:
+Verified Web Research Results:
 {search_snippets}
 
-CRITICAL DISAMBIGUATION & ACCURACY RULES:
-1. Verify that the search results confidently match the individual described in the context (confirm company, title, or technical topics).
-2. If the results are ambiguous or refer to a different person with the same name, return null or an unverified low-confidence profile.
-3. Exclude personal social networks (Instagram, Facebook personal posts, TikTok).
-4. Extract only verified public links (canonical LinkedIn, GitHub, or institutional/corporate websites).
+CRITICAL HIERARCHY & DISAMBIGUATION RULES:
+1. SUPREMACY OF CONVERSATIONAL IDENTITY (TIER 1):
+   - The target's `organization` MUST be {company_or_role} (or its official canonical institutional name).
+   - Under NO CIRCUMSTANCES should a third-party company found in web snippets from homonyms replace {company_or_role}
+     as the person's primary organization or current role!
+   - `current_role` and `headline` must represent the target's identity at {company_or_role} (e.g. "{current_role} at {company_or_role}").
+   - `areas_of_expertise` must reflect the topics discussed or verified technical skills (e.g. Software Development, Open Source),
+     NOT alien corporate domains or unrelated roles from homonyms.
+2. BIO SUMMARY STRUCTURE:
+   - Lead immediately with the conversational identity: e.g. "{person_name} is affiliated with {company_or_role}..."
+   - Incorporate corroborated technical portfolio details (e.g. verified GitHub account, personal portfolio {website_url}).
+   - Never write a biography that portrays the target as an employee at an unmentioned foreign company with their real affiliation as a footnote.
+3. DIRECTORY TEXT BAN: Never include navigational or aggregator boilerplate ("There are X professionals named...", "Vedi il profilo di...", "X collegamenti su LinkedIn").
+4. CONSERVATIVE FALLBACK: If web sources contain contradictions or belong to homonyms, rely strictly on conversational facts.
 5. Bio summary must be a concise, authoritative 2-3 sentence executive synopsis.
+"""
+
+SOURCE_EVALUATION_SYSTEM_PROMPT = """You are an expert entity disambiguation and web intelligence evaluator for EXAMEN.
+Given a spoken encounter context and candidate search results, determine which sources belong to the target individual using a STRICT 3-TIER HIERARCHICAL GROUNDING ARCHITECTURE.
+
+TARGET PERSON CONTEXT:
+- Full Name: {person_name}
+- Expected Organization / Affiliation (TIER 1 Ground Truth): {company_or_role}
+- Stated Portfolio / Website: {website_url}
+- Topics Discussed: {key_topics}
+- Original Spoken Transcript: "{transcript}"
+
+======================================================================
+STRICT 3-TIER GROUNDING & CASCADE SELECTION RULES:
+======================================================================
+
+1. TIER 1: CONVERSATIONAL GROUND TRUTH (AXIOMATIC & SUPREME)
+   - The conversational context ({company_or_role}, {website_url}, {person_name}) is absolute truth.
+   - External web sources must NEVER contradict or displace Tier 1 facts.
+
+2. TIER 2: SINGLE CANONICAL PROFILE & MUTUAL EXCLUSIVITY INVARIANT
+   - Find at most ONE genuine canonical personal LinkedIn profile URL (`canonical_linkedin_url`) with path `/in/<slug>` matching Tier 1.
+   - HARD INVARIANT: An individual human has exactly ONE active personal LinkedIn profile.
+   - If candidate search results contain MULTIPLE different `linkedin.com/in/*` profile URLs (e.g. `/in/mario-rossi-tech` vs `/in/mario-rossi`):
+     THEY ARE MUTUALLY EXCLUSIVE HOMONYMS!
+   - You MUST select the SINGLE best profile matching the Tier 1 organization ({company_or_role}) or handle.
+   - ALL OTHER candidate `linkedin.com/in/*` profile URLs with different slugs MUST BE MARKED `is_target_individual = False` AND REJECTED!
+   - NEVER verify two different LinkedIn personal profile slugs for the same individual under any circumstances.
+   - Extract secondary facts (location, confirmed role, education) ONLY from the single verified canonical profile.
+
+3. TIER 3: EXTENDED SOURCES CASCADE (PORTFOLIOS, GITHUB, AGGREGATORS, DIRECTORIES)
+   Evaluate all remaining candidates against Tier 1 and Tier 2:
+   - CASE A (ACCEPT): Source agrees with BOTH Tier 1 AND Tier 2 (e.g. personal GitHub corroborating {company_or_role} and matching target's handle or location). Mark `is_target_individual = True`.
+   - CASE B (ACCEPT): Source agrees directly with Tier 1 (e.g. personal portfolio matching {website_url} or target's stated role). Mark `is_target_individual = True`.
+   - CASE C (REJECT - INTERMEDIATE CONFLICT): Source agrees with a secondary detail of Tier 2 (e.g. shares city or region), BUT CONFLICTS with Tier 1 by introducing an entirely different active employer or career never mentioned in Tier 1.
+     --> YOU MUST REJECT THIS SOURCE (`is_target_individual = False`). Do NOT allow secondary anchors to pull in alien corporate employers or homonyms!
+   - CASE D (REJECT): Navigational directories (e.g. `linkedin.com/pub/dir/*`) when a direct profile is present are REDUNDANT (`is_target_individual = False`).
+
+4. FACT EXTRACTION INTEGRITY (`clean_combined_facts`):
+   - Extract facts ONLY from verified sources (`is_target_individual = True`).
+   - NEVER extract facts, company names, or roles from rejected homonym profiles.
+
+Candidate Search Results:
+{numbered_candidates}
 """
 
 
@@ -88,28 +149,347 @@ def verify_disambiguation_anchors(
     return has_role or has_topics or has_notes or len(name_tokens) >= 2
 
 
+def _extract_linkedin_slug(url: Optional[str]) -> Optional[str]:
+    """Extract normalized slug from a linkedin.com/in/ URL."""
+    if not url:
+        return None
+    match = re.search(r"linkedin\.com/in/([a-zA-Z0-9_\-\%]+)", url.lower())
+    if match:
+        slug = match.group(1).rstrip("/")
+        slug = re.sub(r"/(?:en|it|es|fr|de)$", "", slug)
+        return slug
+    return None
+
+
+BANNED_SEARCH_DOMAINS = {
+    "instagram.com", "facebook.com", "tiktok.com", "pinterest.com",
+    "threads.net", "snapchat.com",
+}
+
+
+def _is_banned_search_domain(url: str) -> bool:
+    """Check if a URL belongs to a personal social network whose search snippets are noisy/unreliable."""
+    try:
+        from urllib.parse import urlparse
+        host = urlparse(url).hostname or ""
+        host = host.lower().lstrip("www.")
+        return any(host == d or host.endswith("." + d) for d in BANNED_SEARCH_DOMAINS)
+    except Exception:
+        return False
+
+
 def build_profiling_queries(
     name: str,
     company_or_role: Optional[str] = None,
     topics: Optional[List[str]] = None,
+    website_url: Optional[str] = None,
 ) -> List[str]:
-    """Formulate targeted professional web search queries."""
+    """Formulate high-yield, targeted professional web search queries."""
+    from src.pipeline.nodes.social import sanitize_company_or_role
+    from urllib.parse import urlparse
+
     clean_name = name.strip()
+    clean_role = sanitize_company_or_role(company_or_role)
     queries: List[str] = []
 
-    if company_or_role and company_or_role.strip():
-        role = company_or_role.strip()
-        queries.append(f'"{clean_name}" "{role}" linkedin')
-        queries.append(f'"{clean_name}" "{role}" biography')
-    else:
-        queries.append(f'"{clean_name}" professional profile linkedin')
-        queries.append(f'"{clean_name}" biography')
+    # Priority 0: Explicit Website / Handle Query (Laser Precision Anchor)
+    # Extracts stem/handle e.g. 'mariorossi' from 'mariorossi.dev' or 'https://mariorossi.com'
+    if website_url:
+        try:
+            url_to_parse = website_url if "://" in website_url else f"https://{website_url}"
+            netloc = urlparse(url_to_parse).netloc or urlparse(url_to_parse).path
+            host = netloc.split(":")[0].lower().lstrip("www.")
+            stem = re.sub(r"\.(com|it|io|dev|org|net|me|ai|co|app|tech|eu|info|biz)$", "", host).strip()
+            if stem and len(stem) >= 3 and stem not in ("github", "gitlab", "linkedin", "google", "vercel", "netlify", "wordpress"):
+                queries.append(f'"{clean_name}" {stem}')
+        except Exception:
+            pass
 
+    # Priority 1: Direct LinkedIn canonical query (single highest-yield lookup)
+    queries.append(f'"{clean_name}" linkedin')
+
+    # Priority 2: Entity/Role grounded query (clean & unquoted for multi-token roles)
+    if clean_role:
+        role_tokens = clean_role.split()
+        if len(role_tokens) == 1:
+            queries.append(f'"{clean_name}" "{clean_role}" linkedin')
+        else:
+            queries.append(f'"{clean_name}" {clean_role} linkedin')
+
+    # Priority 3: Technical domain grounded query
     if topics and len(topics) > 0:
-        top_topics = " ".join(topics[:2])
-        queries.append(f'"{clean_name}" {top_topics} professional')
+        clean_topics = " ".join(t.strip() for t in topics[:2] if len(t.strip()) > 1)
+        if clean_topics:
+            queries.append(f'"{clean_name}" {clean_topics}')
+
+    # Priority 4: Biography fallback if needed
+    if len(queries) < 3:
+        if clean_role:
+            queries.append(f'"{clean_name}" {clean_role} biography')
+        else:
+            queries.append(f'"{clean_name}" biography')
 
     return queries[:3]
+
+
+def heuristic_disambiguate_sources(
+    entity: SocialEntity,
+    search_items: List[SearchResultItem],
+) -> Tuple[List[SearchResultItem], DisambiguationResult]:
+    """Deterministic source disambiguation for offline/mock modes."""
+    name = entity.person_name.strip().lower()
+    role_info = (entity.company_or_role or "").strip().lower()
+    verified_indices: List[int] = []
+    rejected_indices: List[int] = []
+    canonical_linkedin = None
+    canonical_github = None
+    primary_direct_idx = None
+    extracted_facts: List[str] = []
+
+    # First pass: find direct profiles (exclude directory pages)
+    for idx, item in enumerate(search_items):
+        url = item.url.lower()
+        if "linkedin.com/in/" in url and "pub/dir" not in url and not canonical_linkedin:
+            canonical_linkedin = item.url
+            primary_direct_idx = idx
+        elif "github.com/" in url and not canonical_github:
+            canonical_github = item.url
+
+    canonical_slug = _extract_linkedin_slug(canonical_linkedin)
+
+    # Check if we have organization anchors — include short tokens like "42",
+    # but filter out common preposition and role stopwords to avoid false matches.
+    stopwords = {
+        "presso", "from", "with", "lead", "engineer", "officer", "manager", "dell", "della",
+        "at", "in", "the", "a", "an", "of", "and", "or", "for", "on", "to", "di", "da",
+        "chief", "senior", "junior", "head", "director", "vp", "vice", "president",
+        "founder", "co", "partner", "consultant", "specialist", "executive", "trainer"
+    }
+    org_words = [
+        w for w in re.findall(r"\w+", role_info)
+        if w not in stopwords and len(w) >= 1
+    ]
+
+    # Directory detection patterns
+    _DIRECTORY_PATTERNS = (
+        "pub/dir/", "directory", "profiles | linkedin",
+        "professionals named", "profili |", "persone con",
+    )
+
+    for idx, item in enumerate(search_items):
+        url = item.url.lower()
+        text = f"{item.title} {item.snippet}".lower()
+        is_directory = any(pat in url or pat in text for pat in _DIRECTORY_PATTERNS)
+
+        # Check organization match (Tier 1 anchor match)
+        has_org_match = any(ow in text for ow in org_words) if org_words else False
+
+        # TIER 2: Enforce Single LinkedIn Slug Invariant
+        # If candidate has a different LinkedIn /in/ slug than canonical, it is a homonym!
+        if "linkedin.com/in/" in url and canonical_slug:
+            item_slug = _extract_linkedin_slug(item.url)
+            if item_slug and item_slug != canonical_slug:
+                rejected_indices.append(idx)
+                continue
+
+        if is_directory:
+            if primary_direct_idx is not None:
+                # Directory is redundant when direct profile is present
+                rejected_indices.append(idx)
+                continue
+            elif has_org_match:
+                # Direct profile absent, but directory snippet explicitly mentions target org
+                verified_indices.append(idx)
+                if item.snippet:
+                    extracted_facts.append(re.sub(r"\s+", " ", item.snippet)[:160])
+                continue
+            else:
+                # Directory does not corroborate the target org
+                rejected_indices.append(idx)
+                continue
+
+        if has_org_match or (idx == primary_direct_idx and primary_direct_idx is not None):
+            verified_indices.append(idx)
+            if item.snippet:
+                extracted_facts.append(re.sub(r"\s+", " ", item.snippet)[:160])
+        else:
+            rejected_indices.append(idx)
+
+    # NO fallback to index 0 — if nothing is verified, return empty verified list.
+    verified_items = [search_items[i] for i in verified_indices if i < len(search_items)]
+    result = DisambiguationResult(
+        primary_direct_profile_index=primary_direct_idx,
+        canonical_linkedin_url=canonical_linkedin,
+        canonical_github_url=canonical_github,
+        verified_source_indices=verified_indices,
+        rejected_source_indices=rejected_indices,
+        clean_combined_facts=extracted_facts,
+        confidence_score=0.9 if verified_indices else 0.3,
+        rationale="Heuristic 3-tier scoring with single LinkedIn slug invariant and directory rejection.",
+    )
+    return verified_items, result
+
+
+def evaluate_and_disambiguate_sources(
+    entity: SocialEntity,
+    search_items: List[SearchResultItem],
+    transcript: Optional[str] = None,
+) -> Tuple[List[SearchResultItem], DisambiguationResult]:
+    """Semantic entity disambiguation and source clustering layer (Tier 2 & 3)."""
+    if not search_items:
+        return [], DisambiguationResult()
+
+    if settings.mock_ai or not has_active_model_credentials(settings.gatekeeper_provider):
+        return heuristic_disambiguate_sources(entity, search_items)
+
+    try:
+        numbered_candidates = "\n".join([
+            f"[{i}] Title: {item.title}\nURL: {item.url}\nSnippet: {item.snippet}\n"
+            for i, item in enumerate(search_items)
+        ])
+
+        conversational_url = getattr(entity, "website_url", None) or (
+            getattr(entity.web_profile, "website_url", None) if getattr(entity, "web_profile", None) else None
+        )
+
+        prompt = SOURCE_EVALUATION_SYSTEM_PROMPT.format(
+            person_name=entity.person_name,
+            company_or_role=entity.company_or_role or "Not specified",
+            website_url=conversational_url or "Not specified",
+            key_topics=", ".join(entity.key_topics) if entity.key_topics else "General",
+            transcript=transcript or entity.company_or_role or entity.person_name,
+            numbered_candidates=numbered_candidates,
+        )
+
+        model = get_fast_model()
+        structured_evaluator = model.with_structured_output(DisambiguationResult)
+        res = structured_evaluator.invoke([
+            SystemMessage(content=prompt),
+            HumanMessage(content=f"Evaluate candidate web sources for {entity.person_name}."),
+        ])
+
+        if isinstance(res, DisambiguationResult):
+            # Deterministic Invariant 1: Single Canonical LinkedIn Slug
+            canonical_slug = _extract_linkedin_slug(res.canonical_linkedin_url)
+            sanitized_verified: List[int] = []
+            sanitized_rejected: List[int] = list(res.rejected_source_indices)
+
+            raw_verified = list(res.verified_source_indices)
+            if not raw_verified and res.primary_direct_profile_index is not None:
+                raw_verified = [res.primary_direct_profile_index]
+
+            for idx in raw_verified:
+                if 0 <= idx < len(search_items):
+                    item = search_items[idx]
+                    url_lower = item.url.lower()
+                    if "linkedin.com/in/" in url_lower and canonical_slug:
+                        item_slug = _extract_linkedin_slug(item.url)
+                        if item_slug and item_slug != canonical_slug:
+                            # Contradictory homonym profile! Reject it!
+                            if idx not in sanitized_rejected:
+                                sanitized_rejected.append(idx)
+                            continue
+                    sanitized_verified.append(idx)
+
+            res.verified_source_indices = sanitized_verified
+            res.rejected_source_indices = sanitized_rejected
+
+            verified_items = [
+                search_items[i] for i in res.verified_source_indices
+                if 0 <= i < len(search_items)
+            ]
+            if not verified_items:
+                # If model rejected all, fallback to heuristic rather than returning empty
+                return heuristic_disambiguate_sources(entity, search_items)
+
+            # Deterministic Invariant 2: Purge contaminated facts from rejected candidates
+            if res.clean_combined_facts:
+                clean_facts: List[str] = []
+                forbidden_company_tokens: set[str] = set()
+                conv_tokens = set(re.findall(r"\w+", (entity.company_or_role or "").lower()))
+
+                for rej_idx in res.rejected_source_indices:
+                    if 0 <= rej_idx < len(search_items):
+                        rej_item = search_items[rej_idx]
+                        full_rej_text = f"{rej_item.title} {rej_item.snippet}".lower()
+                        # 1. Extract role & corporate segments from candidate title:
+                        # e.g. "Name - Role / Specialty - Company | LinkedIn"
+                        title_segments = re.split(r"\s+[-–|·]\s+", rej_item.title)
+                        for seg in title_segments[1:]:
+                            clean_seg = seg.strip()
+                            if clean_seg.lower() in ("linkedin", "profilo linkedin", "linkedin italia"):
+                                continue
+                            for t in re.findall(r"\w+", clean_seg.lower()):
+                                if len(t) >= 3 and t not in conv_tokens and t not in {"profile", "profilo", "italia", "italy"}:
+                                    forbidden_company_tokens.add(t)
+
+                        # 2. Extract organizations & corporate entities from snippet text:
+                        rej_org_matches = re.findall(
+                            r"(?:(?:presso|at|work(?:s|ing)?\s+at|esperienza|experience)\s*[:\s]\s*([A-Za-z0-9_\-\.\s]{2,35}))|"
+                            r"(([A-Za-z0-9_\-\.\s]{2,30})\s+(?:s\.p\.a\.?|spa|s\.r\.l\.?|srl|inc\.?|llc|gmbh|ltd\.?|corp\.?|group))|"
+                            r"\b([a-z0-9_\-]+)\s+(?:technologies|pharmaceuticals|pharma|wireless|consulting|industries|solutions|group|logistics)\b",
+                            full_rej_text,
+                            re.IGNORECASE,
+                        )
+                        for m_tuple in rej_org_matches:
+                            for m in m_tuple:
+                                if not m:
+                                    continue
+                                for t in re.findall(r"\w+", m.lower()):
+                                    if len(t) >= 3 and t not in conv_tokens and t not in {"student", "developer", "engineer", "esperienza", "experience"}:
+                                        forbidden_company_tokens.add(t)
+
+                for fact in res.clean_combined_facts:
+                    fact_lower = fact.lower()
+                    if any(tok in fact_lower for tok in forbidden_company_tokens):
+                        continue
+                    if _is_directory_text(fact):
+                        continue
+                    clean_facts.append(fact)
+                res.clean_combined_facts = clean_facts
+
+            return verified_items, res
+
+        return heuristic_disambiguate_sources(entity, search_items)
+
+    except Exception as e:
+        logger.warning(f"Error during LLM source disambiguation for '{entity.person_name}': {e}. Using heuristic fallback.")
+        return heuristic_disambiguate_sources(entity, search_items)
+
+
+# Domains that must NEVER be assigned to website_url
+BANNED_WEBSITE_DOMAINS = {
+    "linkedin.com", "twitter.com", "x.com", "facebook.com",
+    "instagram.com", "youtube.com", "tiktok.com", "pinterest.com",
+    "google.com", "bing.com", "yahoo.com", "duckduckgo.com",
+    "startpage.com", "search.yahoo.com",
+}
+
+# Patterns that indicate directory/aggregator text, NOT biographical content
+_DIRECTORY_BIO_PATTERNS = (
+    "professionals named", "profiles | linkedin", "profili |",
+    "persone con il cognome", "view the profiles of",
+    "collegamenti su linkedin", "connections on linkedin",
+    "vedi il profilo di", "community professionale",
+    "pub/dir/", "there are",
+)
+
+
+def _is_banned_website_domain(url: str) -> bool:
+    """Check if a URL belongs to a social network or search engine that should never be website_url."""
+    try:
+        from urllib.parse import urlparse
+        host = urlparse(url).hostname or ""
+        host = host.lower().lstrip("www.")
+        return any(host == d or host.endswith("." + d) for d in BANNED_WEBSITE_DOMAINS)
+    except Exception:
+        return False
+
+
+def _is_directory_text(text: str) -> bool:
+    """Check if text is navigational/directory boilerplate, not genuine biography."""
+    t = text.lower()
+    return any(pat in t for pat in _DIRECTORY_BIO_PATTERNS)
 
 
 def heuristic_profile_synthesis(
@@ -125,35 +505,45 @@ def heuristic_profile_synthesis(
     org = None
     role = None
     if role_info:
-        org_match = re.search(r"(?:at|di|presso|from)\s+([A-Za-z0-9_\-\.\s]+)", role_info, re.IGNORECASE)
+        org_match = re.search(r"(?:at|di|presso|from|della)\s+([A-Za-z0-9_\-\.\s]+)", role_info, re.IGNORECASE)
         if org_match:
             org = org_match.group(1).strip()
-            role = re.sub(r"(?:at|di|presso|from)\s+.*", "", role_info, flags=re.IGNORECASE).strip() or None
+            role = re.sub(r"(?:at|di|presso|from|della)\s+.*", "", role_info, flags=re.IGNORECASE).strip() or None
         else:
+            org = role_info
             role = role_info
 
     # Inspect search items for real links and snippets if available
     linkedin_url = None
     github_url = None
     website_url = None
-    snippet_texts: List[str] = []
 
     if search_items:
         for item in search_items:
-            snippet_texts.append(item.snippet)
-            if "linkedin.com/in/" in item.url and not linkedin_url:
+            url_lower = item.url.lower()
+            if "linkedin.com/in/" in url_lower and "pub/dir" not in url_lower and not linkedin_url:
                 linkedin_url = item.url
-            elif "github.com/" in item.url and not github_url:
+            elif "github.com/" in url_lower and not github_url:
                 github_url = item.url
-            elif is_safe_url(item.url) and not website_url and "google" not in item.url and "bing" not in item.url:
+            elif (
+                is_safe_url(item.url)
+                and not website_url
+                and not _is_banned_website_domain(item.url)
+            ):
                 website_url = item.url
 
-    # Generate synthetic links if none found but role/org available
-    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
-    if not linkedin_url:
-        linkedin_url = f"https://www.linkedin.com/in/{slug}"
-    if not github_url and any("code" in t.lower() or "python" in t.lower() or "cloud" in t.lower() for t in topics):
-        github_url = f"https://github.com/{slug}"
+    # Conversational website_url takes absolute priority over web search
+    entity_site = getattr(entity, "website_url", None)
+    if entity_site:
+        website_url = entity_site
+    elif not website_url and getattr(entity, "web_profile", None) and getattr(entity.web_profile, "website_url", None):
+        website_url = entity.web_profile.website_url
+
+    if website_url and (_is_banned_website_domain(website_url) or "pub/dir" in website_url.lower()):
+        website_url = None
+
+    # NO synthetic slug generation — if no verified /in/ URL found, leave as None.
+    # Synthetic slugs like linkedin.com/in/first-last lead to 404 errors.
 
     # Build headline
     if role and org:
@@ -175,18 +565,34 @@ def heuristic_profile_synthesis(
         else:
             expertise = ["Technology Leadership", "Operations", "Strategy"]
 
-    # Bio summary
-    if snippet_texts:
-        combined = " ".join(snippet_texts)
-        clean_snip = re.sub(r"\s+", " ", combined).strip()
-        bio_summary = clean_snip[:280] + ("..." if len(clean_snip) > 280 else "")
-    else:
+    # Bio summary: NEVER use directory text. Use conservative transcript-based fallback.
+    bio_summary = None
+    if search_items:
+        # Find the best non-directory snippet that matches the org anchor
+        best_item = None
+        for it in search_items:
+            if not _is_directory_text(it.snippet) and not _is_directory_text(it.title):
+                if org and org.lower() in (it.title + " " + it.snippet).lower():
+                    best_item = it
+                    break
+        # Fallback to first non-directory snippet
+        if not best_item:
+            for it in search_items:
+                if not _is_directory_text(it.snippet) and not _is_directory_text(it.title):
+                    best_item = it
+                    break
+        if best_item:
+            clean_snip = re.sub(r"\s+", " ", best_item.snippet).strip()
+            bio_summary = clean_snip[:280] + ("..." if len(clean_snip) > 280 else "")
+
+    # Conservative transcript-based fallback if no usable bio from web
+    if not bio_summary:
         role_label = role or "Professional"
-        org_label = f" at {org}" if org else ""
+        org_label = f" at {org}" if org else (f" at {role_info}" if role_info else "")
         expertise_label = f" specializing in {', '.join(expertise[:3])}" if expertise else ""
         bio_summary = (
-            f"{name} is an accomplished {role_label}{org_label}{expertise_label}. "
-            f"Active across enterprise innovation and industry engagements."
+            f"{name} is a {role_label}{org_label}{expertise_label}. "
+            f"Web dossier pending external corroboration."
         )
 
     return SocialWebProfile(
@@ -198,7 +604,7 @@ def heuristic_profile_synthesis(
         linkedin_url=linkedin_url,
         github_url=github_url,
         website_url=website_url,
-        confidence_score=0.92,
+        confidence_score=0.92 if linkedin_url else 0.6,
         enriched_at=datetime.now().isoformat(),
     )
 
@@ -236,6 +642,12 @@ def enrich_social_contact_sync(
     # Offline / Mock AI Mode
     if settings.mock_ai or not has_active_model_credentials(settings.gatekeeper_provider):
         profile = heuristic_profile_synthesis(entity)
+        # Ensure conversational website priority
+        conv_url = getattr(entity, "website_url", None) or (
+            getattr(entity.web_profile, "website_url", None) if getattr(entity, "web_profile", None) else None
+        )
+        if conv_url:
+            profile.website_url = conv_url
         entity.web_profile = profile
         ctx_store = store or get_storage_store()
         ctx_store.update_contact_web_profile(entity.id or entity.person_name, profile)
@@ -243,28 +655,62 @@ def enrich_social_contact_sync(
 
     # Online Model Execution
     try:
+        conversational_url = getattr(entity, "website_url", None) or (
+            getattr(entity.web_profile, "website_url", None) if getattr(entity, "web_profile", None) else None
+        )
         queries = build_profiling_queries(
             name=entity.person_name,
             company_or_role=entity.company_or_role,
             topics=entity.key_topics,
+            website_url=conversational_url,
         )
         batch_result = execute_search_batch(queries, count_per_query=3)
 
-        # Harvest search items
+        # Harvest search items, excluding noisy personal social network domains
         all_items: List[SearchResultItem] = []
         for eq in batch_result.evaluations:
-            all_items.extend(eq.results)
+            for it in eq.results:
+                if not _is_banned_search_domain(it.url):
+                    all_items.append(it)
 
         if not all_items:
             # Fallback to heuristic if web search returned empty
             profile = heuristic_profile_synthesis(entity)
         else:
+            # TIER 2 & 3: Semantic Disambiguation, Clustering & Deduplication
+            verified_items, disambiguation_res = evaluate_and_disambiguate_sources(
+                entity=entity,
+                search_items=all_items,
+                transcript=entity.company_or_role or entity.person_name,
+            )
+
+            # Build clean snippet context containing ONLY verified sources
+            # NEVER fallback to unverified items (prevents homonym contamination)
+            items_to_render = verified_items if verified_items else []
+            if items_to_render:
+                clean_snippets_md = "\n".join([
+                    f"- [{item.title}]({item.url}): {item.snippet}"
+                    for item in items_to_render
+                ])
+            else:
+                clean_snippets_md = (
+                    "No corroborated external web sources found for this individual. "
+                    "Use ONLY the conversational encounter ground truth."
+                )
+
+            if disambiguation_res and disambiguation_res.clean_combined_facts:
+                clean_snippets_md += "\n\nVerified Factual Extraction:\n" + "\n".join(
+                    f"• {fact}" for fact in disambiguation_res.clean_combined_facts
+                )
+
             model = get_fast_model()
             prompt = PROFILER_SYSTEM_PROMPT.format(
                 person_name=entity.person_name,
                 company_or_role=entity.company_or_role or "Not specified",
+                website_url=conversational_url or "Not specified",
                 key_topics=", ".join(entity.key_topics) if entity.key_topics else "General",
-                search_snippets=batch_result.formatted_markdown,
+                transcript=entity.company_or_role or entity.person_name,
+                search_snippets=clean_snippets_md,
             )
             structured_extractor = model.with_structured_output(SocialWebProfile)
             res = structured_extractor.invoke([
@@ -277,7 +723,76 @@ def enrich_social_contact_sync(
                 if not profile.enriched_at:
                     profile.enriched_at = datetime.now().isoformat()
             else:
-                profile = heuristic_profile_synthesis(entity, all_items)
+                profile = heuristic_profile_synthesis(entity, items_to_render if items_to_render else None)
+
+            if disambiguation_res:
+                profile.disambiguation_report = disambiguation_res
+                if disambiguation_res.canonical_linkedin_url and not profile.linkedin_url:
+                    profile.linkedin_url = disambiguation_res.canonical_linkedin_url
+                if disambiguation_res.canonical_github_url and not profile.github_url:
+                    profile.github_url = disambiguation_res.canonical_github_url
+
+        # Post-processing safeguards on profile
+        # A. Conversational website has absolute priority
+        if conversational_url:
+            profile.website_url = conversational_url
+        elif profile.website_url:
+            if _is_banned_website_domain(profile.website_url) or "pub/dir" in profile.website_url.lower():
+                profile.website_url = None
+
+        # B. Anti-directory bio safeguard
+        if profile.bio_summary and _is_directory_text(profile.bio_summary):
+            role_label = entity.company_or_role or "Professional"
+            profile.bio_summary = f"{entity.person_name} is a {role_label}. Web dossier pending external corroboration."
+
+        # C. LinkedIn URL sanitization (reject directories or synthetic slugs)
+        if profile.linkedin_url:
+            url_lower = profile.linkedin_url.lower()
+            if "pub/dir" in url_lower or not ("linkedin.com/in/" in url_lower or "linkedin.com/company/" in url_lower):
+                profile.linkedin_url = None
+
+        # D. Strict Organization & Headline Grounding Guardrail
+        clean_conv_org = (entity.company_or_role or "").strip()
+        if clean_conv_org:
+            org_tokens = set(re.findall(r"\w+", clean_conv_org.lower()))
+            synth_org_tokens = set(re.findall(r"\w+", (profile.organization or "").lower()))
+            org_significant = {t for t in org_tokens if len(t) >= 2 and t not in {"at", "in", "di", "da", "presso", "the", "della"}}
+
+            # If the synthesized organization has no token overlap with conversational affiliation or is None
+            if not profile.organization or not (org_significant & synth_org_tokens):
+                logger.warning(
+                    f"Synthesized organization '{profile.organization}' diverges completely from "
+                    f"conversational affiliation '{clean_conv_org}'. Restoring conversational ground truth."
+                )
+                profile.organization = clean_conv_org
+                if not profile.current_role or not any(t in (profile.current_role or "").lower() for t in org_significant):
+                    profile.current_role = clean_conv_org
+                profile.headline = f"{entity.person_name} | {clean_conv_org}"
+
+        # E. Expertise Tags Contamination Filter
+        if profile.areas_of_expertise and disambiguation_res and disambiguation_res.rejected_source_indices:
+            rejected_terms = set()
+            for rej_idx in disambiguation_res.rejected_source_indices:
+                if 0 <= rej_idx < len(all_items):
+                    rej_item = all_items[rej_idx]
+                    for word in re.findall(r"[A-Za-z]{3,}", f"{rej_item.title} {rej_item.snippet}".lower()):
+                        rejected_terms.add(word)
+            allowed_terms = set(re.findall(r"[A-Za-z]{2,}", f"{entity.person_name} {clean_conv_org} {' '.join(entity.key_topics or [])}".lower()))
+            tech_whitelist = {"software", "engineering", "developer", "development", "programming", "technology", "ai", "machine", "learning", "data", "python", "code", "open", "source"}
+            allowed_terms.update(tech_whitelist)
+
+            filtered_tags = []
+            for tag in profile.areas_of_expertise:
+                tag_words = set(re.findall(r"[A-Za-z]{3,}", tag.lower()))
+                is_contaminated = bool((tag_words & rejected_terms) and not (tag_words & allowed_terms))
+                if not is_contaminated:
+                    filtered_tags.append(tag)
+            if filtered_tags:
+                profile.areas_of_expertise = filtered_tags
+            elif entity.key_topics:
+                profile.areas_of_expertise = list(entity.key_topics[:5])
+            else:
+                profile.areas_of_expertise = ["Software Engineering", "Technology", "Open Source"]
 
         entity.web_profile = profile
         ctx_store = store or get_storage_store()
@@ -287,6 +802,11 @@ def enrich_social_contact_sync(
     except Exception as e:
         logger.warning(f"Error enriching profile for '{entity.person_name}': {e}. Using fallback.")
         profile = heuristic_profile_synthesis(entity)
+        conv_url = getattr(entity, "website_url", None) or (
+            getattr(entity.web_profile, "website_url", None) if getattr(entity, "web_profile", None) else None
+        )
+        if conv_url:
+            profile.website_url = conv_url
         entity.web_profile = profile
         ctx_store = store or get_storage_store()
         ctx_store.update_contact_web_profile(entity.id or entity.person_name, profile)

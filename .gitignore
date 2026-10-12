@@ -15,6 +15,7 @@ dist/
 # Databases & Local state
 *.db
 *.sqlite3
+examen.db.*
 
 # Pytest & IDE
 .pytest_cache/
