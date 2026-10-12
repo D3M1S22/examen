@@ -258,6 +258,8 @@ def classify_chunk(
             HumanMessage(content=f'Transcript: "{clean_text}"')
         ]
         result: ChunkClassification = classifier.invoke(messages)
+        if not result or not isinstance(result, ChunkClassification):
+            return _heuristic_classify(clean_text, active_tasks=active_tasks, prior_context=prior_context)
         return result
     except Exception as e:
         logger.warning(f"Gatekeeper invocation failed ({e}), falling back to heuristic: {e}")
@@ -296,6 +298,8 @@ async def aclassify_chunk(
             HumanMessage(content=f'Transcript: "{clean_text}"')
         ]
         result: ChunkClassification = await classifier.ainvoke(messages)
+        if not result or not isinstance(result, ChunkClassification):
+            return _heuristic_classify(clean_text, active_tasks=active_tasks, prior_context=prior_context)
         return result
     except Exception as e:
         logger.warning(f"Async Bedrock Gatekeeper invocation failed ({e}), falling back to heuristic")
@@ -303,12 +307,12 @@ async def aclassify_chunk(
 
 
 
-def is_noop(classification: ChunkClassification) -> bool:
+def is_noop(classification: Optional[ChunkClassification]) -> bool:
     """Helper to check if a classification represents a drop (noop).
 
     Returns True if 'noop' is in categories and no other valuable categories exist.
     """
-    if not classification.categories:
+    if classification is None or not classification.categories:
         return True
     if "noop" in classification.categories and len(classification.categories) == 1:
         return True
