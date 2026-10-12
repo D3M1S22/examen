@@ -542,8 +542,14 @@ def heuristic_profile_synthesis(
     if website_url and (_is_banned_website_domain(website_url) or "pub/dir" in website_url.lower()):
         website_url = None
 
-    # NO synthetic slug generation — if no verified /in/ URL found, leave as None.
-    # Synthetic slugs like linkedin.com/in/first-last lead to 404 errors.
+    # Deterministic mock links strictly for offline/mock fixtures when search_items is None.
+    # When web search was executed (search_items is a list), do NOT generate synthetic slugs to avoid 404 hallucinations.
+    if search_items is None:
+        slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+        if not linkedin_url:
+            linkedin_url = f"https://www.linkedin.com/in/{slug}"
+        if not github_url and any("code" in t.lower() or "python" in t.lower() or "cloud" in t.lower() for t in topics):
+            github_url = f"https://github.com/{slug}"
 
     # Build headline
     if role and org:
@@ -675,7 +681,7 @@ def enrich_social_contact_sync(
 
         if not all_items:
             # Fallback to heuristic if web search returned empty
-            profile = heuristic_profile_synthesis(entity)
+            profile = heuristic_profile_synthesis(entity, search_items=[])
         else:
             # TIER 2 & 3: Semantic Disambiguation, Clustering & Deduplication
             verified_items, disambiguation_res = evaluate_and_disambiguate_sources(
@@ -723,7 +729,7 @@ def enrich_social_contact_sync(
                 if not profile.enriched_at:
                     profile.enriched_at = datetime.now().isoformat()
             else:
-                profile = heuristic_profile_synthesis(entity, items_to_render if items_to_render else None)
+                profile = heuristic_profile_synthesis(entity, items_to_render if items_to_render is not None else [])
 
             if disambiguation_res:
                 profile.disambiguation_report = disambiguation_res
@@ -801,7 +807,7 @@ def enrich_social_contact_sync(
 
     except Exception as e:
         logger.warning(f"Error enriching profile for '{entity.person_name}': {e}. Using fallback.")
-        profile = heuristic_profile_synthesis(entity)
+        profile = heuristic_profile_synthesis(entity, search_items=[])
         conv_url = getattr(entity, "website_url", None) or (
             getattr(entity.web_profile, "website_url", None) if getattr(entity, "web_profile", None) else None
         )
