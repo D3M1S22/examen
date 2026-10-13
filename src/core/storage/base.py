@@ -146,9 +146,15 @@ class AbstractContextStore(ABC):
         pass
 
     @abstractmethod
-    def list_topic_briefings(self, limit: int = 10) -> List[BriefingReport]:
+    def list_topic_briefings(
+        self, limit: int = 10, kind: Optional[str] = None, session_id: Optional[str] = None
+    ) -> List[BriefingReport]:
         """List recently generated briefing reports ordered by created_at descending."""
         pass
+
+    def list_briefings_for_session(self, session_id: str) -> List[BriefingReport]:
+        """List all briefings (segment, checkpoint, final, standalone) linked to an event."""
+        raise NotImplementedError
 
     def patch_utterance_speaker(
         self, chunk_id: str, speaker_id: str, speaker_role: Optional[str] = None
@@ -187,6 +193,31 @@ class AbstractContextStore(ABC):
         self, session_id: str, briefing_report_id: Optional[str] = None
     ) -> Optional[Any]:
         """Mark a session dossier as concluded and link its synthesized briefing report ID."""
+        raise NotImplementedError
+
+    # --- Deep Topic Event Engine ---
+    def get_open_event(self) -> Optional[Any]:
+        """Return the most recent engine-managed event that is active or paused."""
+        raise NotImplementedError
+
+    def list_events_pending_final(self, limit: int = 20) -> List[Any]:
+        """Return concluded events whose final briefing is still pending."""
+        raise NotImplementedError
+
+    def append_session_chunk(
+        self, chunk: Any, session_id: str, segment_id: Optional[str] = None, on_topic: bool = False
+    ) -> None:
+        """Append one utterance chunk to the per-chunk event log."""
+        raise NotImplementedError
+
+    def list_session_chunks(
+        self,
+        session_id: str,
+        segment_id: Optional[str] = None,
+        in_segments_only: bool = False,
+        limit: Optional[int] = None,
+    ) -> List[Any]:
+        """List logged chunks of an event in chronological order."""
         raise NotImplementedError
 
     def record_latency(

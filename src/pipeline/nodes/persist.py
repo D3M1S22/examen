@@ -70,14 +70,15 @@ def node_persist(state: ExamenState) -> Dict[str, Any]:
         except Exception as e:
             logger.error(f"Failed to persist social contact: {e}", exc_info=True)
 
-    # 3. Persist Topic Briefing Report
+    # 3. Persist Topic Briefing Report (standalone invocation; event briefings are produced and
+    #    persisted by the Deep Topic Event Engine, which also owns session conclusion)
     briefing_report = state.get("briefing_report")
     if briefing_report:
         try:
+            if session_id and not briefing_report.session_id:
+                briefing_report.session_id = session_id
             rec_id = store.save_topic_briefing(briefing_report)
             logger.info(f"Persisted topic briefing '{briefing_report.topic_title}' (ID: {rec_id})")
-            if session_id and hasattr(store, "conclude_session_dossier"):
-                store.conclude_session_dossier(session_id=session_id, briefing_report_id=rec_id)
         except Exception as e:
             logger.error(f"Failed to persist topic briefing: {e}", exc_info=True)
 

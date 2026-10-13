@@ -65,6 +65,24 @@ def broadcast_event(event_type: str, data: Optional[Dict[str, Any]] = None) -> N
             _sse_subscribers.discard(q)
 
 
+_engine_listener_registered = False
+
+
+def _ensure_event_engine() -> Any:
+    """Starts the Deep Topic Event Engine runtime (tick loop + synthesis worker) on this loop
+    and forwards engine lifecycle events to SSE subscribers. Returns the shared engine."""
+    global _engine_listener_registered
+    from src.ingestion.event_engine import get_event_engine_runtime
+
+    runtime = get_event_engine_runtime()
+    if not _engine_listener_registered:
+        runtime.add_listener(lambda event_type, payload: broadcast_event(event_type, payload))
+        _engine_listener_registered = True
+    if settings.event_engine_enabled:
+        runtime.ensure_started()
+    return runtime.engine
+
+
 # Register the 10 core MCP tools for Alexa+
 mcp.tool()(create_planned_task)
 mcp.tool()(get_upcoming_tasks)
@@ -114,7 +132,9 @@ class OrchestratorManager:
         try:
             from src.ingestion.orchestrator import BeeStreamOrchestrator
             store = get_storage_store()
-            self.orchestrator = BeeStreamOrchestrator(debug_mode="none", store=store)
+            self.orchestrator = BeeStreamOrchestrator(
+                debug_mode="none", store=store, engine=_ensure_event_engine()
+            )
             logger.info("Ingestion Orchestrator background service started.")
             await self.orchestrator.run()
         except asyncio.CancelledError:
@@ -141,7 +161,6 @@ class OrchestratorManager:
             "running": self.is_started and (self.task is not None and not self.task.done()),
             "status": "LISTENING" if self.is_started else "STANDBY",
             "mode": "ambient_sse",
-            "buffer_chars": 0,
             "chunks_screened": 0,
             "utterances_received": 0,
             "detail": "Orchestrator initializing background stream",
@@ -264,6 +283,7 @@ async def api_orchestrator_stop(request: Request) -> JSONResponse:
 @mcp.custom_route("/api/status", methods=["GET"])
 async def api_status(request: Request) -> JSONResponse:
     """Returns system status, active models/providers, real telemetry averages, and entity counts."""
+    _ensure_event_engine()
     store = get_storage_store()
     recent_actions = store.list_recent_actions(limit=100)
     planned_tasks = store.list_planned_tasks()
@@ -1076,7 +1096,11 @@ async def api_topics(request: Request) -> JSONResponse:
     """Lists recent synthesized technical briefings."""
     store = get_storage_store()
     limit = int(request.query_params.get("limit", "10"))
-    topics = store.list_topic_briefings(limit=limit)
+    topics = store.list_topic_briefings(
+        limit=limit,
+        kind=request.query_params.get("kind") or None,
+        session_id=request.query_params.get("session_id") or None,
+    )
 
     result = []
     for t in topics:
@@ -1090,6 +1114,9 @@ async def api_topics(request: Request) -> JSONResponse:
             "action_items": t.action_items,
             "deep_dive_markdown": t.deep_dive_markdown,
             "created_at": t.created_at,
+            "kind": t.kind,
+            "session_id": t.session_id,
+            "segment_id": t.segment_id,
         })
     return JSONResponse({"topics": result, "count": len(result)})
 
@@ -1118,14 +1145,10 @@ async def api_session_detail(request: Request) -> JSONResponse:
 
 @mcp.custom_route("/api/sessions/{session_id}/conclude", methods=["POST"])
 async def api_session_conclude(request: Request) -> JSONResponse:
-    """Marks a session dossier as concluded, with optional briefing report synthesis."""
+    """Concludes a session/event (rule R8). Final synthesis is scheduled asynchronously."""
     session_id = request.path_params.get("session_id")
     if not session_id:
         return JSONResponse({"error": "Missing session_id"}, status_code=400)
-
-    from src.ingestion.session_manager import SessionManager
-    store = get_storage_store()
-    mgr = SessionManager(store=store)
 
     body = {}
     try:
@@ -1133,17 +1156,25 @@ async def api_session_conclude(request: Request) -> JSONResponse:
     except Exception:
         pass
 
+    store = get_storage_store()
     briefing_id = body.get("briefing_report_id")
-    auto_synthesize = body.get("auto_synthesize", False)
+    existing = store.get_session_dossier(session_id)
+    if existing is None:
+        return JSONResponse({"error": f"Session '{session_id}' not found"}, status_code=404)
 
-    if auto_synthesize and not briefing_id:
-        mgr.synthesize_session_dossier(session_id=session_id, auto_conclude=True)
-        dossier = store.get_session_dossier(session_id)
-        if dossier:
-            broadcast_event("session_concluded", dossier.model_dump())
-            return JSONResponse({"success": True, "concluded": True, "dossier": dossier.model_dump()})
+    if briefing_id or (not existing.segments and body.get("auto_synthesize")):
+        # Legacy sessions (no segments) or explicit briefing linkage
+        from src.ingestion.session_manager import SessionManager
+        mgr = SessionManager(store=store)
+        if briefing_id:
+            dossier = mgr.conclude_session(session_id=session_id, briefing_report_id=briefing_id)
+        else:
+            await asyncio.to_thread(mgr.synthesize_session_dossier, session_id, True)
+            dossier = store.get_session_dossier(session_id)
+    else:
+        engine = _ensure_event_engine()
+        dossier = engine.conclude(session_id)
 
-    dossier = mgr.conclude_session(session_id=session_id, briefing_report_id=briefing_id)
     if not dossier:
         return JSONResponse({"error": f"Session '{session_id}' not found"}, status_code=404)
 
@@ -1151,11 +1182,33 @@ async def api_session_conclude(request: Request) -> JSONResponse:
     return JSONResponse({"success": True, "concluded": True, "dossier": dossier.model_dump()})
 
 
+@mcp.custom_route("/api/event-engine/status", methods=["GET"])
+async def api_event_engine_status(request: Request) -> JSONResponse:
+    """Returns the Deep Topic Event Engine state (open event, pending synthesis jobs, config)."""
+    engine = _ensure_event_engine()
+    cfg = engine.config
+    return JSONResponse({
+        "enabled": settings.event_engine_enabled,
+        "profile": settings.event_profile,
+        "config": {
+            "t_soft_seconds": cfg.t_soft,
+            "t_hard_seconds": cfg.t_hard,
+            "t_checkpoint_seconds": cfg.t_checkpoint,
+            "min_segment_words": cfg.min_segment_words,
+        },
+        **engine.status_summary(),
+    })
+
+
 @mcp.custom_route("/api/simulate", methods=["POST"])
 async def api_simulate(request: Request) -> JSONResponse:
     """Simulates an ambient speech chunk through the AgentCore pipeline.
     
-    Accepts: {"transcript_chunk": str, "actor_id": Optional[str]}
+    Accepts: {"transcript_chunk": str, "actor_id": Optional[str], "event_mode": Optional[bool],
+              "timestamp": Optional[ISO str], "location": Optional[dict], "speaker_role": Optional[str],
+              "conversation_uuid": Optional[str]}
+    With event_mode the chunk is routed through the Deep Topic Event Engine (deep_topic content is
+    accumulated into an event and synthesized per segment/event instead of per utterance).
     Returns: Complete execution response with gatekeeper decision and extracted state.
     """
     try:
@@ -1168,16 +1221,60 @@ async def api_simulate(request: Request) -> JSONResponse:
         return JSONResponse({"error": "Field 'transcript_chunk' is required"}, status_code=400)
 
     actor_id = body.get("actor_id", "user_web_sim")
-    payload = {
+    timestamp = body.get("timestamp") or datetime.now().isoformat()
+    payload: Dict[str, Any] = {
         "raw_transcript": chunk.strip(),
         "transcript_chunk": chunk.strip(),
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": timestamp,
         "actor_id": actor_id,
     }
+    if body.get("location"):
+        payload["location"] = body["location"]
+    if body.get("speaker_role"):
+        payload["speaker_role"] = body["speaker_role"]
 
     start_time = datetime.now()
     try:
-        result = agent_invocation(payload=payload)
+        event_info: Optional[Dict[str, Any]] = None
+        if body.get("event_mode") and settings.event_engine_enabled:
+            # Route through the shared Deep Topic Event Engine (doc 05 §4)
+            from src.core.schemas import UtteranceChunk
+            from src.ingestion.gatekeeper import aclassify_chunk
+
+            engine = _ensure_event_engine()
+            classification = await aclassify_chunk(transcript=chunk.strip())
+            utterance = UtteranceChunk(
+                conversation_uuid=body.get("conversation_uuid") or "web_simulator",
+                text=chunk.strip(),
+                speaker_role=body.get("speaker_role") or "unknown",
+                timestamp=timestamp,
+                received_at=timestamp,
+                categories=list(classification.categories),
+                location=body.get("location"),
+            )
+            outcome = engine.record_chunk(utterance)
+            event_info = {
+                "session_id": outcome.event_id,
+                "status": outcome.event_status,
+                "on_topic": outcome.on_topic,
+                "transitions": [
+                    {"rule": t.rule, "to_status": t.to_status, "reason": t.reason, "detail": t.detail}
+                    for t in outcome.transitions
+                ],
+            }
+            payload.update({
+                "categories": classification.categories,
+                "confidence": classification.confidence,
+                "summary_hint": classification.summary_hint,
+                "session_id": outcome.event_id or utterance.conversation_uuid,
+                "utterance_id": utterance.chunk_id,
+                "event_managed": outcome.event_managed,
+            })
+
+        # agent_invocation is synchronous: keep it off the event loop
+        result = await asyncio.to_thread(agent_invocation, payload)
+        if event_info is not None:
+            result["event"] = event_info
         elapsed_sec = (datetime.now() - start_time).total_seconds()
         elapsed_ms = round(elapsed_sec * 1000.0, 1)
 

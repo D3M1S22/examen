@@ -235,7 +235,7 @@ class TestSessionManagerBoundaryDetection:
 
         dossier2, triggered2 = mgr.record_chunk(sess_id, "That concludes our meeting today.")
         assert triggered2 is True
-        assert dossier2.status == "finalizing"
+        assert dossier2.status == "paused"
 
     def test_inactivity_timeout_triggers_boundary(self, temp_store):
         mgr = SessionManager(inactivity_timeout_seconds=60.0, store=temp_store)
@@ -264,7 +264,7 @@ class TestSessionManagerBoundaryDetection:
         timed_out = mgr.check_inactivity_timeouts(current_time=1070.0)
         assert timed_out == [sess_id]
         dossier = mgr.get_session(sess_id)
-        assert dossier.status == "finalizing"
+        assert dossier.status == "paused"
 
     def test_location_shift_triggers_boundary(self, temp_store):
         mgr = SessionManager(location_distance_threshold_meters=500.0, store=temp_store)

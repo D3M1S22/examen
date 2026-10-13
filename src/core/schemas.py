@@ -59,7 +59,16 @@ class UtteranceChunk(BaseModel):
     )
     timestamp: str = Field(
         default_factory=lambda: datetime.now().isoformat(),
-        description="ISO timestamp when utterance occurred."
+        description="Best-known ISO timestamp when the utterance occurred (spoken_at > received_at > now)."
+    )
+    received_at: Optional[str] = Field(
+        default=None, description="ISO wall-clock time when the utterance was read from the Bee stream."
+    )
+    spoken_at: Optional[str] = Field(
+        default=None, description="ISO time when the utterance was spoken, if the Bee payload provides it."
+    )
+    categories: List[str] = Field(
+        default_factory=list, description="Gatekeeper categories assigned to this utterance."
     )
     location: Optional[dict] = Field(default=None, description="LocationTelemetry dict at time of speech.")
 
@@ -517,6 +526,16 @@ class BriefingReport(BaseModel):
         default_factory=lambda: datetime.now().isoformat(),
         description="Creation date and time of the report."
     )
+    session_id: Optional[str] = Field(
+        default=None, description="Event (SessionDossier) this briefing belongs to, if any."
+    )
+    segment_id: Optional[str] = Field(
+        default=None, description="Event segment this briefing synthesizes (segment/checkpoint kinds)."
+    )
+    kind: Literal["standalone", "segment", "checkpoint", "final"] = Field(
+        default="standalone",
+        description="standalone (single invocation), segment/checkpoint (progressive), final (consolidated event)."
+    )
 
 
 # ============================================================================
@@ -534,8 +553,39 @@ class MicroEventRef(BaseModel):
     )
 
 
+class SessionSegment(BaseModel):
+    """Contiguous run of on-topic activity inside an event (Deep Topic Event Engine)."""
+    segment_id: str = Field(default_factory=lambda: str(uuid.uuid4()), description="Unique segment identifier.")
+    index: int = Field(default=1, description="1-based order of the segment inside the event.")
+    kind: Literal["segment", "checkpoint"] = Field(
+        default="segment", description="'checkpoint' when closed by the periodic checkpoint rule."
+    )
+    start_time: str = Field(
+        default_factory=lambda: datetime.now().isoformat(),
+        description="ISO utterance time of the first chunk."
+    )
+    end_time: Optional[str] = Field(default=None, description="ISO utterance time of the last chunk.")
+    word_count: int = Field(default=0, description="Words accumulated in the segment.")
+    title: Optional[str] = Field(default=None, description="Segment title produced by synthesis.")
+    status: Literal["open", "closed", "synthesizing", "synthesized", "skipped", "failed"] = Field(
+        default="open", description="Segment lifecycle status."
+    )
+    close_reason: Optional[str] = Field(default=None, description="Rule reason that closed the segment.")
+    briefing_id: Optional[str] = Field(default=None, description="Segment/checkpoint BriefingReport ID.")
+
+
+class EventTransitionLog(BaseModel):
+    """Audit trail entry for an event lifecycle transition."""
+    at: str = Field(description="ISO time of the transition (engine clock).")
+    from_status: Optional[str] = Field(default=None, description="Status before the transition.")
+    to_status: str = Field(description="Status after the transition.")
+    rule: str = Field(description="Rule identifier (R0..R9).")
+    reason: str = Field(description="Machine-readable reason.")
+    detail: Optional[str] = Field(default=None, description="Human-readable detail.")
+
+
 class SessionDossier(BaseModel):
-    session_id: str = Field(description="Unique conversation session UUID from wearable audio stream.")
+    session_id: str = Field(description="Event identifier (engine-minted) or legacy Bee conversation UUID.")
     title: Optional[str] = Field(default=None, description="Evolving or finalized title of the macro session.")
     domain: Literal["meeting", "lecture", "technical_debate", "general"] = Field(
         default="meeting",
@@ -553,9 +603,9 @@ class SessionDossier(BaseModel):
         default=None,
         description="ISO timestamp when the session was marked concluded."
     )
-    status: Literal["active", "finalizing", "concluded"] = Field(
+    status: Literal["active", "paused", "finalizing", "concluded"] = Field(
         default="active",
-        description="Lifecycle status of the session."
+        description="Lifecycle status of the session ('finalizing' is a legacy alias of 'paused')."
     )
     location: Optional[dict] = Field(
         default=None,
@@ -581,6 +631,34 @@ class SessionDossier(BaseModel):
         default=None,
         description="Full synthesized BriefingReport object if available."
     )
+    # Deep Topic Event Engine
+    conversation_uuids: List[str] = Field(
+        default_factory=list, description="Bee conversation UUIDs spanned by this event."
+    )
+    segments: List[SessionSegment] = Field(
+        default_factory=list, description="Contiguous on-topic segments of the event."
+    )
+    anchor_location: Optional[dict] = Field(
+        default=None, description="Reference location of the event (median of first-segment fixes)."
+    )
+    last_on_topic_at: Optional[str] = Field(default=None, description="ISO time of the last on-topic chunk.")
+    paused_at: Optional[str] = Field(default=None, description="ISO time the event was last paused.")
+    hard_close_deadline: Optional[str] = Field(
+        default=None, description="ISO deadline overriding the default hard-close timeout (closing cue, transit)."
+    )
+    final_status: Literal["none", "pending", "synthesizing", "ready", "failed"] = Field(
+        default="none", description="Status of the consolidated final briefing."
+    )
+    final_revision: int = Field(default=0, description="Incremented whenever the final briefing is regenerated.")
+    transitions: List[EventTransitionLog] = Field(
+        default_factory=list, description="Lifecycle audit trail."
+    )
+
+    @property
+    def open_segment(self) -> Optional[SessionSegment]:
+        if self.segments and self.segments[-1].status == "open":
+            return self.segments[-1]
+        return None
 
 
 # ============================================================================
@@ -590,6 +668,7 @@ class ExamenState(TypedDict, total=False):
     raw_transcript: str
     timestamp: str
     session_id: str
+    event_managed: bool  # True when the Deep Topic Event Engine owns deep_topic synthesis
     categories: List[str]
     confidence: float
     summary_hint: str

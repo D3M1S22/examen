@@ -12,8 +12,10 @@ from src.core.schemas import (
     PlannedTask,
     TopicExtraction,
     BriefingReport,
+    EventTransitionLog,
     MicroEventRef,
     SessionDossier,
+    SessionSegment,
     ExamenState,
 )
 
@@ -40,8 +42,10 @@ __all__ = [
     "PlannedTask",
     "TopicExtraction",
     "BriefingReport",
+    "EventTransitionLog",
     "MicroEventRef",
     "SessionDossier",
+    "SessionSegment",
     "ExamenState",
 ]
 

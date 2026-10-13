@@ -187,8 +187,8 @@ All values live in `Settings` ([config.py](../../../src/core/config.py)) with en
 
 | Setting | Env | Default | Rationale |
 |---|---|---|---|
-| `event_t_soft_seconds` | `EVENT_T_SOFT_SECONDS` | `270` (4.5 min) | Longer than a typical lecturer's pause or Q&A silence, shorter than a break |
-| `event_t_hard_seconds` | `EVENT_T_HARD_SECONDS` | `1800` (30 min) | Covers the usual 10–15 min university break with margin |
+| `event_t_soft_seconds` | `EVENT_T_SOFT_SECONDS` | `300` (5 min) | Longer than a typical lecturer's pause or Q&A silence, shorter than a break (team decision 2026-10-13) |
+| `event_t_hard_seconds` | `EVENT_T_HARD_SECONDS` | `1800` (30 min) | Covers the usual 10–15 min university break with margin (team decision 2026-10-13) |
 | `event_t_hard_after_close_cue_seconds` | `EVENT_T_HARD_AFTER_CLOSE_CUE_SECONDS` | `300` | "Ci vediamo giovedì" → don't wait 30 min |
 | `event_t_hard_transit_seconds` | `EVENT_T_HARD_TRANSIT_SECONDS` | `120` | User is clearly leaving |
 | `event_t_checkpoint_seconds` | `EVENT_T_CHECKPOINT_SECONDS` | `1200` (20 min) | Progressive briefings for long lectures without breaks |
@@ -200,4 +200,6 @@ All values live in `Settings` ([config.py](../../../src/core/config.py)) with en
 | `topic_similarity_backend` | `TOPIC_SIMILARITY_BACKEND` | `embedding` | `embedding` \| `llm` \| `heuristic` |
 | `topic_sim_same` / `topic_sim_different` | `TOPIC_SIM_SAME` / `TOPIC_SIM_DIFFERENT` | `0.78` / `0.55` | Backend-specific, calibrate (see [02](02_topic_continuity_detection.md)) |
 
-For **demo mode**, a profile (`EVENT_PROFILE=demo`) scales all time thresholds down, e.g. `T_soft=20s` and `T_hard=90s`, so the full lifecycle is visible in a 3-minute video.
+For **demo mode**, a profile (`EVENT_PROFILE=demo`) scales all time thresholds down (`T_soft=20s`, `T_hard=90s`, close cue `15s`, transit `10s`, checkpoint `120s`, `MIN_SEGMENT_WORDS=30`, tick `2s`), so the full lifecycle is visible in a 3-minute video.
+
+Also implemented: `EVENT_ENGINE_ENABLED` (default `true`) and `EVENT_SYNTHESIS_MAX_WORDS` (default `6000`, input cap per synthesis call).

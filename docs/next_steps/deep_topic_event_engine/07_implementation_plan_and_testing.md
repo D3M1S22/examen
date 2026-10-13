@@ -8,7 +8,10 @@
 
 Each phase is shippable on its own and leaves the test suite green.
 
-### Phase A — Time & lifecycle foundations (time + GPS only)
+### Phase A — Time & lifecycle foundations (time + GPS only) — ✅ IMPLEMENTED (2026-10-13)
+
+> Code: [event_engine.py](../../../src/ingestion/event_engine.py); tests: [test_event_engine.py](../../../tests/test_event_engine.py), [test_ingestion_orchestrator.py](../../../tests/test_ingestion_orchestrator.py). Phase A already includes a minimal synthesis worker (segment and final jobs reusing `node_topic_research`, single-segment promotion, retries, rehydration) so the system stays functional; Phase B replaces it with the refactored, ledger-aware pipeline. `topic_profile`, `pending_chunk_ids` and `research_ledger` fields are deferred to Phases B/C.
+
 Fixes audit findings #2–#7 and #10–#12. Removes fragmented briefings for the common case.
 
 1. Timestamp capture and propagation (`received_at` / `spoken_at`) — [05](05_ingestion_and_pipeline_integration.md) §1.
@@ -129,9 +132,9 @@ Runner: `scripts/simulate_mock_conversations.py --event-mode --virtual-clock` pr
 
 | # | Question | Owner / how to resolve |
 |---|---|---|
-| 1 | Which Bedrock embedding models are enabled in our account/region (`amazon.titan-embed-text-v2:0`, `cohere.embed-multilingual-v3`)? | Check the Bedrock console / `list-foundation-models` |
+| 1 | ~~Which Bedrock embedding models are enabled?~~ **Resolved 2026-10-13:** Titan Text Embeddings V2, Cohere Embed Multilingual / v4, Nova Multimodal and others are active on-demand in `us-east-1` | — |
 | 2 | Does the live `bee stream` payload carry any time field (`spoken_at`, `created_at`)? What exactly do `new-conversation` / `update-conversation` look like in `--json` mode? | Capture samples with a real device |
 | 3 | How does Bee split a lecture with a break into conversations (silence threshold)? | Same capture session; informs the weight of the Bee-boundary signal |
-| 4 | Final `T_soft` / `T_hard` defaults for real university schedules (Italian "quarto d'ora accademico", 2×45 min blocks)? | Calibrate with team experience + scenarios |
+| 4 | ~~Final `T_soft` / `T_hard` defaults?~~ **Decided 2026-10-13:** `T_soft = 5 min`, `T_hard = 30 min` (revisit after real-device tests) | — |
 | 5 | Privacy: retention of raw `session_chunks` after the final briefing exists (keep / truncate after N days)? | Team decision; add `EVENT_CHUNK_RETENTION_DAYS` |
 | 6 | Should the final briefing be regenerated if a concluded event is manually merged days later? | Default yes (doc 03 §7); confirm UX |

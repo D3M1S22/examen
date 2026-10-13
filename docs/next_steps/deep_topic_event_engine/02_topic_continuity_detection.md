@@ -111,7 +111,7 @@ class TopicSimilarity(Protocol):
 
 ### 6.1 `embedding` (default, recommended)
 
-- **Model candidates on Bedrock:** `amazon.titan-embed-text-v2:0` (multilingual, 256/512/1024 dims, very cheap) or `cohere.embed-multilingual-v3`. Both handle Italian and English. **Availability must be verified** in the account/region configured in `AWS_REGION`. The repo has no embedding factory yet: [models.py](../../../src/core/models.py) only builds chat models.
+- **Models on Bedrock (verified 2026-10-13, `us-east-1`, on-demand, active):** Titan Text Embeddings V2 (`amazon.titan-embed-text-v2:0`, multilingual, 256/512/1024 dims, cheapest) is the **default**. Cohere Embed Multilingual (`cohere.embed-multilingual-v3`) is the fallback for Italian-heavy content. Also available but not needed for text-only similarity: Cohere Embed v4, Amazon Nova Multimodal Embeddings, Titan Embeddings G1 / Multimodal G1, TwelveLabs Marengo. The repo has no embedding factory yet: [models.py](../../../src/core/models.py) only builds chat models.
 - Add `get_embedding_model()` to [models.py](../../../src/core/models.py) (e.g. `langchain_aws.BedrockEmbeddings`), with env `BEDROCK_EMBEDDING_MODEL`.
 - **Cost order of magnitude:** a 2-hour lecture is ~15k words ≈ 20k tokens. Embedding every micro-window costs a fraction of a cent, which is negligible next to one reasoner call.
 - **Calibration:** cosine values depend on the model. `TOPIC_SIM_SAME` / `TOPIC_SIM_DIFFERENT` must be calibrated on the scenarios in [07](07_implementation_plan_and_testing.md). Plot same-event vs. different-event window pairs and pick thresholds with a safety gap.

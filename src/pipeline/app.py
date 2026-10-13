@@ -138,6 +138,7 @@ def agent_invocation(payload: Dict[str, Any], context: Any = None) -> Dict[str, 
     state: ExamenState = {
         "raw_transcript": raw_transcript,
         "session_id": session_id,
+        "event_managed": bool(payload.get("event_managed", False)),
         "categories": categories,
         "confidence": confidence,
         "summary_hint": summary_hint,

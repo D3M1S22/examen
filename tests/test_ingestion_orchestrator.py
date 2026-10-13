@@ -1,63 +1,118 @@
-"""Unit tests for BeeStreamOrchestrator and Gatekeeper screening integration."""
+"""Unit tests for BeeStreamOrchestrator: screening, event engine feeding and pipeline dispatch."""
+
+import importlib
+import sys
+from datetime import datetime
 
 import pytest
-import asyncio
-from src.ingestion.orchestrator import BeeStreamOrchestrator, analyze_text_model
-from src.ingestion.gatekeeper import is_noop
-from src.core.schemas import ChunkClassification, PlannedTask
-from src.core.storage import get_storage_store
+
+from src.core.schemas import BriefingReport, ChunkClassification
+from src.core.storage.sqlite_store import SQLiteContextStore
+from src.ingestion.event_engine import EngineConfig, EventEngine
+from src.ingestion.orchestrator import BeeStreamOrchestrator
+from src.ingestion.stream_convo import normalize_bee_time
+
+LECTURE = "Il teorema fondamentale del calcolo collega derivata e integrale definito"
 
 
-@pytest.mark.asyncio
-async def test_analyze_text_model_noop():
-    """Trivial chit-chat through orchestrator must be dropped as noop."""
-    result = await analyze_text_model("What a nice weather we are having today, really warm.", chunk_id=1)
-    assert isinstance(result, ChunkClassification)
-    assert is_noop(result) is True
-    assert "noop" in result.categories
+@pytest.fixture
+def store(tmp_path):
+    return SQLiteContextStore(str(tmp_path / "orchestrator.db"))
 
 
-@pytest.mark.asyncio
-async def test_analyze_text_model_action_qualified():
-    """Confirmed action through orchestrator must qualify for downstream routing."""
-    result = await analyze_text_model("I just unplugged the clothes iron before leaving the house.", chunk_id=2)
-    assert isinstance(result, ChunkClassification)
-    assert is_noop(result) is False
-    assert "action" in result.categories
-
-
-@pytest.mark.asyncio
-async def test_analyze_text_model_with_planned_task_in_storage():
-    """Active pending planned tasks should be dynamically picked up and matched."""
-    store = get_storage_store()
-    task = PlannedTask(
-        title="evening blood pressure medication",
-        domain="safety",
-        recurrence="daily"
+@pytest.fixture
+def orchestrator(store, monkeypatch):
+    engine = EventEngine(
+        store=store,
+        config=EngineConfig(min_segment_words=5),
+        synthesizer=lambda text, sid: BriefingReport(topic_title="Calculus", context_type="academic_lecture"),
     )
-    store.save_planned_task(task)
+    orch = BeeStreamOrchestrator(store=store, engine=engine)
+    orch.engine_enabled = True
 
-    sample = "The evening medication is done and all taken care of."
-    result = await analyze_text_model(sample, chunk_id=3)
-    assert isinstance(result, ChunkClassification)
-    assert "action" in result.categories
-    assert is_noop(result) is False
+    dispatched = []
+    # src.pipeline exposes an `app` object that shadows the module path, so patch via sys.modules
+    importlib.import_module("src.pipeline.app")
+    pipeline_app_module = sys.modules["src.pipeline.app"]
+    monkeypatch.setattr(pipeline_app_module, "agent_invocation", lambda payload: dispatched.append(payload) or {"ok": True})
+    orch._dispatched = dispatched  # type: ignore[attr-defined]
+    return orch
+
+
+def _fake_gatekeeper(monkeypatch, categories):
+    async def _classify(transcript, active_tasks=None, prior_context=None):
+        return ChunkClassification(categories=categories, confidence=0.9, summary_hint="test")
+    monkeypatch.setattr("src.ingestion.orchestrator.aclassify_chunk", _classify)
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_buffer_limit_and_semantic_cut():
-    """Orchestrator should split chunks safely without cutting words in half."""
-    orchestrator = BeeStreamOrchestrator(debug_mode="none", max_chars=40, max_duration=300)
-    
-    # Text with sentence boundaries
-    text = "First sentence completed. Second sentence in progress and continuing further."
-    orchestrator.text_buffer = text
-    
-    # Evaluate limit when length exceeds max_chars
-    await orchestrator._evaluate_buffer_limit(len(text))
-    
-    # Buffer should retain remainder and queue first chunk
-    assert not orchestrator.response_queue.empty()
-    queued_task = await orchestrator.response_queue.get()
-    result = await queued_task
-    assert result is not None
+async def test_deep_topic_utterance_opens_event_and_is_event_managed(orchestrator, monkeypatch):
+    _fake_gatekeeper(monkeypatch, ["deep_topic"])
+    await orchestrator.process_incoming_utterance({
+        "id": "u1", "text": LECTURE, "conversation_uuid": "bee-1",
+        "received_at": "2026-10-13T10:00:00",
+    })
+    event_id = orchestrator.engine.current_event_id()
+    assert event_id is not None and event_id != "bee-1"
+
+    payload = orchestrator._dispatched[0]
+    assert payload["event_managed"] is True
+    assert payload["session_id"] == event_id
+    assert payload["timestamp"] == "2026-10-13T10:00:00"  # receive time, not processing time
+
+
+@pytest.mark.asyncio
+async def test_noop_is_logged_in_open_event_but_not_dispatched(orchestrator, store, monkeypatch):
+    _fake_gatekeeper(monkeypatch, ["deep_topic"])
+    await orchestrator.process_incoming_utterance({"id": "u1", "text": LECTURE, "received_at": "2026-10-13T10:00:00"})
+    _fake_gatekeeper(monkeypatch, ["noop"])
+    result = await orchestrator.process_incoming_utterance(
+        {"id": "u2", "text": "quindi qui sostituiamo", "received_at": "2026-10-13T10:00:20"}
+    )
+    assert result is None
+    assert len(orchestrator._dispatched) == 1
+    assert len(store.list_session_chunks(orchestrator.engine.current_event_id())) == 2
+
+
+@pytest.mark.asyncio
+async def test_action_without_event_uses_conversation_session(orchestrator, monkeypatch):
+    _fake_gatekeeper(monkeypatch, ["action"])
+    await orchestrator.process_incoming_utterance({
+        "id": "u1", "text": "Ho spento la luce della camera", "conversation_uuid": "bee-9",
+        "received_at": "2026-10-13T10:00:00",
+    })
+    payload = orchestrator._dispatched[0]
+    assert payload["event_managed"] is False and payload["session_id"] == "bee-9"
+    assert orchestrator.engine.current_event_id() is None
+
+
+@pytest.mark.asyncio
+async def test_handle_event_counts_utterances(orchestrator, monkeypatch):
+    _fake_gatekeeper(monkeypatch, ["noop"])
+    await orchestrator.handle_event({"event": "new-utterance", "data": {"id": "u1", "text": "ciao"}})
+    status = orchestrator.get_status_dict()
+    assert status["utterances_received"] == 1 and status["chunks_screened"] == 1
+    assert status["event_engine"]["active_event"] is None
+
+
+def test_location_update_reaches_engine(orchestrator):
+    calls = []
+    orchestrator.engine.on_location = lambda loc, now=None: calls.append(loc) or []
+    orchestrator.update_location({"latitude": 45.06, "longitude": 7.66, "name": "Politecnico"})
+    assert calls and calls[0]["place_name"] == "Politecnico"
+
+
+def test_utterance_timestamp_priority(orchestrator):
+    spoken = orchestrator.buffer_incoming_utterance({
+        "id": "a", "text": "x", "spoken_at": "2026-10-13T09:59:58", "received_at": "2026-10-13T10:00:00",
+    })
+    assert spoken.timestamp == "2026-10-13T09:59:58"
+    received = orchestrator.buffer_incoming_utterance({"id": "b", "text": "y", "received_at": "2026-10-13T10:00:00"})
+    assert received.timestamp == "2026-10-13T10:00:00" and received.spoken_at is None
+
+
+def test_normalize_bee_time():
+    epoch_ms = datetime(2026, 10, 13, 10, 0, 0).timestamp() * 1000
+    assert normalize_bee_time(epoch_ms) == "2026-10-13T10:00:00"
+    assert normalize_bee_time(epoch_ms / 1000) == "2026-10-13T10:00:00"
+    assert normalize_bee_time(None) is None and normalize_bee_time("not a date") is None

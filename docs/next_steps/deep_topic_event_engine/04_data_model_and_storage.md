@@ -57,6 +57,7 @@ anchor_location: Optional[dict] = None       # median of first-segment fixes (do
 last_on_topic_at: Optional[str] = None
 paused_at: Optional[str] = None
 hard_close_deadline: Optional[str] = None    # set by closing cue / transit
+final_status: Literal["none", "pending", "synthesizing", "ready", "failed"] = "none"   # drives rehydration + UI
 pending_chunk_ids: List[str] = []            # pending window while PAUSED (doc 02 §4)
 research_ledger: List[dict] = []             # [{"query": str, "sources": [url]}]
 final_revision: int = 0
@@ -119,6 +120,7 @@ ALTER TABLE session_dossiers ADD COLUMN paused_at TEXT;
 ALTER TABLE session_dossiers ADD COLUMN hard_close_deadline TEXT;
 ALTER TABLE session_dossiers ADD COLUMN pending_chunk_ids_json TEXT;
 ALTER TABLE session_dossiers ADD COLUMN research_ledger_json TEXT;
+ALTER TABLE session_dossiers ADD COLUMN final_status TEXT NOT NULL DEFAULT 'none';
 ALTER TABLE session_dossiers ADD COLUMN final_revision INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE session_dossiers ADD COLUMN transitions_json TEXT;
 

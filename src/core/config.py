@@ -52,6 +52,21 @@ class Settings(BaseSettings):
     mock_ai: bool = Field(default=False, alias="MOCK_AI")
     agentcore_runtime_arn: str | None = Field(default=None, alias="AGENTCORE_RUNTIME_ARN")
 
+    # Deep Topic Event Engine (docs/next_steps/deep_topic_event_engine/)
+    event_engine_enabled: bool = Field(default=True, alias="EVENT_ENGINE_ENABLED")
+    event_profile: Literal["default", "demo"] = Field(default="default", alias="EVENT_PROFILE")
+    event_t_soft_seconds: float = Field(default=300.0, alias="EVENT_T_SOFT_SECONDS")
+    event_t_hard_seconds: float = Field(default=1800.0, alias="EVENT_T_HARD_SECONDS")
+    event_t_hard_after_close_cue_seconds: float = Field(
+        default=300.0, alias="EVENT_T_HARD_AFTER_CLOSE_CUE_SECONDS"
+    )
+    event_t_hard_transit_seconds: float = Field(default=120.0, alias="EVENT_T_HARD_TRANSIT_SECONDS")
+    event_t_checkpoint_seconds: float = Field(default=1200.0, alias="EVENT_T_CHECKPOINT_SECONDS")
+    event_min_segment_words: int = Field(default=300, alias="EVENT_MIN_SEGMENT_WORDS")
+    event_location_shift_meters: float = Field(default=400.0, alias="EVENT_LOCATION_SHIFT_METERS")
+    event_tick_seconds: float = Field(default=15.0, alias="EVENT_TICK_SECONDS")
+    event_synthesis_max_words: int = Field(default=6000, alias="EVENT_SYNTHESIS_MAX_WORDS")
+
     # Serving & MCP
     mcp_host: str = Field(default="0.0.0.0", alias="MCP_HOST")
     mcp_port: int = Field(default=8000, alias="MCP_PORT")

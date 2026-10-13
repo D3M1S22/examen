@@ -2,7 +2,8 @@ import asyncio
 import time
 import argparse
 import signal
-from typing import Any, List, Optional
+from datetime import datetime
+from typing import Any, Optional
 
 import sys
 from pathlib import Path
@@ -12,60 +13,29 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from src.ingestion.stream_convo import BeeClient
 from src.ingestion.debug import Debug
+from src.ingestion.event_engine import EventEngine, EventEngineRuntime, get_event_engine
 from src.ingestion.gatekeeper import aclassify_chunk, is_noop
 from src.ingestion.ring_buffer import ContextRingBuffer
-from src.ingestion.session_manager import SessionManager
+from src.core.config import settings
 from src.core.storage import get_storage_store
-from src.core.schemas import ChunkClassification, LocationTelemetry, UtteranceChunk
-
-
-async def analyze_text_model(
-    text: str, chunk_id: int, prior_context: Optional[str] = None
-) -> Optional[ChunkClassification]:
-    """Evaluates an audio chunk with the Semantic Gatekeeper, filtering out noops and qualifying actionable context."""
-    clean_text = text.strip()
-    if not clean_text:
-        return None
-
-    # Retrieve any active pending tasks from context store to prioritize expected routines
-    active_task_titles: List[str] = []
-    try:
-        store = get_storage_store()
-        pending_tasks = store.list_planned_tasks(status="pending")
-        active_task_titles = [t.title for t in pending_tasks if t.title]
-    except Exception:
-        # Storage lookup failure should not block screening
-        pass
-
-    classification: ChunkClassification = await aclassify_chunk(
-        transcript=clean_text,
-        active_tasks=active_task_titles if active_task_titles else None,
-        prior_context=prior_context,
-    )
-
-    if is_noop(classification):
-        print(f"  -> [Task {chunk_id} Screened] DROPPED (noop: {classification.summary_hint})")
-    else:
-        print(
-            f"  -> [Task {chunk_id} Screened] QUALIFIED for downstream pipeline: "
-            f"{classification.categories} (confidence={classification.confidence:.2f}, "
-            f"hint='{classification.summary_hint}')"
-        )
-    return classification
+from src.core.schemas import LocationTelemetry, UtteranceChunk
 
 
 class BeeStreamOrchestrator(Debug):
-    def __init__(self, debug_mode="none", max_chars=5000, max_duration=300, ring_buffer_capacity=4, store=None):
+    """Consumes the Bee event stream: screens each utterance, feeds the Deep Topic Event Engine
+    and dispatches qualified chunks to the LangGraph pipeline."""
+
+    def __init__(
+        self,
+        debug_mode="none",
+        ring_buffer_capacity=4,
+        store=None,
+        engine: Optional[EventEngine] = None,
+    ):
         super().__init__(debug_mode=debug_mode, sector_name="ORCHESTRATOR")
-        self.max_chars = max_chars
-        self.max_duration = max_duration 
         self.store = store
-        
-        self.text_buffer = ""
+
         self.last_input_time = time.time()
-        self.lock = asyncio.Lock()  
-        
-        self.response_queue = asyncio.Queue()
         self.chunk_counter = 0
         self.main_task = None  # Track the main loop
 
@@ -74,8 +44,14 @@ class BeeStreamOrchestrator(Debug):
         self.latest_telemetry: Optional[LocationTelemetry] = None
         self.debounce_window: float = 0.75  # 750ms debounce window for diarization
 
-        # Milestone 3.2: Macro Session & Micro-Event Decoupling
-        self.session_manager = SessionManager(store=self.store)
+        # Deep Topic Event Engine (macro events, segments, synthesis scheduling)
+        self.engine_enabled = settings.event_engine_enabled
+        if engine is not None:
+            self.engine = engine
+        elif store is not None:
+            self.engine = EventEngine(store=store)
+        else:
+            self.engine = get_event_engine()
 
         # Real-time state & telemetry tracking
         self.is_running = False
@@ -84,7 +60,7 @@ class BeeStreamOrchestrator(Debug):
         self.status = "IDLE"
 
     def get_status_dict(self) -> dict:
-        """Returns a snapshot of the orchestrator liveness, buffer state, and telemetry."""
+        """Returns a snapshot of the orchestrator liveness, event engine state, and telemetry."""
         now = time.time()
         is_streaming = (
             self.total_utterances_received > 0
@@ -93,19 +69,19 @@ class BeeStreamOrchestrator(Debug):
         is_listening = self.is_running and (
             self.last_heartbeat_time is not None or (now - self.last_input_time < 300.0)
         )
-        
+
         status_label = "STREAMING" if is_streaming else ("LISTENING" if is_listening else ("STANDBY" if self.is_running else "STOPPED"))
         return {
             "running": self.is_running,
             "status": status_label,
             "mode": "ambient_sse",
-            "buffer_chars": len(self.text_buffer),
             "chunks_screened": self.chunk_counter,
             "utterances_received": self.total_utterances_received,
             "last_heartbeat": self.last_heartbeat_time,
             "last_input_time": self.last_input_time,
             "has_location": self.latest_telemetry is not None,
-            "detail": f"Orchestrator {status_label.lower()}; {self.chunk_counter} chunks screened, {len(self.text_buffer)} chars in buffer",
+            "event_engine": self.engine.status_summary() if self.engine_enabled else None,
+            "detail": f"Orchestrator {status_label.lower()}; {self.chunk_counter} chunks screened",
         }
 
     def update_location(self, location_data: dict) -> LocationTelemetry:
@@ -114,7 +90,7 @@ class BeeStreamOrchestrator(Debug):
         lon = float(location_data.get("longitude", 0.0))
         place = location_data.get("name") or location_data.get("address") or location_data.get("place_name")
         accuracy = location_data.get("horizontal_accuracy") or location_data.get("accuracy_meters")
-        
+
         telemetry = LocationTelemetry(
             latitude=lat,
             longitude=lon,
@@ -125,6 +101,11 @@ class BeeStreamOrchestrator(Debug):
         self.debug(
             f"📍 Telemetry updated: ({lat:.4f}, {lon:.4f}) | Zone: '{telemetry.semantic_zone}' | Place: '{place}'"
         )
+        if self.engine_enabled:
+            try:
+                self.engine.on_location(telemetry.model_dump())
+            except Exception as e:
+                self.debug(f"Event engine location error: {e}")
         return telemetry
 
     def patch_diarization(
@@ -160,37 +141,34 @@ class BeeStreamOrchestrator(Debug):
         if not speaker_role or speaker_role == "unknown":
             speaker_role = "user" if speaker in ("speaker_0", "user") else ("contact" if speaker else "unknown")
 
+        # Best-known utterance time: spoken_at (Bee) > received_at (BeeClient) > now
+        spoken_at = utterance_data.get("spoken_at")
+        received_at = utterance_data.get("received_at")
+        timestamp = spoken_at or received_at or datetime.now().isoformat()
+
         chunk = UtteranceChunk(
             chunk_id=chunk_id,
             conversation_uuid=conv_uuid,
             text=text,
             speaker_id=speaker,
             speaker_role=speaker_role,
+            timestamp=timestamp,
+            received_at=received_at,
+            spoken_at=spoken_at,
             location=self.latest_telemetry.model_dump() if self.latest_telemetry else None,
         )
         self.ring_buffer.push(chunk)
         return chunk
 
     async def process_incoming_utterance(self, utterance_data: dict) -> Optional[dict]:
-        """Processes an incoming utterance chunk: attaches telemetry, buffers context, screens, and routes."""
+        """Processes an incoming utterance: buffers context, screens, feeds the event engine, and routes."""
         chunk = self.buffer_incoming_utterance(utterance_data)
         if not chunk:
             return None
 
+        self.chunk_counter += 1
         conv_uuid = chunk.conversation_uuid
         chunk_id = chunk.chunk_id
-
-        # Record into macro session buffer & detect boundary events (Milestone 3.2)
-        try:
-            dossier, boundary_triggered = self.session_manager.record_chunk(
-                session_id=conv_uuid,
-                text=chunk.text,
-                location=chunk.location,
-            )
-            if boundary_triggered:
-                self.debug(f"Boundary event triggered on session '{conv_uuid}'")
-        except Exception as e:
-            self.debug(f"Session manager record_chunk error: {e}")
 
         # Retrieve lightweight context for gatekeeper
         historical_context = self.ring_buffer.get_concatenated_context_text(conv_uuid, exclude_current=True)
@@ -199,7 +177,7 @@ class BeeStreamOrchestrator(Debug):
         # Gatekeeper evaluation
         active_task_titles = []
         try:
-            store = get_storage_store()
+            store = self.store or get_storage_store()
             active_task_titles = [t.title for t in store.list_planned_tasks(status="pending") if t.title]
         except Exception:
             pass
@@ -209,6 +187,19 @@ class BeeStreamOrchestrator(Debug):
             active_tasks=active_task_titles if active_task_titles else None,
             prior_context=rolling_hint,
         )
+        chunk.categories = list(classification.categories)
+
+        # Feed the event engine BEFORE the pipeline, so a chunk that opens an event is already
+        # event-managed when its micro-events are persisted.
+        event_id: Optional[str] = None
+        if self.engine_enabled:
+            try:
+                outcome = self.engine.record_chunk(chunk)
+                event_id = outcome.event_id
+                for t in outcome.transitions:
+                    self.debug(f"Event {t.rule}: -> {t.to_status} ({t.reason})")
+            except Exception as e:
+                self.debug(f"Event engine record_chunk error: {e}")
 
         if is_noop(classification):
             self.debug(f"Chunk '{chunk_id}' screened -> DROPPED (noop)")
@@ -227,13 +218,15 @@ class BeeStreamOrchestrator(Debug):
             "speaker": chunk.speaker_id,
             "speaker_role": chunk.speaker_role,
             "utterance_id": chunk.chunk_id,
-            "session_id": chunk.conversation_uuid,
+            "session_id": event_id or chunk.conversation_uuid,
+            "timestamp": chunk.timestamp,
+            "event_managed": event_id is not None,
         }
 
         try:
             from src.pipeline.app import agent_invocation
-            result = agent_invocation(payload)
-            return result
+            # agent_invocation is synchronous: keep it off the event loop (SSE/REST stay responsive)
+            return await asyncio.to_thread(agent_invocation, payload)
         except Exception as e:
             self.debug(f"Pipeline dispatch error: {e}")
             return None
@@ -250,96 +243,30 @@ class BeeStreamOrchestrator(Debug):
             spk = data.get("speaker", "")
             return self.patch_diarization(uid, spk)
         elif evt_type == "new-utterance":
+            self.total_utterances_received += 1
+            self.last_input_time = time.time()
+            self.status = "STREAMING"
             return await self.process_incoming_utterance(data)
         return None
 
-    async def flush_to_model(self, reason: str, text_to_process: str = None):
-        """Extracts the buffer, clears it, and queues the model task."""
-        async with self.lock:
-            # If no specific text chunk was passed, take the whole buffer
-            if text_to_process is None:
-                if not self.text_buffer.strip():
-                    return
-                text_to_process = self.text_buffer
-                self.text_buffer = ""
-                
-            self.last_input_time = time.time()
-            self.chunk_counter += 1
-            current_id = self.chunk_counter
-            
-        print(f"\n--- Trigger: {reason} (Chunk {current_id}) ---")
-        
-        rolling_hint = self.ring_buffer.get_rolling_summary_hint()
-        task = asyncio.create_task(analyze_text_model(text_to_process, current_id, prior_context=rolling_hint))
-        await self.response_queue.put(task)
-
-    async def _evaluate_buffer_limit(self, current_length: int):
-        """Evaluates the buffer limit and applies semantic chunking if necessary."""
-        if current_length < self.max_chars:
-            return
-
-        pass_to_model = None
-        async with self.lock:
-            # Find safe cut point (period or space)
-            cut_index = self.text_buffer.rfind('. ', 0, self.max_chars)
-            if cut_index == -1:
-                cut_index = self.text_buffer.rfind(' ', 0, self.max_chars)
-            
-            if cut_index != -1:
-                # Split the text safely without cutting words in half
-                chunk_to_send = self.text_buffer[:cut_index + 1].strip()
-                self.text_buffer = self.text_buffer[cut_index + 1:].strip()
-                pass_to_model = chunk_to_send
-            else:
-                # Fallback if there are no spaces at all
-                pass_to_model = self.text_buffer
-                self.text_buffer = ""
-                
-        if pass_to_model:
-            await self.flush_to_model("5000 Character Limit Reached", pass_to_model)
-
-    async def response_worker(self):
-        """Background worker that awaits and prints tasks sequentially."""
-        while True:
-            task = await self.response_queue.get()
-            try:
-                result = await task
-                if result:
-                    if hasattr(result, "categories"):
-                        status_str = "DROPPED (noop)" if is_noop(result) else f"QUALIFIED: {result.categories}"
-                        print(f"\n[GATEKEEPER CLASSIFICATION] {status_str} | Hint: {result.summary_hint} | Conf: {result.confidence:.2f}\n")
-                    else:
-                        print(f"\n[MODEL RESPONSE IN ORDER] {result}\n")
-            except Exception as e:
-                print(f"\n[MODEL ERROR] {e}\n")
-            finally:
-                self.response_queue.task_done()
-
-    async def timeout_monitor(self):
-        """Background loop checking if 5 minutes passed since the last text input."""
-        while True:
-            await asyncio.sleep(5) 
-            
-            async with self.lock:
-                has_data = len(self.text_buffer.strip()) > 0
-                time_passed = time.time() - self.last_input_time
-            
-            if has_data and time_passed >= self.max_duration:
-                await self.flush_to_model("5-Minute Inactivity Timeout")
-
     async def run(self):
-        """Main loop that ingests the stream and manages triggers."""
+        """Main loop that ingests the stream and drives the event engine runtime."""
         self.main_task = asyncio.current_task()
         self.is_running = True
         self.status = "LISTENING"
-        
-        monitor_task = asyncio.create_task(self.timeout_monitor())
-        worker_task = asyncio.create_task(self.response_worker())
-        
-        self.debug("Starting background tasks...")
-        
+
+        runtime: Optional[EventEngineRuntime] = None
+        if self.engine_enabled:
+            if self.engine is get_event_engine():
+                from src.ingestion.event_engine import get_event_engine_runtime
+                runtime = get_event_engine_runtime()
+            else:
+                runtime = EventEngineRuntime(self.engine)
+            runtime.ensure_started()
+
+        self.debug("Starting Bee stream ingestion...")
         bee = BeeClient(debug_mode=self.debug_mode)
-        
+
         try:
             async for event in bee.stream_events():
                 evt_name = event.get('event')
@@ -347,38 +274,12 @@ class BeeStreamOrchestrator(Debug):
                 if evt_name == "stream-heartbeat":
                     self.last_heartbeat_time = time.time()
                 await self.handle_event(event)
-
-                if evt_name == "new-utterance":
-                    self.total_utterances_received += 1
-                    self.status = "STREAMING"
-                    new_text = event.get("data", {}).get("text", "")
-                    if new_text:
-                        async with self.lock:
-                            if self.text_buffer:
-                                self.text_buffer += " "
-                            self.text_buffer += new_text
-                            
-                            self.last_input_time = time.time()
-                            current_length = len(self.text_buffer)
-                            
-                            self.debug(f"Buffer updated: {current_length}/{self.max_chars} chars")
-                        
-                        await self._evaluate_buffer_limit(current_length)
-                        
         except asyncio.CancelledError:
             pass
         finally:
             self.is_running = False
             self.status = "STOPPED"
             bee.stop()
-            monitor_task.cancel()
-            await self.flush_to_model("Shutdown Flush")
-            
-            if not self.response_queue.empty():
-                print("\nWaiting for remaining model responses to finish...")
-                await self.response_queue.join()
-            worker_task.cancel()
-
 
     async def shutdown(self):
         """Safely triggers cancellation of the main run loop only."""
@@ -389,29 +290,29 @@ class BeeStreamOrchestrator(Debug):
 async def main(orchestrator_instance):
     """Bootstraps the event loop and attaches OS signal handlers."""
     loop = asyncio.get_running_loop()
-    
+
     # Catch OS signals (e.g. from Docker/Colima) to trigger graceful shutdown
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(
-            sig, 
+            sig,
             lambda: asyncio.create_task(orchestrator_instance.shutdown())
         )
-        
+
     await orchestrator_instance.run()
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Bee Stream Ingestion Orchestrator")
     parser.add_argument(
-        '--debug', 
-        type=str, 
-        default="none", 
+        '--debug',
+        type=str,
+        default="none",
         help="Specify debug sector: 'all', 'bee', 'orchestrator', or 'none'"
     )
     args = parser.parse_args()
 
-    orchestrator = BeeStreamOrchestrator(debug_mode=args.debug, max_chars=5000, max_duration=300)
-    
+    orchestrator = BeeStreamOrchestrator(debug_mode=args.debug)
+
     try:
         asyncio.run(main(orchestrator))
     except (KeyboardInterrupt, asyncio.CancelledError):
