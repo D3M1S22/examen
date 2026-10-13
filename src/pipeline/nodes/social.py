@@ -405,8 +405,8 @@ def node_extract_social(state: ExamenState) -> Dict[str, Any]:
 
         if result and result.person_name and result.person_name.strip().lower() not in ("unknown", "none", "n/a", "null", ""):
             result.company_or_role = sanitize_company_or_role(result.company_or_role)
-            if not result.timestamp:
-                result.timestamp = datetime.now().isoformat()
+            # Always ground the timestamp on ingestion time: the LLM has no clock and hallucinates dates
+            result.timestamp = state.get("timestamp") or datetime.now().isoformat()
 
             if location and not result.location_encountered and location.get("place_name"):
                 result.location_encountered = location.get("place_name")

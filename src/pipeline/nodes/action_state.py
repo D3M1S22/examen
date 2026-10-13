@@ -224,8 +224,8 @@ def node_extract_action(state: ExamenState) -> Dict[str, Any]:
 
         # Validate confidence threshold
         if result and result.confidence >= 0.75:
-            if not result.timestamp:
-                result.timestamp = datetime.now().isoformat()
+            # Always ground the timestamp on ingestion time: the LLM has no clock and hallucinates dates
+            result.timestamp = state.get("timestamp") or datetime.now().isoformat()
 
             # Defensive check: if result matches a pending task but matched_task_id is missing, auto-resolve
             if not result.matched_task_id and pending_tasks:
