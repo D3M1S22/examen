@@ -49,7 +49,10 @@ In this phase R4 always resumes when on-topic content returns within `T_hard` (n
 
 REST/SSE/MCP extensions, Echo Show card, Next.js event view, simulator event mode + virtual clock + scenario player — [06](06_serving_and_ui.md).
 
-### Phase E — Docs & bookkeeping
+### Phase E — Docs & bookkeeping — ✅ DONE (2026-10-13)
+
+> ROADMAP Phase 4 added, original doc 03 marked as superseded for `deep_topic`, README and repository-structure doc updated, FRICTION_LOG entries for the Bee stream payload, Bedrock embeddings credentials and Titan V2 calibration.
+
 Update [ROADMAP.md](../ROADMAP.md) (new milestone), mark [03_session_merging_and_micro_event_splitting.md](../03_session_merging_and_micro_event_splitting.md) as extended by this spec, and add a `FRICTION_LOG.md` entry for the Bee stream payload findings.
 
 ---

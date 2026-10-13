@@ -62,7 +62,7 @@ Most voice assistants and wearable applications suffer from two structural bottl
 | :--- | :--- | :--- | :--- |
 | **🧠 Social Recall** | *"Nice to meet you Marco, I'm Tech Lead at Acme Corp, send me your repo..."* | Extracts name, company, role, salient topics, and bilateral commitments. | *"Alexa, who did I meet today?"* ➔ Visual profile card on Echo Show with pending follow-up action items. |
 | **🔒 Action-State & Routine** | *"I'm turning off the stove and unplugging the iron."* or *"I just merged PR #42."* | Verifies first-person completed actions, classifies safety vs work domains, timestamps with confidence score. | *"Alexa, did I unplug the iron?"* ➔ Instant voice confirmation and certified green verification badge on screen. |
-| **📚 Deep Meeting & Lecture Intelligence** | Discussions on complex bugs, architecture, new libraries (*AgentCore, DuckDB*), or academic lectures. | Detects salient topics, invokes autonomous web search for documentation/examples, synthesizes an **Executive Briefing**. | *"Alexa, show me the briefing on tech discussed today"* ➔ Interactive report on Echo Show with sources and action items. |
+| **📚 Deep Meeting & Lecture Intelligence** | Discussions on complex bugs, architecture, new libraries (*AgentCore, DuckDB*), or whole academic lectures. | Groups the speech into **events** (a lecture survives its coffee break; two back-to-back lectures in the same room are told apart), synthesizes a briefing **per part** at each break and a **consolidated event briefing** at the end, reusing web research across parts. | *"Alexa, what is this lecture about so far?"* / *"summarize my afternoon meeting"* ➔ Event timeline on Echo Show with part briefings, final synthesis, sources and linked actions/contacts/tasks. |
 
 ---
 
@@ -74,6 +74,7 @@ Most voice assistants and wearable applications suffer from two structural bottl
    - **Social:** Structured Pydantic schema for contacts, roles, and commitments.
    - **Action-State:** Strict veracity filtering to prevent false positives (completed actions only, discarding doubts or future intentions).
    - **Deep Topic Research:** Formulates search queries, retrieves documentation via web search, and synthesizes executive dossiers with Claude 3.5 Sonnet.
+   - **Deep Topic Event Engine:** Instead of researching every utterance, deep-topic speech is accumulated into events (time, GPS, explicit cues and topic similarity via Titan Text Embeddings V2) and synthesized per part and per event — see [deep_topic_event_engine](docs/next_steps/deep_topic_event_engine/00_overview.md).
 4. **Context Knowledge Store:** Unified persistence layer with SQLite + FTS5 for local zero-latency development, and AWS DynamoDB + AgentCore Memory for cloud scale.
 5. **Serving Layer (Alexa+ MCP Server & Ext-Apps UI):** Streamable-HTTP **Model Context Protocol (MCP)** server exposing tools to Alexa+, coupled with an interactive touch UI for Echo Show via **ext-apps iframe SDK**.
 
@@ -111,12 +112,20 @@ The engine underwent a rigorous 25-scenario live evaluation against **NVIDIA Nem
 # 1. Setup virtual environment
 source .venv/bin/activate
 
-# 2. Run complete test suite (85 unit & integration tests, 100% pass)
+# 2. Run complete test suite (272 unit & integration tests, 100% pass)
 pytest
 
-# 3. Launch Unified FastMCP Server & Echo Show Web Dashboard (port 8000)
+# 3. Build the Next.js dashboard (static export served by the MCP server) — Bun is the package manager
+./scripts/build_ui.sh            # = cd src/web_ui && bun install && bun run build
+
+# 4. Launch Unified FastMCP Server & Echo Show Web Dashboard (port = MCP_PORT, default 8000)
 python -m src.serving.mcp_server
+
+# Optional: replay the event-engine scenarios / calibrate topic similarity thresholds
+python scripts/replay_event_scenarios.py --calibrate
 ```
+
+> **Event engine demo:** in the dashboard open *Ambient Simulator → Deep Topic Event Engine*, pick a scenario (e.g. "Single lecture interrupted by a coffee break"), press **Play scenario**, then **Close events** and open *Topic Dossiers → Events*. `EVENT_PROFILE=demo` compresses the timers (20 s / 90 s) for live typing.
 
 - **Web Dashboard & Echo Show Ext-App:** Open [http://localhost:8000/](http://localhost:8000/) or [http://localhost:8000/ext-app/](http://localhost:8000/ext-app/) to monitor verified Peace of Mind actions, daily routine checklists, social rolodex cards, and run ambient audio simulations.
 - **Alexa+ MCP Endpoint:** Connect any MCP-compliant assistant to `http://localhost:8000/mcp`.
@@ -146,6 +155,7 @@ Detailed technical, architectural, and operational documentation is organized ac
 * 📄 [07_repository_structure_modules.md](docs/07_repository_structure_modules.md): Detailed repository layout, modular monorepo mapping by deployment target, and developer quickstart.
 * 📄 [08_real_telemetry_and_bee_hardware_spec.md](docs/08_real_telemetry_and_bee_hardware_spec.md): Real hardware telemetry integration, Bee Wearable CLI capabilities, latency tracking architecture, and sector-by-sector frontend data contracts.
 * 🚀 [ROADMAP.md](docs/next_steps/ROADMAP.md): Evolution Roadmap, pipeline refinements status dashboard, and execution plan for Next Steps.
+* 🧠 [deep_topic_event_engine/](docs/next_steps/deep_topic_event_engine/00_overview.md): Deep Topic Event Engine specification, state machine, topic continuity calibration, synthesis scheduling, serving/UI and test plan.
 
 ---
 
@@ -171,6 +181,8 @@ In strict accordance with the non-modifying model directive, the current LLM mod
 ### 2. Bee Wearable Hardware & Edge Ingestion (Awaiting Physical Device Link)
 - [x] **Precompiled Standalone Binary Resolution:** Native fallback to `resources/bee-cli/dist/platforms/mac-arm64/bee` (or linux/windows) removing dependency on global `bun`/`node` on host.
 - [ ] **Live Audio Stream Linking:** Run `stream_convo.py` / `BeeStreamOrchestrator` when physical Bee Wearable is actively broadcasting via paired mobile companion.
+- [ ] **Capture real `bee stream --json` samples:** confirm the event-type field, any utterance time field (`spoken_at`) and the `new-conversation` / `update-conversation` payloads consumed by the event engine (see FRICTION_LOG 2026-10-13).
+- [ ] **Re-calibrate topic similarity on real lectures:** `python scripts/replay_event_scenarios.py --calibrate` after adding recorded scenarios (the Titan V2 same/different gap is narrow: 0.36 / 0.43).
 - [ ] **Webhook Gateway Ingestion:** Transition from local subprocess polling to Bee Cloud webhook callback ingestion (`bee stream --webhook-endpoint <URL>`).
 - [ ] **Hardware Battery & RSSI Telemetry Bridge:** Track upstream Bee Wearable API updates for battery level and Bluetooth RSSI exposure.
 

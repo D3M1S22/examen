@@ -1,6 +1,6 @@
 # 🔄 Session Merging & Micro-Event Splitting
 
-> **Document Status:** Architectural Specification  
+> **Document Status:** Architectural Specification — **superseded for `deep_topic` by the [Deep Topic Event Engine](deep_topic_event_engine/00_overview.md)** (2026-10-13). The micro-event linking described here is still valid; macro-session aggregation, boundary detection and synthesis scheduling are now specified and implemented there (events decoupled from Bee `conversation_uuid`, segment + final briefings, topic-based resume/split).  
 > **Source Task:** [Next_steps.txt](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/Next_steps.txt) — Item 3  
 > **Related Components:** [orchestrator.py](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/src/ingestion/orchestrator.py), [graph.py](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/src/pipeline/graph.py), [database.py](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/src/core/database.py), [mcp_server.py](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/src/serving/mcp_server.py)
 

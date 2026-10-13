@@ -3,7 +3,7 @@
 > **Document Status:** Active Execution Plan & Project Tracking Board  
 > **Source Documents:** [00_overview.md](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/docs/next_steps/00_overview.md) to [06_social_web_enrichment.md](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/docs/next_steps/06_social_web_enrichment.md)  
 > **Target Branch:** `Next_steps` / `main`  
-> **Current Baseline:** v1.3.0 (154/154 Pytest suites passing 100% green, FastMCP + Echo Show Ext-Apps + Web UI live)
+> **Current Baseline:** v1.4.0 (272/272 Pytest suites passing 100% green, Deep Topic Event Engine + Next.js event timeline live)
 
 ---
 
@@ -24,7 +24,14 @@
 │  Phase 3: Ingestion Stream & Macro Session Engine  │ Medium   │ High   │ Docs 02, 03 │ ✅ COMPLETED│
 │    ├─ M3.1: Context Ring Buffer & GPS Telemetry    │ P2       │ High   │ Doc 02      │ ✅ DONE   │
 │    └─ M3.2: Session Merging & Micro-Event Forking  │ P3       │ High   │ Doc 03      │ ✅ DONE   │
+│  Phase 4: Deep Topic Event Engine                  │ High     │ High   │ DTEE 00-07  │ ✅ COMPLETED│
+│    ├─ M4.1: Event lifecycle (time, GPS, cues)      │ P1       │ High   │ DTEE 01, 05 │ ✅ DONE   │
+│    ├─ M4.2: Part & consolidated synthesis          │ P1       │ Medium │ DTEE 03, 04 │ ✅ DONE   │
+│    ├─ M4.3: Topic continuity (Titan V2 embeddings) │ P1       │ High   │ DTEE 02     │ ✅ DONE   │
+│    └─ M4.4: Event serving & dashboard timeline     │ P2       │ Medium │ DTEE 06     │ ✅ DONE   │
 └──────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+> **DTEE** = [docs/next_steps/deep_topic_event_engine/](deep_topic_event_engine/00_overview.md)
 ```
 
 ---
@@ -242,6 +249,37 @@
 
 ---
 
+### Phase 4: Deep Topic Event Engine (COMPLETED ✅)
+> **Goal:** Turn a stream of short utterances into coherent lecture/meeting dossiers: one event per lecture (surviving breaks), separate events for back-to-back lectures, progressive part briefings and a consolidated final briefing — at a fraction of the per-utterance research cost.
+> **Specification:** [deep_topic_event_engine/](deep_topic_event_engine/00_overview.md) (supersedes the `deep_topic` part of [03_session_merging_and_micro_event_splitting.md](03_session_merging_and_micro_event_splitting.md)).
+
+#### 🎯 Milestone 4.1: Event Lifecycle — time, GPS & cues (Phase A)
+* **Status:** ✅ **COMPLETED**
+* [x] `EventEngine` ([event_engine.py](../../src/ingestion/event_engine.py)): pure, clock-injectable state machine (ACTIVE / PAUSED / CONCLUDED, rules R0–R8), events decoupled from Bee `conversation_uuid`, accuracy-aware GPS shift, IT/EN pause & closing cues, tick loop + restart rehydration.
+* [x] Utterance receive-time captured in `stream_convo.py` and propagated end to end; `session_chunks` per-utterance log; `deep_topic` routed to research only outside events (`event_managed`); `node_persist` no longer concludes sessions; pipeline calls moved off the event loop.
+* [x] Defaults `T_soft = 5 min`, `T_hard = 30 min` (+ `EVENT_PROFILE=demo`).
+
+#### 🎯 Milestone 4.2: Part & Consolidated Synthesis (Phase B)
+* **Status:** ✅ **COMPLETED**
+* [x] Stage 3C refactored into `extract_topics` / `research` / `synthesize_briefing`; `PipelineEventSynthesizer` with event outline, long-transcript condensation, gap-only final research, "During this event" micro-events section, single-part promotion.
+* [x] Per-event query ledger + global `web_search_cache` (24 h TTL); real Bedrock run: the final briefing of a two-part lecture needed **0 new searches**.
+
+#### 🎯 Milestone 4.3: Topic Continuity (Phase C)
+* **Status:** ✅ **COMPLETED**
+* [x] Titan Text Embeddings V2 (512 dims) with heuristic and LLM-judge fallbacks ([topic_continuity.py](../../src/ingestion/topic_continuity.py)); micro-windows keep terse `noop` lecture sentences on-topic; pending window decides resume (R4) vs. new event (R7); drift without a pause (R9) with chunk-level split refinement; Bee conversation titles and gatekeeper event hint.
+* [x] Calibrated on 5 replay scenarios ([event_scenarios.json](../../resources/event_scenarios.json)): **5/5 with both backends**; thresholds `0.42 / 0.37` (embedding), `0.20 / 0.10` (heuristic).
+
+#### 🎯 Milestone 4.4: Event Serving & Dashboard Timeline (Phase D)
+* **Status:** ✅ **COMPLETED**
+* [x] REST: event summaries/detail/chunks, pause ("synthesize now"), resume, split, merge, simulator virtual clock, scenarios; SSE `event_*` / `segment_*`; MCP `get_live_event_outline`, partial-briefing fallback in `get_session_dossier`, Echo Show event parts.
+* [x] Next.js: *Topic Dossiers → Events* timeline with decision audit trail and manual operations, simulator event mode + scenario player, live event banner in Overview.
+
+#### ⏭️ Open items
+* [ ] Capture real `bee stream --json` payloads (event type field, utterance time, conversation events) with the physical device.
+* [ ] Record real lectures as replay scenarios and re-run `scripts/replay_event_scenarios.py --calibrate`.
+
+---
+
 ## 📈 Dependency Graph & Recommended Execution Sequence
 
 ```mermaid
@@ -268,6 +306,13 @@ graph TD
         M32["✅ M3.2: Session Merging & Micro-Event Splitting"]:::done
     end
 
+    subgraph Phase_4 ["Phase 4: Deep Topic Event Engine"]
+        M41["✅ M4.1: Event Lifecycle<br/>(time, GPS, cues)"]:::done
+        M42["✅ M4.2: Part & Final Synthesis<br/>(ledger + search cache)"]:::done
+        M43["✅ M4.3: Topic Continuity<br/>(Titan V2 embeddings)"]:::done
+        M44["✅ M4.4: Event Serving & Timeline UI"]:::done
+    end
+
     B0 --> M11
     B0 --> M12
     B0 --> M13
@@ -277,6 +322,11 @@ graph TD
 
     M12 & M13 --> M31
     M31 --> M32
+    M32 --> M41
+    M11 --> M42
+    M41 --> M42
+    M41 --> M43
+    M42 & M43 --> M44
 ```
 
 ---

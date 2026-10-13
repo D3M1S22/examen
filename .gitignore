@@ -36,3 +36,9 @@ bee-sync/
 **/node_modules/
 **/.next/
 **/out/
+
+# Frontend: Bun is the package manager (bun.lock); never commit npm/yarn/pnpm lockfiles
+src/web_ui/package-lock.json
+src/web_ui/yarn.lock
+src/web_ui/pnpm-lock.yaml
+*.tsbuildinfo
