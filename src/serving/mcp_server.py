@@ -867,10 +867,11 @@ async def api_cards_preview(request: Request) -> JSONResponse:
     """Returns rich card payloads and spoken voice text for Echo Show Ext-App templates."""
     store = get_storage_store()
     template = request.query_params.get("template")
+    query = request.query_params.get("query") or request.query_params.get("q")
 
     # 1. Briefing card
     from src.serving.tools.topic_tools import execute_get_topic_briefing
-    briefing_card = execute_get_topic_briefing(store=store)
+    briefing_card = execute_get_topic_briefing(topic_query=query, store=store) if query else execute_get_topic_briefing(store=store)
     if not briefing_card.get("found"):
         briefing_card = {
             "found": True,
@@ -904,10 +905,16 @@ async def api_cards_preview(request: Request) -> JSONResponse:
 
     # 2. Social profile card
     from src.serving.tools.social_tools import execute_get_contact_profile
-    contacts_with_wp = [c for c in store.search_social_contact("") if c.web_profile]
-    if contacts_with_wp:
-        profile_card = execute_get_contact_profile(contacts_with_wp[0].person_name, force_enrich=False, store=store)
+    if query:
+        profile_card = execute_get_contact_profile(query, force_enrich=False, store=store)
     else:
+        contacts_with_wp = [c for c in store.search_social_contact("") if c.web_profile]
+        if contacts_with_wp:
+            profile_card = execute_get_contact_profile(contacts_with_wp[0].person_name, force_enrich=False, store=store)
+        else:
+            profile_card = {"found": False}
+
+    if not profile_card.get("found"):
         profile_card = {
             "found": True,
             "display_template": "SOCIAL_PROFILE_CARD",
@@ -960,15 +967,18 @@ async def api_cards_preview(request: Request) -> JSONResponse:
 
     # 3. Commitments card
     from src.serving.tools.social_tools import execute_get_social_commitments
-    commitments_card = execute_get_social_commitments(store=store)
+    commitments_card = execute_get_social_commitments(contact_name=query, store=store) if query else execute_get_social_commitments(store=store)
 
     # 4. Action verified badge
     from src.serving.tools.action_tools import execute_verify_action_status, execute_get_daily_actions_recap, execute_get_upcoming_tasks
-    actions = store.list_recent_actions(limit=1)
-    if actions:
-        action_card = execute_verify_action_status(action_query=actions[0].action_type, store=store)
+    if query:
+        action_card = execute_verify_action_status(action_query=query, store=store)
     else:
-        action_card = {
+        actions = store.list_recent_actions(limit=1)
+        if actions:
+            action_card = execute_verify_action_status(action_query=actions[0].action_type, store=store)
+        else:
+            action_card = {
             "status": "verified",
             "action_type": "unplug_clothes_iron",
             "domain": "safety",

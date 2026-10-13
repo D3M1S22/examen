@@ -785,5 +785,27 @@ class TestServerRestApiAndWebUi:
         assert "card_payload" in data
         assert data["card_payload"]["template"] == "SESSION_DOSSIER_VIEWER"
 
+    def test_api_cards_preview_with_query_parameters(self, client):
+        store = get_storage_store()
+        store.save_action(VerifiedAction(
+            action_type="kitchen_stove_off",
+            domain="safety",
+            raw_statement="Ho spento i fornelli",
+            confidence=0.99,
+            timestamp=datetime.now().isoformat(),
+        ))
+        res_action = client.get("/api/cards/preview?template=ACTION_VERIFIED_BADGE&query=stove")
+        assert res_action.status_code == 200
+        data_action = res_action.json()
+        assert data_action["status"] == "verified"
+        assert "fornelli" in data_action["raw_statement"].lower() or "stove" in data_action["action_type"].lower()
+
+        # Unverified query
+        res_unverified = client.get("/api/cards/preview?template=ACTION_VERIFIED_BADGE&query=garage_door_closed")
+        assert res_unverified.status_code == 200
+        data_unverified = res_unverified.json()
+        assert data_unverified["status"] == "unverified"
+
+
 
 

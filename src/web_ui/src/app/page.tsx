@@ -5,6 +5,7 @@ import useSWR from "swr";
 import { PlannedTask, VerifiedAction, SocialEntity, BriefingReport } from "@/types/schemas";
 
 import { SystemBar } from "@/components/SystemBar";
+import { StatusDock } from "@/components/ui/StatusDock";
 import { SystemFooter } from "@/components/SystemFooter";
 import { OverviewHub } from "@/components/views/OverviewHub";
 import { PeaceOfMind } from "@/components/views/PeaceOfMind";
@@ -281,6 +282,13 @@ export default function Dashboard() {
         onClose={() => setShowGlobalEchoModal(false)}
       />
 
+      {/* Left-Side Floating Status Dock (MacBook Pro Style) */}
+      <StatusDock
+        sseConnected={sseConnected}
+        statusData={statusData}
+        onOpenEchoModal={() => setShowGlobalEchoModal(true)}
+      />
+
       <div>
         <SystemBar
           activeTab={activeTab}
@@ -292,7 +300,7 @@ export default function Dashboard() {
         />
 
         {/* MAIN CONTENT AREA */}
-        <main className="max-w-[1600px] mx-auto px-gutter-desktop pt-8 pb-16">
+        <main className="max-w-[1600px] mx-auto px-gutter-desktop pl-16 sm:pl-20 2xl:pl-gutter-desktop pt-8 pb-16">
           {activeTab === "overview" && (
             <OverviewHub
               statusData={statusData}

@@ -26,28 +26,6 @@ export function SystemBar({
     { id: "simulator", label: "AMBIENT SIMULATOR" },
   ];
 
-  // Dynamic Telemetry State
-  const beeDevice = statusData?.telemetry?.bee_device;
-  const isBeeConnected = !!beeDevice?.connected || beeDevice?.status === "STREAMING";
-  const isBeeListening = beeDevice?.status === "LISTENING";
-  const beeAccount = beeDevice?.account;
-  const beeLabel = isBeeConnected
-    ? "BEE: STREAMING"
-    : isBeeListening
-    ? (beeAccount ? `BEE: LISTENING (${beeAccount.toUpperCase()})` : "BEE: LISTENING")
-    : beeAccount
-    ? `BEE: STANDBY (${beeAccount.toUpperCase()})`
-    : "BEE: DISCONNECTED";
-  const beeDotClass = isBeeConnected
-    ? "status-dot-active"
-    : isBeeListening
-    ? "bg-cyan-400 animate-pulse"
-    : beeAccount
-    ? "bg-amber-400"
-    : "bg-zinc-600";
-
-  const awsRegion = (statusData?.config?.aws_region || "us-east-1").toUpperCase();
-  const reasonerShort = (statusData?.config?.reasoner_model || "nova").split(":").shift()?.split(".").pop()?.toUpperCase() || "ACTIVE";
 
   return (
     <header className="sys-bar">
@@ -57,25 +35,6 @@ export function SystemBar({
           EXAMEN OS
           <span className="text-label-sm tracking-widest text-secondary uppercase font-mono ml-2 opacity-60">
             HUB-02
-          </span>
-        </div>
-      </div>
-
-      <div className="hidden xl:flex items-center gap-4 shrink-0 mx-6">
-        <div className="status-badge" title={sseConnected ? "SSE live connection active" : "Attempting SSE stream reconnection"}>
-          <div className={`status-dot ${sseConnected ? "status-dot-active" : "bg-amber-400"}`}></div>
-          <span className="font-mono text-[9px] uppercase tracking-wider">
-            {sseConnected ? "SSE: LIVE STREAM" : "SSE: CONNECTING"}
-          </span>
-        </div>
-        <div className="status-badge" title={beeDevice?.detail || "Bee wearable hardware connection"}>
-          <div className={`status-dot ${beeDotClass}`}></div>
-          <span className="font-mono text-[9px] uppercase tracking-wider">{beeLabel}</span>
-        </div>
-        <div className="status-badge" title={`AWS Bedrock AgentCore Runtime in ${awsRegion}`}>
-          <div className="status-dot status-dot-active"></div>
-          <span className="font-mono text-[9px] uppercase tracking-wider">
-            BEDROCK: {reasonerShort}
           </span>
         </div>
       </div>
