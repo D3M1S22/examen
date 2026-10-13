@@ -32,7 +32,10 @@ In this phase R4 always resumes when on-topic content returns within `T_hard` (n
 3. Segment, checkpoint and final (map-reduce) synthesis; single-segment shortcut — [03](03_synthesis_scheduling.md) §3.
 4. Query ledger + `web_search_cache` — [03](03_synthesis_scheduling.md) §4.
 
-### Phase C — Topic continuity
+### Phase C — Topic continuity — ✅ IMPLEMENTED (2026-10-13)
+
+> Code: [topic_continuity.py](../../../src/ingestion/topic_continuity.py) (backends, profile, judge), [event_engine.py](../../../src/ingestion/event_engine.py) (windows, pending R4/R7, drift R9, Bee conversation events, gatekeeper hint), [scenario_replay.py](../../../src/ingestion/scenario_replay.py), [replay_event_scenarios.py](../../../scripts/replay_event_scenarios.py), scenarios in [event_scenarios.json](../../../resources/event_scenarios.json); tests: [test_topic_continuity.py](../../../tests/test_topic_continuity.py). **5/5 scenarios pass with both the embedding (Titan V2) and the heuristic backend.** Calibration results and the refinements found during calibration are in [02](02_topic_continuity_detection.md) §8.
+
 1. `get_embedding_model()` + `TopicSimilarity` backends (`embedding`, `heuristic`, `llm` judge) — [02](02_topic_continuity_detection.md) §6.
 2. Topic profile, micro-windows, on-topic activity — [02](02_topic_continuity_detection.md) §2–3.
 3. Pending window with R4/R7, drift R9, cue biasing — [02](02_topic_continuity_detection.md) §4–5, [01](01_event_model_and_state_machine.md) §4.1.

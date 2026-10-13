@@ -2,7 +2,7 @@ from enum import Enum
 import re
 import uuid
 from datetime import datetime
-from typing import Annotated, Any, List, Literal, Optional, Union
+from typing import Annotated, Any, Dict, List, Literal, Optional, Union
 from pydantic import BaseModel, Field, field_validator, model_validator
 from typing_extensions import TypedDict
 
@@ -584,6 +584,16 @@ class EventTransitionLog(BaseModel):
     detail: Optional[str] = Field(default=None, description="Human-readable detail.")
 
 
+class TopicProfile(BaseModel):
+    """Rolling representation of what an event is about (docs/.../02_topic_continuity_detection.md)."""
+    centroid: Optional[List[float]] = Field(default=None, description="EWMA of on-topic window embeddings.")
+    centroid_weight: float = Field(default=0.0, description="Number of windows blended into the centroid.")
+    keywords: Dict[str, float] = Field(default_factory=dict, description="Decayed content-term weights.")
+    segment_titles: List[str] = Field(default_factory=list, description="Titles of synthesized segments.")
+    bee_titles: List[str] = Field(default_factory=list, description="Bee conversation titles/summaries.")
+    updated_at: Optional[str] = Field(default=None, description="ISO time of the last update.")
+
+
 class SessionDossier(BaseModel):
     session_id: str = Field(description="Event identifier (engine-minted) or legacy Bee conversation UUID.")
     title: Optional[str] = Field(default=None, description="Evolving or finalized title of the macro session.")
@@ -653,6 +663,12 @@ class SessionDossier(BaseModel):
     research_ledger: List[dict] = Field(
         default_factory=list,
         description="Web research already run for this event: [{'query', 'sources', 'segment_id', 'kind'}].",
+    )
+    topic_profile: Optional[TopicProfile] = Field(
+        default=None, description="Rolling topic profile used for continuity decisions."
+    )
+    pending_chunk_ids: List[str] = Field(
+        default_factory=list, description="Chunks awaiting the resume-vs-split decision while paused."
     )
     transitions: List[EventTransitionLog] = Field(
         default_factory=list, description="Lifecycle audit trail."

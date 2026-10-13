@@ -68,6 +68,26 @@ class Settings(BaseSettings):
     event_synthesis_max_words: int = Field(default=6000, alias="EVENT_SYNTHESIS_MAX_WORDS")
     web_search_cache_ttl_seconds: int = Field(default=86400, alias="WEB_SEARCH_CACHE_TTL_SECONDS")
 
+    # Topic continuity (Deep Topic Event Engine, Phase C)
+    topic_similarity_backend: Literal["embedding", "heuristic", "none"] = Field(
+        default="embedding", alias="TOPIC_SIMILARITY_BACKEND"
+    )
+    embedding_model_id: str = Field(default="amazon.titan-embed-text-v2:0", alias="BEDROCK_EMBEDDING_MODEL")
+    embedding_dimensions: int = Field(default=512, alias="BEDROCK_EMBEDDING_DIMENSIONS")
+    # Titan Text Embeddings V2 (512 dims), calibrated 2026-10-13 on resources/event_scenarios.json:
+    # same-event windows 0.43-0.68, different-event windows 0.23-0.36
+    topic_sim_same: float = Field(default=0.42, alias="TOPIC_SIM_SAME")
+    topic_sim_different: float = Field(default=0.37, alias="TOPIC_SIM_DIFFERENT")
+    # Calibrated 2026-10-13 on resources/event_scenarios.json (scripts/replay_event_scenarios.py)
+    topic_sim_same_heuristic: float = Field(default=0.20, alias="TOPIC_SIM_SAME_HEURISTIC")
+    topic_sim_different_heuristic: float = Field(default=0.10, alias="TOPIC_SIM_DIFFERENT_HEURISTIC")
+    topic_window_min_chunks: int = Field(default=3, alias="TOPIC_WINDOW_MIN_CHUNKS")
+    topic_window_min_words: int = Field(default=120, alias="TOPIC_WINDOW_MIN_WORDS")
+    topic_pending_max_age_seconds: float = Field(default=90.0, alias="TOPIC_PENDING_MAX_AGE_SECONDS")
+    topic_drift_windows: int = Field(default=3, alias="TOPIC_DRIFT_WINDOWS")
+    topic_drift_min_seconds: float = Field(default=120.0, alias="TOPIC_DRIFT_MIN_SECONDS")
+    topic_llm_judge: bool = Field(default=True, alias="TOPIC_LLM_JUDGE")
+
     # Serving & MCP
     mcp_host: str = Field(default="0.0.0.0", alias="MCP_HOST")
     mcp_port: int = Field(default=8000, alias="MCP_PORT")

@@ -38,6 +38,7 @@ from src.core.schemas import (
 from src.core.storage import get_storage_store
 from src.core.storage.base import AbstractContextStore
 from src.ingestion.session_manager import calculate_haversine_distance
+from src.ingestion.topic_continuity import ContinuityConfig, SimilarityScore, TopicSimilarity
 
 logger = logging.getLogger("examen.ingestion.event_engine")
 
@@ -131,17 +132,56 @@ _CLOSING_CUE_PATTERNS = [
     r"\bla\s+(?:lezione|riunione)\s+(?:è|e')\s+(?:finita|conclusa|terminata)\b",
 ]
 
+_RESUME_CUE_PATTERNS = [
+    r"\briprendiamo\b",
+    r"\bdove\s+eravamo(?:\s+rimasti)?\b",
+    r"\btorniamo\s+(?:a|al|alla|allo|ai|agli|alle|all')\b",
+    r"\blet'?s\s+get\s+back\b",
+    r"\bwhere\s+were\s+we\b",
+    r"\bback\s+to\s+(?:where\s+we|our)\b",
+]
+
+_OPENING_CUE_PATTERNS = [
+    r"\boggi\s+parliamo\s+di\b",
+    r"\bbenvenuti\s+(?:al|alla|nel)\s+(?:corso|lezione|seminario)\b",
+    r"\bin\s+questa\s+lezione\s+(?:vedremo|parliamo|introduciamo)\b",
+    r"\b(?:il\s+)?prossim[oa]\s+(?:relatore|relatrice|intervento|talk)\b",
+    r"\btoday'?s\s+(?:topic|lecture)\s+is\b",
+    r"\bnext\s+(?:speaker|talk)\b",
+    r"\bwelcome\s+to\s+(?:the\s+)?(?:course|class|lecture|talk|session)\b",
+]
+
 _PAUSE_CUE_RE = re.compile("|".join(_PAUSE_CUE_PATTERNS), re.IGNORECASE)
 _CLOSING_CUE_RE = re.compile("|".join(_CLOSING_CUE_PATTERNS), re.IGNORECASE)
+_RESUME_CUE_RE = re.compile("|".join(_RESUME_CUE_PATTERNS), re.IGNORECASE)
+_OPENING_CUE_RE = re.compile("|".join(_OPENING_CUE_PATTERNS), re.IGNORECASE)
+
+
+@dataclass(frozen=True)
+class Cues:
+    pause: bool = False
+    closing: bool = False
+    resume: bool = False
+    opening: bool = False
+
+
+def detect_cue_flags(text: str) -> Cues:
+    """All lifecycle cues of an utterance (pause/closing drive R2; resume/opening bias doc 02 §4)."""
+    if not text:
+        return Cues()
+    closing = bool(_CLOSING_CUE_RE.search(text))
+    return Cues(
+        pause=bool(_PAUSE_CUE_RE.search(text)) and not closing,
+        closing=closing,
+        resume=bool(_RESUME_CUE_RE.search(text)),
+        opening=bool(_OPENING_CUE_RE.search(text)),
+    )
 
 
 def detect_cues(text: str) -> Tuple[bool, bool]:
     """Returns (pause_cue, closing_cue) for an utterance."""
-    if not text:
-        return False, False
-    closing = bool(_CLOSING_CUE_RE.search(text))
-    pause = bool(_PAUSE_CUE_RE.search(text))
-    return pause and not closing, closing
+    cues = detect_cue_flags(text)
+    return cues.pause, cues.closing
 
 
 # ---------------------------------------------------------------------------
@@ -192,6 +232,7 @@ class ChunkSignal:
     closing_cue: bool = False
     location_shift: bool = False
     transit: bool = False
+    defer_resume: bool = False   # topic continuity decides resume vs. split on a pending window
 
 
 @dataclass(frozen=True)
@@ -227,7 +268,7 @@ def next_pre_chunk_transition(
             if snap.hard_close_deadline is None or candidate < snap.hard_close_deadline:
                 return Transition("R5", "paused", "transit_deadline", sig.ts,
                                   "Wearer is in transit: hard close brought forward", new_deadline=candidate)
-        if sig.on_topic:
+        if sig.on_topic and not sig.defer_resume:
             return Transition("R4", "active", "resume_on_topic", sig.ts, "On-topic speech returned within T_hard")
         return None
 
@@ -350,8 +391,12 @@ class EventEngine:
         config: Optional[EngineConfig] = None,
         clock: Optional[Clock] = None,
         synthesizer: Optional[Synthesizer] = None,
+        continuity: Optional[TopicSimilarity] = None,
     ):
+        """continuity: topic similarity for Phase C decisions (resume vs. split, drift, on-topic
+        windows). None keeps Phase A behaviour (resume on the first on-topic chunk)."""
         self._store = store
+        self.continuity = continuity
         self.config = config or EngineConfig.from_settings()
         self.clock: Clock = clock or time.time
         self._synthesizer: Optional[Synthesizer] = synthesizer
@@ -366,6 +411,18 @@ class EventEngine:
         self._last_fix_verdict = False
         self._anchor_samples: List[dict] = []
         self._rehydrated = False
+        # Topic continuity state (Phase C)
+        self._window: List[UtteranceChunk] = []
+        self._drift: List[Tuple[List[UtteranceChunk], SimilarityScore]] = []
+        self._prev_window: Optional[Tuple[List[UtteranceChunk], str]] = None   # (chunks, verdict)
+        self._drift_prelude: List[UtteranceChunk] = []   # undecided window right before the drift
+        self._pending: List[UtteranceChunk] = []
+        self._pending_started: Optional[float] = None
+        self._pending_ext = 0
+        self._pending_resume_cue = False
+        self._pending_opening_cue = False
+        self._bee_boundary_since_pause = False
+        self._bee_conv_ids: Dict[str, str] = {}
 
     # -- infrastructure ------------------------------------------------------
 
@@ -413,6 +470,12 @@ class EventEngine:
                 for seg in self._current.segments:
                     if seg.status in ("closed", "synthesizing"):
                         self._enqueue(SynthesisJob("segment", self._current.session_id, seg.segment_id))
+                if self._current.pending_chunk_ids:
+                    ids = set(self._current.pending_chunk_ids)
+                    self._pending = [
+                        c for c in self.store.list_session_chunks(self._current.session_id) if c.chunk_id in ids
+                    ]
+                    self._pending_started = to_epoch(self._pending[0].timestamp) if self._pending else None
             try:
                 for ev in self.store.list_events_pending_final():
                     for seg in ev.segments:
@@ -446,9 +509,36 @@ class EventEngine:
                 "open_segment_words": seg.word_count if seg else 0,
                 "last_on_topic_at": ev.last_on_topic_at,
                 "paused_at": ev.paused_at,
+                "pending_chunks": len(self._pending),
+                "top_terms": [
+                    t for t, _ in sorted((ev.topic_profile.keywords if ev.topic_profile else {}).items(),
+                                         key=lambda kv: kv[1], reverse=True)[:8]
+                ],
             },
             "pending_jobs": len(self._jobs),
+            "continuity_backend": self.continuity.config.backend if self.continuity else None,
         }
+
+    def active_event_hint(self) -> str:
+        """One-line gatekeeper context while an event is open (doc 02 §3): raises deep_topic recall
+        for terse lecture sentences."""
+        ev = self._current
+        if ev is None:
+            return ""
+        title = ev.title if ev.title and not ev.title.startswith(_PLACEHOLDER_TITLE_PREFIX) else None
+        kind = ev.domain if ev.domain and ev.domain != "general" else "lecture or meeting"
+        if title:
+            subject = f"about '{title}'"
+        elif ev.topic_profile and ev.topic_profile.keywords:
+            terms = sorted(ev.topic_profile.keywords.items(), key=lambda kv: kv[1], reverse=True)[:6]
+            subject = "(frequent terms: " + ", ".join(t for t, _ in terms) + ")"
+        else:
+            return ""
+        state = "is in progress" if ev.status == "active" else "is paused and may resume"
+        return (
+            f"ONGOING EVENT: a {kind} {subject} {state}. Utterances that continue explaining this subject "
+            f"are deep_topic, even when short or informal."
+        )
 
     # -- inputs ---------------------------------------------------------------
 
@@ -457,7 +547,8 @@ class EventEngine:
         self.rehydrate()
         ts = to_epoch(chunk.timestamp) or self.clock()
         on_topic = "deep_topic" in (chunk.categories or [])
-        pause_cue, closing_cue = detect_cues(chunk.text)
+        cues = detect_cue_flags(chunk.text)
+        pause_cue, closing_cue = cues.pause, cues.closing
         applied: List[Transition] = []
 
         with self._lock:
@@ -469,26 +560,30 @@ class EventEngine:
                 closing_cue=closing_cue,
                 location_shift=self._location_shift_confirmed(chunk.location),
                 transit=bool(chunk.location and chunk.location.get("semantic_zone") == "transit"),
+                defer_resume=self.continuity is not None,
             )
 
             for _ in range(6):
                 t = next_pre_chunk_transition(self._snapshot(), sig, self.config)
                 if not t:
                     break
-                self._apply(t, chunk=chunk)
                 applied.append(t)
+                applied.extend(self._apply(t, chunk=chunk))
                 if t.rule == "R6":
                     # A location shift is consumed by the conclusion; the next event re-anchors
                     sig = replace(sig, location_shift=False)
 
             if self._current is not None:
                 self._append(chunk, ts, on_topic)
+                if self.continuity is not None:
+                    applied.extend(self._continuity_on_chunk(chunk, ts, on_topic, cues))
+            if self._current is not None:
                 for _ in range(3):
                     t = next_post_chunk_transition(self._snapshot(), sig, self.config)
                     if not t:
                         break
-                    self._apply(t, chunk=chunk)
                     applied.append(t)
+                    applied.extend(self._apply(t, chunk=chunk))
 
             if self._current is not None:
                 self._save(self._current)
@@ -513,8 +608,13 @@ class EventEngine:
                 t = next_tick_transition(self._snapshot(), now, self.config)
                 if not t:
                     break
-                self._apply(t)
                 applied.append(t)
+                applied.extend(self._apply(t))
+            if (
+                self.continuity is not None and self._current is not None
+                and self._current.status == "paused" and self._pending
+            ):
+                applied.extend(self._maybe_decide_pending(now))
             if self._current is not None and applied:
                 self._save(self._current)
         return applied
@@ -531,8 +631,8 @@ class EventEngine:
                 return []
             if self._location_shift_confirmed(location):
                 t = Transition("R6", "concluded", "location_shift", now, "Wearer moved away from the event location")
-                self._apply(t)
                 applied.append(t)
+                applied.extend(self._apply(t))
             elif self._current.status == "paused" and location.get("semantic_zone") == "transit":
                 snap = self._snapshot()
                 candidate = now + self.config.t_hard_transit
@@ -553,6 +653,7 @@ class EventEngine:
             t = Transition("R8", "concluded", "manual", now, "Concluded manually")
             if self._current is not None and self._current.session_id == session_id:
                 dossier = self._current
+                self._reset_continuity_state(dossier)
                 self._apply(t)
                 return dossier
             dossier = self.store.get_session_dossier(session_id)
@@ -583,24 +684,36 @@ class EventEngine:
             segment_words=seg.word_count if seg else 0,
         )
 
-    def _apply(self, t: Transition, chunk: Optional[UtteranceChunk] = None) -> None:
+    def _apply(self, t: Transition, chunk: Optional[UtteranceChunk] = None) -> List[Transition]:
+        """Applies a transition; returns follow-up transitions it triggered (e.g. carried pending speech)."""
         if t.rule == "R0":
             self._open(t, chunk)
-            return
+            return []
 
         ev = self._current
         if ev is None:
-            return
+            return []
         from_status = ev.status
 
         if t.to_status == "concluded":
+            # On a hard timeout, speech waiting for the resume decision belongs to the next event
+            carry = list(self._pending) if t.rule == "R5" else []
+            self._reset_continuity_state(ev)
             self._conclude(ev, t)
             self._save(ev)
             self._current = None
-            return
+            if carry:
+                follow = Transition("R0", "active", "open_from_pending", to_epoch(carry[0].timestamp) or t.at,
+                                    "On-topic speech that arrived during the expired pause")
+                self._open_from_chunks(carry, follow)
+                return [follow]
+            return []
 
         if t.rule in ("R1", "R2"):
             self._close_open_segment(ev, t.reason, t.at)
+            self._window = []
+            self._drift = []
+            self._bee_boundary_since_pause = False
             ev.status = "paused"
             ev.paused_at = to_iso(t.at)
             if t.new_deadline is not None:
@@ -623,6 +736,265 @@ class EventEngine:
         elif t.reason == "transit_deadline" and t.new_deadline is not None:
             ev.hard_close_deadline = to_iso(t.new_deadline)
             self._log(ev, from_status, t)
+        return []
+
+    def _reset_continuity_state(self, ev: Optional[SessionDossier] = None) -> None:
+        self._window = []
+        self._drift = []
+        self._prev_window = None
+        self._drift_prelude = []
+        self._pending = []
+        self._pending_started = None
+        self._pending_ext = 0
+        self._pending_resume_cue = False
+        self._pending_opening_cue = False
+        self._bee_boundary_since_pause = False
+        if ev is not None:
+            ev.pending_chunk_ids = []
+
+    # -- topic continuity (Phase C, doc 02) -------------------------------------------
+
+    def _window_ready(self, chunks: List[UtteranceChunk], extensions: int = 0) -> bool:
+        cfg = self.continuity.config
+        words = sum(len(c.text.split()) for c in chunks)
+        factor = 1 + extensions
+        return len(chunks) >= cfg.window_min_chunks * factor and words >= cfg.window_min_words * factor
+
+    @staticmethod
+    def _join(chunks: List[UtteranceChunk]) -> str:
+        return " ".join(c.text.strip() for c in chunks if c.text and c.text.strip())
+
+    def _continuity_on_chunk(self, chunk: UtteranceChunk, ts: float, on_topic: bool, cues: Cues) -> List[Transition]:
+        ev = self._current
+        if ev is None:
+            return []
+        if ev.status == "active":
+            self._window.append(chunk)
+            if self._window_ready(self._window):
+                return self._evaluate_window()
+            return []
+        if ev.status == "paused" and (self._pending or on_topic):
+            if not self._pending:
+                self._pending_started = ts
+                self._pending_ext = 0
+                self._pending_resume_cue = False
+                self._pending_opening_cue = False
+            self._pending.append(chunk)
+            ev.pending_chunk_ids.append(chunk.chunk_id)
+            self._pending_resume_cue = self._pending_resume_cue or cues.resume
+            self._pending_opening_cue = self._pending_opening_cue or cues.opening
+            return self._maybe_decide_pending(ts)
+        return []
+
+    def _evaluate_window(self) -> List[Transition]:
+        """Scores a micro-window of the ACTIVE event: on-topic windows keep the event alive (even if the
+        gatekeeper said noop) and feed the profile; sustained different-topic windows split it (R9)."""
+        ev = self._current
+        chunks, self._window = self._window, []
+        text = self._join(chunks)
+        has_deep = any("deep_topic" in (c.categories or []) for c in chunks)
+        score, vec = self.continuity.score(text, ev.topic_profile)
+        if score is None or not self.continuity.is_mature(ev.topic_profile):
+            # The profile is still being built from the opening windows: no drift decisions yet
+            verdict = "same" if has_deep or (score is not None and score.verdict() == "same") else "undecided"
+        else:
+            verdict = score.verdict()
+            if verdict == "same" and len(chunks) >= 4:
+                # A window straddling a subject change can still look "same" overall: if its second
+                # half alone is clearly different, treat it as a boundary (no profile update).
+                tail = chunks[len(chunks) // 2:]
+                tail_score, _ = self.continuity.score(self._join(tail), ev.topic_profile)
+                if tail_score is not None and tail_score.verdict() == "different":
+                    verdict = "undecided"
+
+        drifting = bool(self._drift)
+        prev_window, self._prev_window = self._prev_window, (chunks, verdict)
+        if verdict == "same" or (verdict == "undecided" and has_deep and not drifting):
+            last_ts = max(to_epoch(c.timestamp) or 0.0 for c in chunks)
+            current_last = to_epoch(ev.last_on_topic_at) or 0.0
+            if last_ts > current_last:
+                ev.last_on_topic_at = to_iso(last_ts)
+            # Only clearly on-topic windows (or the opening ones) shape the profile: an undecided
+            # window may straddle a subject change and would contaminate it.
+            if verdict == "same" or not self.continuity.is_mature(ev.topic_profile):
+                ev.topic_profile = self.continuity.update(ev.topic_profile, text, vec)
+            if verdict == "same":
+                self._drift = []
+            return []
+
+        # Drift evidence: clearly different topical windows start/extend a drift sequence; undecided
+        # windows extend an ongoing one (without touching the profile) but never start it.
+        if (verdict == "different" and has_deep) or (verdict == "undecided" and drifting):
+            if not drifting:
+                # A window straddling the subject change is usually undecided: keep it to refine the
+                # split point at chunk level if the drift is confirmed.
+                self._drift_prelude = list(prev_window[0]) if prev_window and prev_window[1] == "undecided" else []
+            self._drift.append((chunks, score))
+            cfg = self.continuity.config
+            clear = sum(1 for _, s in self._drift if s is not None and s.verdict() == "different")
+            first = to_epoch(self._drift[0][0][0].timestamp) or 0.0
+            last = to_epoch(self._drift[-1][0][-1].timestamp) or 0.0
+            if (
+                len(self._drift) >= cfg.drift_windows
+                and clear >= min(2, cfg.drift_windows)
+                and last - first >= cfg.drift_min_seconds
+            ):
+                return self._split_on_drift()
+        return []
+
+    def _split_on_drift(self) -> List[Transition]:
+        """R9: a new subject took over without a pause. Chunks from the first drifting window move to
+        a new event; the old event concludes."""
+        ev = self._current
+        drift_chunks = [c for window, _ in self._drift for c in window]
+        last_score = self._drift[-1][1]
+        drift_chunks = self._refine_split(ev, drift_chunks) + drift_chunks
+        split_at = to_epoch(drift_chunks[0].timestamp) or self.now()
+        seg = ev.open_segment
+        if seg is not None:
+            seg.word_count = max(0, seg.word_count - sum(len(c.text.split()) for c in drift_chunks))
+            seg.end_time = to_iso(split_at)
+        t = Transition("R9", "concluded", "topic_drift", split_at,
+                       f"{len(self._drift)} consecutive windows on a different subject; {last_score.describe()}")
+        self._apply(t)
+        follow = Transition("R0", "active", "open_from_drift", split_at, "New subject detected without a pause")
+        self._open_from_chunks(drift_chunks, follow)
+        return [t, follow]
+
+    def _refine_split(self, ev: SessionDossier, drift_chunks: List[UtteranceChunk]) -> List[UtteranceChunk]:
+        """Chunk-level split refinement: trailing chunks of the straddling window that are closer to
+        the new subject than to the old profile move to the new event."""
+        if not self._drift_prelude or ev.topic_profile is None:
+            return []
+        # An explicit opening cue ("il prossimo intervento è...", "next speaker") marks the boundary
+        for idx, chunk in enumerate(self._drift_prelude):
+            if detect_cue_flags(chunk.text).opening:
+                return list(self._drift_prelude[idx:])
+        new_profile = self.continuity.update(None, self._join(drift_chunks))
+        margin = self.continuity.config.split_refine_margin
+        moved: List[UtteranceChunk] = []
+        for chunk in reversed(self._drift_prelude):
+            s_new, _ = self.continuity.score(chunk.text, new_profile)
+            s_old, _ = self.continuity.score(chunk.text, ev.topic_profile)
+            if s_new is None or s_old is None or s_new.value - s_old.value < margin:
+                break
+            moved.insert(0, chunk)
+        return moved
+
+    def _maybe_decide_pending(self, now: float) -> List[Transition]:
+        """Resume (R4) vs. new event (R7) once the pending window is informative enough (doc 02 §4)."""
+        ev = self._current
+        cfg = self.continuity.config
+        age = now - (self._pending_started or now)
+        aged_out = age >= cfg.pending_max_age
+        if not (self._window_ready(self._pending, self._pending_ext) or aged_out):
+            return []
+
+        text = self._join(self._pending)
+        score, vec = self.continuity.score(text, ev.topic_profile)
+        if score is None:
+            verdict, detail = "same", "No topic profile yet: resuming"
+        else:
+            resume_bias = cfg.resume_cue_bias if self._pending_resume_cue else 0.0
+            split_bias = (cfg.opening_cue_bias if self._pending_opening_cue else 0.0) + (
+                cfg.bee_boundary_bias if self._bee_boundary_since_pause else 0.0
+            )
+            verdict = score.verdict(resume_bias=resume_bias, split_bias=split_bias)
+            detail = score.describe()
+            if resume_bias or split_bias:
+                detail += f"; cue bias resume={resume_bias:.2f} split={split_bias:.2f}"
+            if verdict == "undecided":
+                if self._pending_ext < cfg.pending_max_extensions and not aged_out:
+                    self._pending_ext += 1
+                    return []
+                title = ev.title if ev.title and not ev.title.startswith(_PLACEHOLDER_TITLE_PREFIX) else None
+                judged = self.continuity.judge(text, ev.topic_profile, self._previous_text(ev), title)
+                verdict = judged if judged in ("same", "different") else "same"
+                detail += f"; judge={judged or 'n/a'} -> {verdict}"
+
+        if verdict == "same":
+            return [self._resume_with_pending(text, vec, detail)]
+        return self._split_after_pause(detail)
+
+    def _previous_text(self, ev: SessionDossier, words: int = 150) -> str:
+        chunks = self.store.list_session_chunks(ev.session_id, in_segments_only=True)
+        return " ".join(" ".join(c.text for c in chunks).split()[-words:])
+
+    def _resume_with_pending(self, text: str, vec: Optional[List[float]], detail: str) -> Transition:
+        ev = self._current
+        pending = list(self._pending)
+        first_ts = to_epoch(pending[0].timestamp) or self.now()
+        last_ts = to_epoch(pending[-1].timestamp) or first_ts
+        t = Transition("R4", "active", "resume_same_topic", first_ts, detail)
+        self._reset_continuity_state(ev)
+        self._apply(t)
+        seg = ev.open_segment
+        self.store.assign_chunks([c.chunk_id for c in pending], ev.session_id, seg.segment_id, on_topic=True)
+        seg.word_count += sum(len(c.text.split()) for c in pending)
+        seg.end_time = to_iso(last_ts)
+        ev.last_on_topic_at = to_iso(last_ts)
+        ev.topic_profile = self.continuity.update(ev.topic_profile, text, vec)
+        return t
+
+    def _split_after_pause(self, detail: str) -> List[Transition]:
+        ev = self._current
+        pending = list(self._pending)
+        at = to_epoch(pending[0].timestamp) or self.now()
+        self._reset_continuity_state(ev)
+        t = Transition("R7", "concluded", "new_topic_after_pause", at, detail)
+        self._apply(t)
+        follow = Transition("R0", "active", "open_from_pending", at, "Different subject after the pause")
+        self._open_from_chunks(pending, follow)
+        return [t, follow]
+
+    def _open_from_chunks(self, chunks: List[UtteranceChunk], t: Transition) -> None:
+        """Opens a new event whose first segment is made of already-logged chunks (R7/R9/R5 carry)."""
+        self._open(t, chunks[0])
+        ev = self._current
+        seg = ev.open_segment
+        self.store.assign_chunks([c.chunk_id for c in chunks], ev.session_id, seg.segment_id, on_topic=True)
+        seg.word_count = sum(len(c.text.split()) for c in chunks)
+        last_ts = to_epoch(chunks[-1].timestamp) or t.at
+        seg.end_time = to_iso(last_ts)
+        ev.last_on_topic_at = to_iso(last_ts)
+        for c in chunks:
+            if c.conversation_uuid and c.conversation_uuid not in ev.conversation_uuids:
+                ev.conversation_uuids.append(c.conversation_uuid)
+        if self.continuity is not None:
+            ev.topic_profile = self.continuity.update(None, self._join(chunks))
+        self._save(ev)
+
+    def on_bee_conversation(self, event_type: str, data: Dict[str, Any]) -> None:
+        """Bee conversation lifecycle (doc 05 §2.4): a new conversation during a pause slightly favours a
+        split; titles/summaries of conversations belonging to the open event enrich its topic profile."""
+        self.rehydrate()
+        conv = data.get("conversation") or {}
+        conv_id = conv.get("id") or data.get("conversation_id")
+        conv_uuid = conv.get("uuid")
+        with self._lock:
+            if conv_id is not None and conv_uuid:
+                self._bee_conv_ids[str(conv_id)] = conv_uuid
+            ev = self._current
+            if ev is None:
+                return
+            if event_type == "new-conversation":
+                if ev.status == "paused":
+                    self._bee_boundary_since_pause = True
+                return
+            conv_uuid = conv_uuid or self._bee_conv_ids.get(str(conv_id))
+            if self.continuity is None or not conv_uuid or conv_uuid not in ev.conversation_uuids:
+                return
+            texts = [x for x in (conv.get("title"), conv.get("short_summary"), data.get("short_summary")) if x]
+        for text in texts:
+            vec = self.continuity.embed(text)
+            with self._lock:
+                ev = self._current
+                if ev is None or conv_uuid not in ev.conversation_uuids:
+                    return
+                from src.core.schemas import TopicProfile
+
+                ev.topic_profile = self.continuity.blend_title(ev.topic_profile or TopicProfile(), text, vec, source="bee")
+                self._save(ev)
 
     def _open(self, t: Transition, chunk: Optional[UtteranceChunk]) -> None:
         start_iso = to_iso(t.at)
@@ -642,6 +1014,8 @@ class EventEngine:
         self._open_segment(ev, t.at)
         self._log(ev, None, t)
         self._current = ev
+        self._window = []
+        self._drift = []
         self._shift_strikes = 0
         self._last_fix_key = self._fix_key(location) if location else None
         self._last_fix_verdict = False
@@ -860,6 +1234,10 @@ class EventEngine:
         briefing, research = _unpack_outcome(self.synthesizer.segment(text, session_id, outline=outline, kind=kind))
         if briefing is None:
             raise RuntimeError("Synthesizer returned no briefing")
+        title_vec = (
+            self.continuity.embed(briefing.topic_title)
+            if self.continuity is not None and briefing.topic_title else None
+        )
 
         with self._lock:
             ev = self._load(session_id)
@@ -877,6 +1255,8 @@ class EventEngine:
             if briefing.topic_title and briefing.topic_title not in ev.key_discussion_points:
                 ev.key_discussion_points.append(briefing.topic_title)
             self._record_research(ev, research, segment_id=segment_id, kind=kind)
+            if self.continuity is not None and briefing.topic_title and ev.topic_profile is not None:
+                ev.topic_profile = self.continuity.blend_title(ev.topic_profile, briefing.topic_title, title_vec)
             self._save(ev)
             payload = self._summary(ev)
         payload["briefing"] = briefing.model_dump()
@@ -1069,7 +1449,8 @@ class EventEngineRuntime:
         while True:
             await asyncio.sleep(self.engine.config.tick_seconds)
             try:
-                self.engine.tick()
+                # Ticks may call the embedding model / LLM judge: keep them off the event loop
+                await asyncio.to_thread(self.engine.tick)
             except Exception as e:
                 logger.error(f"Event engine tick failed: {e}", exc_info=True)
 
@@ -1091,10 +1472,16 @@ _engine: Optional[EventEngine] = None
 _runtime: Optional[EventEngineRuntime] = None
 
 
+def build_continuity_from_settings() -> Optional[TopicSimilarity]:
+    """Topic continuity configured from settings (None when TOPIC_SIMILARITY_BACKEND=none)."""
+    cfg = ContinuityConfig.from_settings()
+    return TopicSimilarity(cfg) if cfg else None
+
+
 def get_event_engine() -> EventEngine:
     global _engine
     if _engine is None:
-        _engine = EventEngine()
+        _engine = EventEngine(continuity=build_continuity_from_settings())
     return _engine
 
 

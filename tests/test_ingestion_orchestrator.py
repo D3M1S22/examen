@@ -127,3 +127,25 @@ def test_normalize_bee_time():
     assert normalize_bee_time(epoch_ms) == "2026-10-13T10:00:00"
     assert normalize_bee_time(epoch_ms / 1000) == "2026-10-13T10:00:00"
     assert normalize_bee_time(None) is None and normalize_bee_time("not a date") is None
+
+
+@pytest.mark.asyncio
+async def test_active_event_hint_reaches_gatekeeper(orchestrator, monkeypatch):
+    seen = []
+
+    async def _classify(transcript, active_tasks=None, prior_context=None):
+        seen.append(prior_context)
+        return ChunkClassification(categories=["deep_topic"], confidence=0.9, summary_hint="")
+
+    monkeypatch.setattr("src.ingestion.orchestrator.aclassify_chunk", _classify)
+    monkeypatch.setattr(orchestrator.engine, "active_event_hint", lambda: "ONGOING EVENT: a lecture about 'Calculus'")
+    await orchestrator.process_incoming_utterance({"id": "u1", "text": LECTURE, "received_at": "2026-10-13T10:00:00"})
+    assert seen and "ONGOING EVENT" in seen[0]
+
+
+@pytest.mark.asyncio
+async def test_bee_conversation_events_are_forwarded(orchestrator):
+    calls = []
+    orchestrator.engine.on_bee_conversation = lambda event_type, data: calls.append((event_type, data))
+    await orchestrator.handle_event({"event": "update-conversation", "data": {"conversation": {"id": 3, "title": "Analisi"}}})
+    assert calls == [("update-conversation", {"conversation": {"id": 3, "title": "Analisi"}})]

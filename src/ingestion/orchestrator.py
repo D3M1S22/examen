@@ -13,7 +13,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from src.ingestion.stream_convo import BeeClient
 from src.ingestion.debug import Debug
-from src.ingestion.event_engine import EventEngine, EventEngineRuntime, get_event_engine
+from src.ingestion.event_engine import (
+    EventEngine,
+    EventEngineRuntime,
+    build_continuity_from_settings,
+    get_event_engine,
+)
 from src.ingestion.gatekeeper import aclassify_chunk, is_noop
 from src.ingestion.ring_buffer import ContextRingBuffer
 from src.core.config import settings
@@ -49,7 +54,7 @@ class BeeStreamOrchestrator(Debug):
         if engine is not None:
             self.engine = engine
         elif store is not None:
-            self.engine = EventEngine(store=store)
+            self.engine = EventEngine(store=store, continuity=build_continuity_from_settings())
         else:
             self.engine = get_event_engine()
 
@@ -182,10 +187,14 @@ class BeeStreamOrchestrator(Debug):
         except Exception:
             pass
 
+        # While an event is open, tell the gatekeeper what it is about (raises deep_topic recall)
+        event_hint = self.engine.active_event_hint() if self.engine_enabled else ""
+        prior_context = "\n".join(part for part in (rolling_hint, event_hint) if part) or None
+
         classification = await aclassify_chunk(
             transcript=chunk.text,
             active_tasks=active_task_titles if active_task_titles else None,
-            prior_context=rolling_hint,
+            prior_context=prior_context,
         )
         chunk.categories = list(classification.categories)
 
@@ -194,7 +203,8 @@ class BeeStreamOrchestrator(Debug):
         event_id: Optional[str] = None
         if self.engine_enabled:
             try:
-                outcome = self.engine.record_chunk(chunk)
+                # May call the embedding model / LLM judge: keep it off the event loop
+                outcome = await asyncio.to_thread(self.engine.record_chunk, chunk)
                 event_id = outcome.event_id
                 for t in outcome.transitions:
                     self.debug(f"Event {t.rule}: -> {t.to_status} ({t.reason})")
@@ -242,6 +252,13 @@ class BeeStreamOrchestrator(Debug):
             uid = str(data.get("utterance_id", ""))
             spk = data.get("speaker", "")
             return self.patch_diarization(uid, spk)
+        elif evt_type in ("new-conversation", "update-conversation", "update-conversation-summary"):
+            if self.engine_enabled:
+                try:
+                    await asyncio.to_thread(self.engine.on_bee_conversation, evt_type, data)
+                except Exception as e:
+                    self.debug(f"Event engine conversation event error: {e}")
+            return None
         elif evt_type == "new-utterance":
             self.total_utterances_received += 1
             self.last_input_time = time.time()

@@ -17,6 +17,7 @@ from src.core.schemas import (
     SocialCommitment,
     SocialEntity,
     SocialWebProfile,
+    TopicProfile,
     UtteranceChunk,
     VerifiedAction,
 )
@@ -267,6 +268,8 @@ class SQLiteContextStore(AbstractContextStore):
                 "ALTER TABLE session_dossiers ADD COLUMN final_revision INTEGER NOT NULL DEFAULT 0;",
                 "ALTER TABLE session_dossiers ADD COLUMN transitions_json TEXT;",
                 "ALTER TABLE session_dossiers ADD COLUMN research_ledger_json TEXT;",
+                "ALTER TABLE session_dossiers ADD COLUMN topic_profile_json TEXT;",
+                "ALTER TABLE session_dossiers ADD COLUMN pending_chunk_ids_json TEXT;",
             ):
                 try:
                     cursor.execute(ddl)
@@ -1220,8 +1223,8 @@ class SQLiteContextStore(AbstractContextStore):
                  linked_micro_events_json, final_briefing_id, created_at,
                  conversation_uuids_json, segments_json, anchor_location_json, last_on_topic_at,
                  paused_at, hard_close_deadline, final_status, final_revision, transitions_json,
-                 research_ledger_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 research_ledger_json, topic_profile_json, pending_chunk_ids_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 dossier.session_id,
                 dossier.title,
@@ -1246,6 +1249,8 @@ class SQLiteContextStore(AbstractContextStore):
                 dossier.final_revision,
                 _dump([t.model_dump() for t in dossier.transitions]),
                 _dump(dossier.research_ledger),
+                dossier.topic_profile.model_dump_json() if dossier.topic_profile else None,
+                _dump(dossier.pending_chunk_ids),
             ))
             conn.commit()
         return dossier.session_id
@@ -1261,6 +1266,14 @@ class SQLiteContextStore(AbstractContextStore):
                 return json.loads(raw)
             except (TypeError, ValueError):
                 return default
+
+        def _load_profile(raw: Any) -> Optional[TopicProfile]:
+            if not raw:
+                return None
+            try:
+                return TopicProfile(**raw)
+            except Exception:
+                return None
 
         linked_events: List[MicroEventRef] = []
         for item in _load("linked_micro_events_json", []):
@@ -1323,6 +1336,8 @@ class SQLiteContextStore(AbstractContextStore):
             final_revision=(row["final_revision"] if "final_revision" in keys and row["final_revision"] else 0),
             transitions=transitions,
             research_ledger=_load("research_ledger_json", []),
+            topic_profile=_load_profile(_load("topic_profile_json", None)),
+            pending_chunk_ids=_load("pending_chunk_ids_json", []),
         )
 
     def get_session_dossier(self, session_id: Optional[str] = None) -> Optional[SessionDossier]:
@@ -1469,6 +1484,28 @@ class SQLiteContextStore(AbstractContextStore):
                 "VALUES (?, ?, ?, ?)",
                 (query_norm, provider, json.dumps(results, ensure_ascii=False), datetime.now().isoformat()),
             )
+            conn.commit()
+
+    def assign_chunks(
+        self,
+        chunk_ids: List[str],
+        session_id: str,
+        segment_id: Optional[str],
+        on_topic: Optional[bool] = None,
+    ) -> None:
+        """Moves logged chunks to an event/segment (resume after pause, split on topic change)."""
+        if not chunk_ids:
+            return
+        placeholders = ",".join("?" for _ in chunk_ids)
+        sql = f"UPDATE session_chunks SET session_id = ?, segment_id = ?"
+        params: List[Any] = [session_id, segment_id]
+        if on_topic is not None:
+            sql += ", on_topic = ?"
+            params.append(1 if on_topic else 0)
+        sql += f" WHERE chunk_id IN ({placeholders})"
+        params.extend(chunk_ids)
+        with self._get_connection() as conn:
+            conn.execute(sql, params)
             conn.commit()
 
     def append_chunk_to_session(

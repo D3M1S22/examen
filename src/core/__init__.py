@@ -16,6 +16,7 @@ from src.core.schemas import (
     MicroEventRef,
     SessionDossier,
     SessionSegment,
+    TopicProfile,
     ExamenState,
 )
 
@@ -46,6 +47,7 @@ __all__ = [
     "MicroEventRef",
     "SessionDossier",
     "SessionSegment",
+    "TopicProfile",
     "ExamenState",
 ]
 

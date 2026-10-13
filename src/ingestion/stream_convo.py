@@ -174,6 +174,16 @@ class BeeClient(Debug):
                                     "conversation_uuid": data.get("conversation_id") or data.get("data", {}).get("conversation_id") or "default_session",
                                 }
                             }
+                        elif msg_type in ("new-conversation", "update-conversation", "update-conversation-summary"):
+                            payload = data.get("data") if isinstance(data.get("data"), dict) else data
+                            yield {"event": msg_type, "data": payload}
+                        elif not msg_type and isinstance(data.get("conversation"), dict):
+                            # `bee stream --json` prints only the SSE data: detect conversation events structurally
+                            conv = data["conversation"]
+                            inferred = "update-conversation" if (conv.get("short_summary") or conv.get("title")) else "new-conversation"
+                            yield {"event": inferred, "data": data}
+                        elif not msg_type and "conversation_id" in data and "short_summary" in data:
+                            yield {"event": "update-conversation-summary", "data": data}
                         elif "timestamp" in data and not msg_type:
                             yield {
                                 "event": "stream-heartbeat",

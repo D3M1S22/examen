@@ -50,7 +50,13 @@ from src.core.schemas import (
 )
 from src.core.storage import get_storage_store
 from src.core.storage.sqlite_store import SQLiteContextStore
-from src.ingestion.event_engine import EngineConfig, EventEngine, Transition, to_iso
+from src.ingestion.event_engine import (
+    EngineConfig,
+    EventEngine,
+    Transition,
+    build_continuity_from_settings,
+    to_iso,
+)
 from src.ingestion.gatekeeper import classify_chunk, is_noop
 from src.pipeline.graph import pipeline_graph
 
@@ -88,6 +94,7 @@ def get_live_engine() -> EventEngine:
             store=get_storage_store(),
             config=EngineConfig.from_settings(),
             clock=lambda: time.time() + EVENT_MODE["clock_offset"],
+            continuity=build_continuity_from_settings(),
         )
     return _LIVE_ENGINE
 
@@ -415,9 +422,11 @@ def run_pipeline_test(
     print_section("Stage 1: Semantic Gatekeeper Screening", "🛡️", CYAN)
     t0_gate = time.perf_counter()
 
+    event_hint = get_live_engine().active_event_hint() if EVENT_MODE["enabled"] else ""
     classification: ChunkClassification = classify_chunk(
         transcript=transcript,
         active_tasks=active_titles if active_titles else None,
+        prior_context=event_hint or None,
         force_mock=force_mock,
     )
     t_gate = time.perf_counter() - t0_gate

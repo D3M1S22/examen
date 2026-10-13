@@ -220,6 +220,16 @@ class AbstractContextStore(ABC):
         """List logged chunks of an event in chronological order."""
         raise NotImplementedError
 
+    def assign_chunks(
+        self,
+        chunk_ids: List[str],
+        session_id: str,
+        segment_id: Optional[str],
+        on_topic: Optional[bool] = None,
+    ) -> None:
+        """Move logged chunks to an event/segment."""
+        raise NotImplementedError
+
     # --- Web search cache ---
     def get_cached_search(self, query_norm: str, max_age_seconds: int) -> Optional[dict]:
         """Return {'provider', 'results'} for a cached search younger than max_age_seconds."""

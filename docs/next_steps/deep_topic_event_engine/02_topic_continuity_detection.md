@@ -146,3 +146,34 @@ Prompt inputs: event title, segment titles, top keywords, last ~150 words of the
 | Lecture with a radical mid-course topic change and no pause | May split (R9) | Strict thresholds plus the LLM judge make it rare; manual merge is available |
 | Very short on-topic bursts (a 1-minute question to a colleague) | One-segment event below `MIN_SEGMENT_WORDS` | Synthesized as a **standalone** briefing at hard close, which matches today's single-question behaviour |
 | Mixed-language lecture (IT slides, EN terms) | Multilingual embeddings handle it; heuristic backend degrades | Heuristic is only for offline/tests |
+
+---
+
+## 8. Implementation notes & calibration (2026-10-13)
+
+### 8.1 Calibrated thresholds
+
+Measured with `python scripts/replay_event_scenarios.py --calibrate` on [event_scenarios.json](../../../resources/event_scenarios.json) (window ≈ 5 utterances / 120 words vs. the profile of the ongoing event):
+
+| Backend | Same-event windows | Different-event windows | Gap | Thresholds chosen |
+|---|---|---|---|---|
+| `embedding` (Titan Text Embeddings V2, 512 dims, normalized) | 0.43 – 0.68 (mean 0.58) | 0.23 – 0.36 (mean 0.29) | (0.36, 0.43) | `TOPIC_SIM_SAME=0.42`, `TOPIC_SIM_DIFFERENT=0.37` |
+| `heuristic` (keyword coverage) | 0.22 – 0.42 (mean 0.31) | 0.00 – 0.09 (mean 0.04) | (0.09, 0.22) | `0.20` / `0.10` |
+
+The initial guesses (0.78 / 0.55) were far too high: single-sentence cosines on Titan V2 are ~0.5 for the same subject and ~0.2 for unrelated subjects. **The embedding gap is narrow (0.07): re-run the calibration whenever scenarios, window size or embedding model change.**
+
+### 8.2 Refinements discovered during calibration (deviations from §3–§5)
+
+1. **Profile maturity** (`min_profile_windows = 2`): until the profile has absorbed 2 windows, deep_topic windows build it and no drift decision is taken. A profile built from a single window made later windows of the *same* talk look different (false R9 at +180 s).
+2. **Only clearly on-topic windows update a mature profile.** Undecided windows still keep the event alive (timer) when they contain deep_topic chunks, but no longer feed the profile: a window straddling a subject change was contaminating it and the profile slid to the new subject ("gradual hijack", the conference talks merged).
+3. **Straddling-window check:** when a mature window scores "same" overall, its second half is scored alone; if the half is "different" the window is downgraded to undecided (boundary).
+4. **Drift confirmation** needs `TOPIC_DRIFT_WINDOWS` windows (default 3) of which **at least 2 clearly different**; undecided windows extend an ongoing drift sequence but never start one.
+5. **Chunk-level split refinement:** on R9, the undecided window right before the drift is re-examined chunk by chunk (from the end): an **opening cue** ("il prossimo intervento…") fixes the boundary exactly; otherwise a chunk moves to the new event only if it is closer to the new subject by `split_refine_margin = 0.03`. Without an opening cue the embedding backend lands within ±1 utterance of the true boundary.
+6. **Hard close while a pending window is open** (R5 with pending speech): the pending chunks open the next event (`open_from_pending`) instead of being lost in the concluded one.
+7. **Embedding failures** (throttling, missing credentials, `MOCK_AI`) fall back per call to the heuristic backend with its own thresholds; the LLM judge is skipped in mock/offline mode and an undecided window then resumes.
+
+### 8.3 Runtime notes
+
+- `EventEngine(continuity=None)` keeps Phase A behaviour; production engines are built with `build_continuity_from_settings()` (`TOPIC_SIMILARITY_BACKEND=none` disables it).
+- Embedding calls happen inside `record_chunk` / `tick`, which the orchestrator, the simulate endpoint and the runtime now execute with `asyncio.to_thread`.
+- Bee `new-conversation` / `update-conversation(-summary)` events are forwarded by the orchestrator; titles are blended into the profile only for conversations whose uuid belongs to the open event (Bee updates often refer to already-finished conversations).

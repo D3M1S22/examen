@@ -1242,7 +1242,8 @@ async def api_simulate(request: Request) -> JSONResponse:
             from src.ingestion.gatekeeper import aclassify_chunk
 
             engine = _ensure_event_engine()
-            classification = await aclassify_chunk(transcript=chunk.strip())
+            event_hint = engine.active_event_hint()
+            classification = await aclassify_chunk(transcript=chunk.strip(), prior_context=event_hint or None)
             utterance = UtteranceChunk(
                 conversation_uuid=body.get("conversation_uuid") or "web_simulator",
                 text=chunk.strip(),
@@ -1252,7 +1253,7 @@ async def api_simulate(request: Request) -> JSONResponse:
                 categories=list(classification.categories),
                 location=body.get("location"),
             )
-            outcome = engine.record_chunk(utterance)
+            outcome = await asyncio.to_thread(engine.record_chunk, utterance)
             event_info = {
                 "session_id": outcome.event_id,
                 "status": outcome.event_status,
