@@ -1,8 +1,16 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import useSWR from "swr";
-import { PlannedTask, VerifiedAction, SocialEntity, BriefingReport } from "@/types/schemas";
+import useSWR, { useSWRConfig } from "swr";
+import {
+  PlannedTask,
+  VerifiedAction,
+  SocialEntity,
+  BriefingReport,
+  EventEngineStatus,
+  EventSummary,
+} from "@/types/schemas";
+import { EventAction } from "@/components/ui/EventCard";
 
 import { SystemBar } from "@/components/SystemBar";
 import { SystemFooter } from "@/components/SystemFooter";
@@ -26,6 +34,8 @@ export default function Dashboard() {
   const [showGlobalEchoModal, setShowGlobalEchoModal] = useState(false);
   const [sseConnected, setSseConnected] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [eventMode, setEventMode] = useState(false);
+  const { mutate: globalMutate } = useSWRConfig();
 
   // SWR Data Fetching
   const { data: statusData, mutate: mutateStatus } = useSWR("/api/status", fetcher, { refreshInterval: 10000 });
@@ -45,10 +55,36 @@ export default function Dashboard() {
     "/api/topics?limit=20",
     fetcher
   );
+  // Deep Topic Event Engine: events (lectures/meetings) and live engine state
+  const { data: sessionsData, mutate: mutateSessions } = useSWR<{ sessions: EventSummary[] }>(
+    "/api/sessions?events_only=true&limit=20",
+    fetcher,
+    { refreshInterval: 15000 }
+  );
+  const { data: engineStatus, mutate: mutateEngine } = useSWR<EventEngineStatus>(
+    "/api/event-engine/status",
+    fetcher,
+    { refreshInterval: 5000 }
+  );
+
+  const refreshEvents = useCallback(() => {
+    mutateSessions();
+    mutateEngine();
+    mutateTopics();
+    // Event detail cards (/api/sessions/{id}) revalidate too
+    globalMutate((key) => typeof key === "string" && key.startsWith("/api/sessions/"));
+  }, [mutateSessions, mutateEngine, mutateTopics, globalMutate]);
 
   const showToast = useCallback((msg: string) => {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(null), 3500);
+  }, []);
+
+  // Deep link: ?tab=topics | simulator | social | routines | peace
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const tab = new URLSearchParams(window.location.search).get("tab");
+    if (tab && ["overview", "peace", "routines", "social", "topics", "simulator"].includes(tab)) setActiveTab(tab);
   }, []);
 
   // System Clock
@@ -91,12 +127,14 @@ export default function Dashboard() {
           if (eventType.includes("routine") || eventType.includes("task")) mutateRoutines();
           if (eventType.includes("contact") || eventType.includes("commitment") || eventType.includes("social")) mutateSocial();
           if (eventType.includes("topic") || eventType.includes("briefing")) mutateTopics();
+          if (eventType.startsWith("event_") || eventType.startsWith("segment_")) refreshEvents();
           if (eventType.includes("pipeline") || eventType.includes("session")) {
             mutateActions();
             mutateRoutines();
             mutateSocial();
             mutateTopics();
             mutateStatus();
+            refreshEvents();
           }
         } catch {
           // heartbeat or raw text
@@ -113,7 +151,7 @@ export default function Dashboard() {
     } catch (err) {
       console.warn("SSE connection error:", err);
     }
-  }, [mutateActions, mutateRoutines, mutateSocial, mutateTopics, mutateStatus]);
+  }, [mutateActions, mutateRoutines, mutateSocial, mutateTopics, mutateStatus, refreshEvents]);
 
   // Simulator Execution
   const runSimulation = async () => {
@@ -125,10 +163,11 @@ export default function Dashboard() {
       const res = await fetch(`${baseUrl}/api/simulate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ transcript_chunk: simText }),
+        body: JSON.stringify({ transcript_chunk: simText, event_mode: eventMode }),
       });
       const data = await res.json();
       setSimResult(data);
+      if (eventMode) refreshEvents();
       // Revalidate all data streams
       mutateRoutines();
       mutateActions();
@@ -141,6 +180,63 @@ export default function Dashboard() {
       showToast("Simulation failed: " + (e?.message || "network error"));
     } finally {
       setSimRunning(false);
+    }
+  };
+
+  // Scenario player: one utterance with its recorded gatekeeper labels (event mode)
+  const simulateUtterance = async (text: string, categories?: string[]) => {
+    const res = await fetch(`${getApiBaseUrl()}/api/simulate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ transcript_chunk: text, event_mode: true, categories }),
+    });
+    const data = await res.json();
+    setSimResult(data);
+    return data;
+  };
+
+  // Simulator virtual clock (event engine timers)
+  const handleTick = async (seconds: number, reset = false) => {
+    const res = await fetch(`${getApiBaseUrl()}/api/simulate/tick`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(reset ? { reset: true } : { seconds }),
+    });
+    const data = await res.json();
+    refreshEvents();
+    return data;
+  };
+
+  // Event card actions (pause = synthesize now, resume, conclude, split, merge)
+  const handleEventAction = async (action: EventAction, ev: EventSummary, extra?: Record<string, any>) => {
+    const baseUrl = getApiBaseUrl();
+    let url = `${baseUrl}/api/sessions/${ev.session_id}/${action}`;
+    let body: Record<string, any> = {};
+    if (action === "split") body = { at_time: extra?.at_time };
+    if (action === "merge") {
+      url = `${baseUrl}/api/sessions/merge`;
+      body = { session_ids: [extra?.with, ev.session_id] };
+    }
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok || data.success === false) throw new Error(data.error || `HTTP ${res.status}`);
+      const labels: Record<EventAction, string> = {
+        pause: "Segment closed — synthesis started",
+        resume: "Event resumed",
+        conclude: "Event concluded — final synthesis scheduled",
+        split: "Event split — both parts will be re-synthesized",
+        merge: "Events merged — final briefing will be regenerated",
+      };
+      showToast(labels[action]);
+    } catch (err: any) {
+      showToast(`Event ${action} failed: ${err.message}`);
+    } finally {
+      refreshEvents();
     }
   };
 
@@ -300,6 +396,7 @@ export default function Dashboard() {
               actionsData={actionsData}
               socialData={socialData}
               topicsData={topicsData}
+              engineStatus={engineStatus}
               setActiveTab={setActiveTab}
               setSimText={setSimText}
               handleToggleRoutine={handleToggleRoutine}
@@ -334,7 +431,13 @@ export default function Dashboard() {
           )}
 
           {activeTab === "topics" && (
-            <TopicDossiers topicsData={topicsData} statusData={statusData} />
+            <TopicDossiers
+              topicsData={topicsData}
+              statusData={statusData}
+              sessionsData={sessionsData}
+              engineStatus={engineStatus}
+              onEventAction={handleEventAction}
+            />
           )}
 
           {activeTab === "simulator" && (
@@ -345,6 +448,12 @@ export default function Dashboard() {
               runSimulation={runSimulation}
               simResult={simResult}
               statusData={statusData}
+              eventMode={eventMode}
+              setEventMode={setEventMode}
+              engineStatus={engineStatus}
+              onTick={handleTick}
+              simulateUtterance={simulateUtterance}
+              onOpenEvents={() => setActiveTab("topics")}
             />
           )}
         </main>

@@ -29,6 +29,7 @@ from src.core.storage import get_storage_store
 from src.pipeline.app import agent_invocation
 from src.serving.tools import (
     create_planned_task,
+    get_live_event_outline,
     get_contact_profile,
     get_daily_actions_recap,
     get_session_dossier,
@@ -94,6 +95,7 @@ mcp.tool()(get_social_commitments)
 mcp.tool()(get_topic_briefing)
 mcp.tool()(get_session_dossier)
 mcp.tool()(list_session_dossiers)
+mcp.tool()(get_live_event_outline)
 
 
 # ---------------------------------------------------------------------------
@@ -1071,6 +1073,12 @@ async def api_cards_preview(request: Request) -> JSONResponse:
                 "actions": [{"headline": "Terraform apply executed (Tables created in eu-west-1)"}],
                 "tasks": [{"headline": "Deliver latency benchmarks to Marco"}],
                 "contacts": [{"headline": "Dr. Sarah Lin (Datadog Principal Architect)"}],
+                "status": "concluded",
+                "is_final": True,
+                "segments": [
+                    {"index": 1, "title": "Postgres limits & access patterns", "status": "synthesized", "time_range": "14:00–14:22", "kind": "segment"},
+                    {"index": 2, "title": "DynamoDB single-table design", "status": "synthesized", "time_range": "14:27–14:45", "kind": "segment"},
+                ],
             },
         }
 
@@ -1127,9 +1135,41 @@ async def api_sessions(request: Request) -> JSONResponse:
     store = get_storage_store()
     status = request.query_params.get("status")
     limit = int(request.query_params.get("limit", "10"))
-    dossiers = store.list_session_dossiers(status=status, limit=limit)
-    result = [d.model_dump() for d in dossiers]
+    events_only = request.query_params.get("events_only", "").lower() in ("1", "true", "yes")
+    dossiers = store.list_session_dossiers(status=status, limit=limit * 3 if events_only else limit)
+    if events_only:
+        dossiers = [d for d in dossiers if d.segments][:limit]
+    result = [_session_summary(d) for d in dossiers]
     return JSONResponse({"sessions": result, "count": len(result)})
+
+
+def _session_summary(d: Any) -> Dict[str, Any]:
+    """Lightweight event/session card for lists (no transcript, no embedding centroid)."""
+    from src.serving.tools.session_tools import _segment_payload, _top_terms
+
+    return {
+        "session_id": d.session_id,
+        "title": d.title,
+        "domain": d.domain,
+        "status": d.status,
+        "final_status": d.final_status,
+        "start_time": d.start_time,
+        "last_updated_at": d.last_updated_at,
+        "concluded_at": d.concluded_at,
+        "paused_at": d.paused_at,
+        "hard_close_deadline": d.hard_close_deadline,
+        "location_name": (d.location or {}).get("place_name") if d.location else None,
+        "conversation_uuids": d.conversation_uuids,
+        "segments": [{k: v for k, v in _segment_payload(s, {}).items() if k != "briefing"} for s in d.segments],
+        "final_briefing_id": d.final_briefing_id,
+        "final_title": d.briefing_report.topic_title if d.briefing_report else None,
+        "micro_events_count": len(d.linked_micro_events),
+        "linked_micro_events": [e.model_dump() for e in d.linked_micro_events],
+        "last_transition": d.transitions[-1].model_dump() if d.transitions else None,
+        "transitions_count": len(d.transitions),
+        "top_terms": _top_terms(d, 6),
+        "transcript_chunks_count": len(d.transcript_chunks),
+    }
 
 
 @mcp.custom_route("/api/sessions/{session_id}", methods=["GET"])
@@ -1182,6 +1222,125 @@ async def api_session_conclude(request: Request) -> JSONResponse:
     return JSONResponse({"success": True, "concluded": True, "dossier": dossier.model_dump()})
 
 
+@mcp.custom_route("/api/sessions/{session_id}/chunks", methods=["GET"])
+async def api_session_chunks(request: Request) -> JSONResponse:
+    """Paginated transcript of an event (session_chunks)."""
+    session_id = request.path_params.get("session_id")
+    store = get_storage_store()
+    segment_id = request.query_params.get("segment_id") or None
+    limit = int(request.query_params.get("limit", "500"))
+    seg_of = store.get_chunk_segments(session_id)
+    chunks = store.list_session_chunks(session_id, segment_id=segment_id, limit=limit)
+    return JSONResponse({
+        "session_id": session_id,
+        "count": len(chunks),
+        "chunks": [
+            {
+                "chunk_id": c.chunk_id,
+                "timestamp": c.timestamp,
+                "text": c.text,
+                "speaker_id": c.speaker_id,
+                "speaker_role": c.speaker_role,
+                "categories": c.categories,
+                "segment_id": seg_of.get(c.chunk_id),
+            }
+            for c in chunks
+        ],
+    })
+
+
+def _engine_op_response(event_type: str, dossier: Any, error: str) -> JSONResponse:
+    if dossier is None:
+        return JSONResponse({"success": False, "error": error}, status_code=409)
+    payload = _session_summary(dossier)
+    broadcast_event(event_type, payload)
+    return JSONResponse({"success": True, "event": payload})
+
+
+@mcp.custom_route("/api/sessions/{session_id}/pause", methods=["POST"])
+async def api_session_pause(request: Request) -> JSONResponse:
+    """Manual soft close: closes the current segment and synthesizes it now."""
+    engine = _ensure_event_engine()
+    dossier = await asyncio.to_thread(engine.pause, request.path_params.get("session_id"))
+    return _engine_op_response("event_paused", dossier, "Only the active event can be paused")
+
+
+@mcp.custom_route("/api/sessions/{session_id}/resume", methods=["POST"])
+async def api_session_resume(request: Request) -> JSONResponse:
+    """Forces the paused current event to resume (overrides a pending split decision)."""
+    engine = _ensure_event_engine()
+    dossier = await asyncio.to_thread(engine.resume, request.path_params.get("session_id"))
+    return _engine_op_response("event_resumed", dossier, "Only the paused current event can be resumed")
+
+
+@mcp.custom_route("/api/sessions/{session_id}/split", methods=["POST"])
+async def api_session_split(request: Request) -> JSONResponse:
+    """Manual split: {"at_time": ISO} or {"at_chunk_id": str}; later chunks move to a new event."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    engine = _ensure_event_engine()
+    result = await asyncio.to_thread(
+        engine.split, request.path_params.get("session_id"), body.get("at_time"), body.get("at_chunk_id")
+    )
+    if result is None:
+        return JSONResponse({"success": False, "error": "Nothing to split at that point"}, status_code=409)
+    old, new = result
+    payload = {"old": _session_summary(old), "new": _session_summary(new)}
+    broadcast_event("event_split", payload)
+    return JSONResponse({"success": True, **payload})
+
+
+@mcp.custom_route("/api/sessions/merge", methods=["POST"])
+async def api_sessions_merge(request: Request) -> JSONResponse:
+    """Manual merge: {"session_ids": [...]} into the earliest event; its final briefing is regenerated."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    ids = body.get("session_ids") or []
+    engine = _ensure_event_engine()
+    target = await asyncio.to_thread(engine.merge, ids)
+    return _engine_op_response("event_merged", target, "Provide at least two existing events")
+
+
+@mcp.custom_route("/api/simulate/tick", methods=["POST"])
+async def api_simulate_tick(request: Request) -> JSONResponse:
+    """Simulator: fast-forwards the event engine virtual clock by {"seconds": n} and runs its timers."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    engine = _ensure_event_engine()
+    if body.get("reset"):
+        engine.clock_offset = 0.0
+        transitions = []
+    else:
+        transitions = await asyncio.to_thread(engine.advance_clock, float(body.get("seconds", 60)))
+    return JSONResponse({
+        "success": True,
+        "clock_offset_seconds": engine.clock_offset,
+        "virtual_now": datetime.fromtimestamp(engine.now()).isoformat(),
+        "transitions": [
+            {"rule": t.rule, "to_status": t.to_status, "reason": t.reason, "detail": t.detail} for t in transitions
+        ],
+        **engine.status_summary(),
+    })
+
+
+@mcp.custom_route("/api/event-scenarios", methods=["GET"])
+async def api_event_scenarios(request: Request) -> JSONResponse:
+    """Replay scenarios for the simulator scenario player (resources/event_scenarios.json)."""
+    from src.ingestion.scenario_replay import load_event_scenarios
+
+    try:
+        scenarios = load_event_scenarios()
+    except FileNotFoundError:
+        scenarios = []
+    return JSONResponse({"scenarios": scenarios, "count": len(scenarios)})
+
+
 @mcp.custom_route("/api/event-engine/status", methods=["GET"])
 async def api_event_engine_status(request: Request) -> JSONResponse:
     """Returns the Deep Topic Event Engine state (open event, pending synthesis jobs, config)."""
@@ -1196,6 +1355,8 @@ async def api_event_engine_status(request: Request) -> JSONResponse:
             "t_checkpoint_seconds": cfg.t_checkpoint,
             "min_segment_words": cfg.min_segment_words,
         },
+        "clock_offset_seconds": engine.clock_offset,
+        "virtual_now": datetime.fromtimestamp(engine.now()).isoformat(),
         **engine.status_summary(),
     })
 
@@ -1241,9 +1402,21 @@ async def api_simulate(request: Request) -> JSONResponse:
             from src.core.schemas import UtteranceChunk
             from src.ingestion.gatekeeper import aclassify_chunk
 
+            from src.core.schemas import ChunkClassification
+
             engine = _ensure_event_engine()
-            event_hint = engine.active_event_hint()
-            classification = await aclassify_chunk(transcript=chunk.strip(), prior_context=event_hint or None)
+            if not body.get("timestamp"):
+                # Engine time includes the simulator virtual clock offset
+                timestamp = datetime.fromtimestamp(engine.now()).isoformat()
+                payload["timestamp"] = timestamp
+            if body.get("categories"):
+                # Scenario player: replay the recorded gatekeeper labels (fast, deterministic)
+                classification = ChunkClassification(
+                    categories=list(body["categories"]), confidence=1.0, summary_hint="scenario label"
+                )
+            else:
+                event_hint = engine.active_event_hint()
+                classification = await aclassify_chunk(transcript=chunk.strip(), prior_context=event_hint or None)
             utterance = UtteranceChunk(
                 conversation_uuid=body.get("conversation_uuid") or "web_simulator",
                 text=chunk.strip(),

@@ -43,7 +43,10 @@ In this phase R4 always resumes when on-topic content returns within `T_hard` (n
 5. Bee conversation lifecycle events forwarding — [05](05_ingestion_and_pipeline_integration.md) §2.4.
 6. **Threshold calibration** on the scenarios below.
 
-### Phase D — Serving & UI
+### Phase D — Serving & UI — ✅ IMPLEMENTED (2026-10-13)
+
+> Code: manual operations in [event_engine.py](../../../src/ingestion/event_engine.py) (`pause`, `resume`, `split`, `merge`, `advance_clock`), [session_tools.py](../../../src/serving/tools/session_tools.py) (event dossier, partial-briefing fallback, `get_live_event_outline` MCP tool), REST in [mcp_server.py](../../../src/serving/mcp_server.py); UI: [EventCard.tsx](../../../src/web_ui/src/components/ui/EventCard.tsx), [TopicDossiers.tsx](../../../src/web_ui/src/components/views/TopicDossiers.tsx) (Events / All briefings), [AmbientSimulator.tsx](../../../src/web_ui/src/components/views/AmbientSimulator.tsx) (event mode, virtual clock, scenario player), [OverviewHub.tsx](../../../src/web_ui/src/components/views/OverviewHub.tsx) (live event banner), Echo Show card parts; tests: [test_event_serving.py](../../../tests/test_event_serving.py). Verified end-to-end on a running server by replaying `lecture_with_break` through the same REST calls as the UI scenario player. See [06](06_serving_and_ui.md) §5 for implementation notes.
+
 REST/SSE/MCP extensions, Echo Show card, Next.js event view, simulator event mode + virtual clock + scenario player — [06](06_serving_and_ui.md).
 
 ### Phase E — Docs & bookkeeping

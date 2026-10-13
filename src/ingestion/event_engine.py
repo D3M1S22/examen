@@ -399,6 +399,7 @@ class EventEngine:
         self.continuity = continuity
         self.config = config or EngineConfig.from_settings()
         self.clock: Clock = clock or time.time
+        self.clock_offset: float = 0.0   # simulator virtual time (POST /api/simulate/tick)
         self._synthesizer: Optional[Synthesizer] = synthesizer
         self._lock = threading.RLock()
         self._current: Optional[SessionDossier] = None
@@ -454,7 +455,7 @@ class EventEngine:
 
     def now(self) -> float:
         """Engine time: never behind the latest utterance seen (supports virtual clocks)."""
-        return max(self.clock(), self._last_seen_ts)
+        return max(self.clock() + self.clock_offset, self._last_seen_ts)
 
     def rehydrate(self) -> None:
         """Restores the open event and re-enqueues interrupted synthesis jobs after a restart."""
@@ -498,7 +499,11 @@ class EventEngine:
     def status_summary(self) -> Dict[str, Any]:
         ev = self.current_event()
         if not ev:
-            return {"active_event": None, "pending_jobs": len(self._jobs)}
+            return {
+                "active_event": None,
+                "pending_jobs": len(self._jobs),
+                "continuity_backend": self.continuity.config.backend if self.continuity else None,
+            }
         seg = ev.open_segment
         return {
             "active_event": {
@@ -512,7 +517,7 @@ class EventEngine:
                 "pending_chunks": len(self._pending),
                 "top_terms": [
                     t for t, _ in sorted((ev.topic_profile.keywords if ev.topic_profile else {}).items(),
-                                         key=lambda kv: kv[1], reverse=True)[:8]
+                                         key=lambda kv: (-kv[1], kv[0]))[:8]
                 ],
             },
             "pending_jobs": len(self._jobs),
@@ -530,7 +535,7 @@ class EventEngine:
         if title:
             subject = f"about '{title}'"
         elif ev.topic_profile and ev.topic_profile.keywords:
-            terms = sorted(ev.topic_profile.keywords.items(), key=lambda kv: kv[1], reverse=True)[:6]
+            terms = sorted(ev.topic_profile.keywords.items(), key=lambda kv: (-kv[1], kv[0]))[:6]
             subject = "(frequent terms: " + ", ".join(t for t, _ in terms) + ")"
         else:
             return ""
@@ -667,6 +672,237 @@ class EventEngine:
                 self._save(dossier)
                 self._enqueue(SynthesisJob("final", session_id))
             return dossier
+
+    # -- manual operations (Web UI / Alexa, doc 06 §1) ------------------------
+
+    def advance_clock(self, seconds: float) -> List[Transition]:
+        """Simulator only: moves the virtual clock forward and runs the timers."""
+        with self._lock:
+            self.clock_offset += max(0.0, float(seconds))
+        return self.tick()
+
+    def pause(self, session_id: str, now: Optional[float] = None) -> Optional[SessionDossier]:
+        """Manual soft close: closes and synthesizes the current segment now ("Synthesize now")."""
+        self.rehydrate()
+        now = self.now() if now is None else now
+        with self._lock:
+            ev = self._current
+            if ev is None or ev.session_id != session_id or ev.status != "active":
+                return None
+            self._apply(Transition("R2", "paused", "manual_pause", now, "Paused manually (synthesize now)"))
+            self._save(ev)
+            return ev
+
+    def resume(self, session_id: str, now: Optional[float] = None) -> Optional[SessionDossier]:
+        """Manual resume of the paused current event (overrides a pending split decision)."""
+        self.rehydrate()
+        now = self.now() if now is None else now
+        with self._lock:
+            ev = self._current
+            if ev is None or ev.session_id != session_id or ev.status != "paused":
+                return None
+            if self._pending and self.continuity is not None:
+                self._resume_with_pending(self._join(self._pending), None, "Resumed manually")
+            else:
+                self._reset_continuity_state(ev)
+                self._apply(Transition("R4", "active", "manual_resume", now, "Resumed manually"))
+            self._save(ev)
+            return ev
+
+    def split(
+        self, session_id: str, at_time: Optional[str] = None, at_chunk_id: Optional[str] = None
+    ) -> Optional[Tuple[SessionDossier, SessionDossier]]:
+        """Manual split: chunks from the split point onward move to a new event (doc 06 §1, doc 03 §7)."""
+        self.rehydrate()
+        with self._lock:
+            ev = self._load(session_id)
+            if ev is None or not ev.segments:
+                return None
+            chunks = self.store.list_session_chunks(session_id)
+            split_ts: Optional[float] = None
+            if at_chunk_id:
+                split_ts = next((to_epoch(c.timestamp) for c in chunks if c.chunk_id == at_chunk_id), None)
+            elif at_time:
+                split_ts = to_epoch(at_time)
+            if split_ts is None:
+                return None
+            moved = [c for c in chunks if (to_epoch(c.timestamp) or 0.0) >= split_ts]
+            kept = [c for c in chunks if (to_epoch(c.timestamp) or 0.0) < split_ts]
+            if not moved or not any(c for c in kept):
+                return None
+
+            is_current = self._current is ev
+            new = SessionDossier(
+                session_id=str(uuid.uuid4()),
+                title=f"{_PLACEHOLDER_TITLE_PREFIX} ({datetime.fromtimestamp(split_ts).strftime('%H:%M')})",
+                domain=ev.domain,
+                start_time=to_iso(split_ts),
+                last_updated_at=datetime.now().isoformat(),
+                status="concluded",
+                location=ev.location,
+                anchor_location=ev.anchor_location,
+            )
+            for c in moved:
+                if c.conversation_uuid and c.conversation_uuid not in new.conversation_uuids:
+                    new.conversation_uuids.append(c.conversation_uuid)
+
+            seg_of = self.store.get_chunk_segments(session_id)
+            by_seg_moved: Dict[Optional[str], List[UtteranceChunk]] = {}
+            by_seg_kept: Dict[Optional[str], List[UtteranceChunk]] = {}
+            for c in moved:
+                by_seg_moved.setdefault(seg_of.get(c.chunk_id), []).append(c)
+            for c in kept:
+                by_seg_kept.setdefault(seg_of.get(c.chunk_id), []).append(c)
+
+            old_segments: List[SessionSegment] = []
+            new_segments: List[SessionSegment] = []
+            stale_briefings: List[str] = []
+            for seg in ev.segments:
+                m = by_seg_moved.get(seg.segment_id, [])
+                k = by_seg_kept.get(seg.segment_id, [])
+                seg_start = to_epoch(seg.start_time) or 0.0
+                if not m and (k or seg_start < split_ts):
+                    old_segments.append(seg)
+                elif not k and seg_start >= split_ts:
+                    new_segments.append(seg)          # whole segment moves, briefing included
+                    if seg.briefing_id:
+                        self.store.reassign_briefings([seg.briefing_id], new.session_id)
+                    self.store.assign_chunks([c.chunk_id for c in m], new.session_id, seg.segment_id)
+                else:
+                    was_open = seg.status == "open"
+                    if seg.briefing_id:
+                        stale_briefings.append(seg.briefing_id)
+                    seg.briefing_id = None
+                    seg.title = None
+                    seg.status = "closed"
+                    seg.close_reason = "manual_split"
+                    seg.word_count = sum(len(c.text.split()) for c in k)
+                    seg.end_time = k[-1].timestamp if k else seg.end_time
+                    part = SessionSegment(
+                        start_time=m[0].timestamp,
+                        end_time=m[-1].timestamp,
+                        word_count=sum(len(c.text.split()) for c in m),
+                        status="open" if (was_open and is_current) else "closed",
+                        close_reason=None if (was_open and is_current) else "manual_split",
+                    )
+                    self.store.assign_chunks([c.chunk_id for c in m], new.session_id, part.segment_id)
+                    old_segments.append(seg)
+                    new_segments.append(part)
+            off_segment = by_seg_moved.get(None, [])
+            if off_segment:
+                self.store.assign_chunks([c.chunk_id for c in off_segment], new.session_id, None)
+            for idx, seg in enumerate(old_segments, 1):
+                seg.index = idx
+            for idx, seg in enumerate(new_segments, 1):
+                seg.index = idx
+            ev.segments = old_segments
+            new.segments = new_segments
+
+            # Micro-events follow their timestamp
+            ev_refs, new_refs = [], []
+            for ref in ev.linked_micro_events:
+                (new_refs if (to_epoch(str(ref.timestamp)) or 0.0) >= split_ts else ev_refs).append(ref)
+            ev.linked_micro_events, new.linked_micro_events = ev_refs, new_refs
+
+            for briefing_id in stale_briefings:
+                self.store.delete_topic_briefing(briefing_id)
+            mark = Transition("MANUAL", "concluded", "manual_split", split_ts, f"Split manually at {to_iso(split_ts)}")
+
+            if is_current:
+                new.status = ev.status
+                new.paused_at = ev.paused_at
+                new.hard_close_deadline = ev.hard_close_deadline
+                new.last_on_topic_at = ev.last_on_topic_at
+                new.pending_chunk_ids = list(ev.pending_chunk_ids)
+                ev.pending_chunk_ids = []
+                self._window, self._drift = [], []
+                self._conclude(ev, Transition("R8", "concluded", "manual_split", split_ts, "Split manually"))
+                self._current = new
+            else:
+                new.concluded_at = ev.concluded_at or datetime.now().isoformat()
+                self._invalidate_final(ev)
+                self._log(ev, ev.status, mark)
+            self._log(new, None, Transition("MANUAL", new.status, "manual_split", split_ts,
+                                            f"Created by a manual split of {ev.session_id[:8]}"))
+            if new.status == "concluded":
+                new.final_status = "pending"
+                self._enqueue(SynthesisJob("final", new.session_id))
+            for target in (ev, new):
+                for seg in target.segments:
+                    if seg.status == "closed":
+                        self._enqueue(SynthesisJob("segment", target.session_id, seg.segment_id))
+            if self.continuity is not None:
+                new.topic_profile = self.continuity.update(None, self._join(moved))
+            self.store.save_session_dossier(ev)
+            self.store.save_session_dossier(new)
+            self._emit("event_split", {"old": self._summary(ev), "new": self._summary(new)})
+            return ev, new
+
+    def merge(self, session_ids: List[str]) -> Optional[SessionDossier]:
+        """Manual merge of events into the earliest one; final briefings are regenerated."""
+        self.rehydrate()
+        with self._lock:
+            events = [self._load(sid) for sid in dict.fromkeys(session_ids)]
+            if len(events) < 2 or any(e is None or not e.segments for e in events):
+                return None
+            events.sort(key=lambda e: to_epoch(e.start_time) or 0.0)
+            target = events[0]
+            for other in events[1:]:
+                for seg_id, group in self._group_chunks_by_segment(other.session_id).items():
+                    self.store.assign_chunks([c.chunk_id for c in group], target.session_id, seg_id)
+                target.segments.extend(other.segments)
+                known = {(r.event_type, r.record_id) for r in target.linked_micro_events}
+                target.linked_micro_events.extend(
+                    r for r in other.linked_micro_events if (r.event_type, r.record_id) not in known
+                )
+                target.conversation_uuids.extend(u for u in other.conversation_uuids if u not in target.conversation_uuids)
+                target.research_ledger.extend(other.research_ledger)
+                target.key_discussion_points.extend(p for p in other.key_discussion_points if p not in target.key_discussion_points)
+                target.transitions.extend(other.transitions)
+                for briefing in self.store.list_briefings_for_session(other.session_id):
+                    if briefing.kind == "final":
+                        self.store.delete_topic_briefing(briefing.id)
+                    else:
+                        self.store.reassign_briefings([briefing.id], target.session_id)
+                if self._current is other:
+                    target.status = other.status
+                    target.paused_at = other.paused_at
+                    target.hard_close_deadline = other.hard_close_deadline
+                    target.last_on_topic_at = other.last_on_topic_at
+                    target.pending_chunk_ids = list(other.pending_chunk_ids)
+                    target.concluded_at = None
+                    if self.continuity is not None and other.topic_profile is not None:
+                        target.topic_profile = other.topic_profile
+                    self._current = target
+                self.store.delete_session_dossier(other.session_id)
+            target.segments.sort(key=lambda s: to_epoch(s.start_time) or 0.0)
+            for idx, seg in enumerate(target.segments, 1):
+                seg.index = idx
+            self._log(target, target.status, Transition(
+                "MANUAL", target.status, "manual_merge", self.now(),
+                f"Merged {len(events) - 1} event(s) into this one"))
+            if target.status == "concluded":
+                self._invalidate_final(target)
+            self.store.save_session_dossier(target)
+            self._emit("event_merged", {"event": self._summary(target), "merged": [e.session_id for e in events[1:]]})
+            return target
+
+    def _invalidate_final(self, ev: SessionDossier) -> None:
+        """Drops a stale consolidated briefing and schedules a new one (doc 03 §7)."""
+        if ev.final_briefing_id:
+            self.store.delete_topic_briefing(ev.final_briefing_id)
+        ev.final_briefing_id = None
+        ev.briefing_report = None
+        if ev.status == "concluded":
+            ev.final_status = "pending"
+            self._enqueue(SynthesisJob("final", ev.session_id))
+
+    def _group_chunks_by_segment(self, session_id: str) -> Dict[Optional[str], List[UtteranceChunk]]:
+        seg_of = self.store.get_chunk_segments(session_id)
+        groups: Dict[Optional[str], List[UtteranceChunk]] = {}
+        for c in self.store.list_session_chunks(session_id):
+            groups.setdefault(seg_of.get(c.chunk_id), []).append(c)
+        return groups
 
     # -- state mutation -------------------------------------------------------
 

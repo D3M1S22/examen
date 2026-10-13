@@ -1,7 +1,7 @@
 """Abstract interface for EXAMEN context storage."""
 
 from abc import ABC, abstractmethod
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 from src.core.schemas import (
     BriefingReport,
     MicroEventRef,
@@ -228,6 +228,18 @@ class AbstractContextStore(ABC):
         on_topic: Optional[bool] = None,
     ) -> None:
         """Move logged chunks to an event/segment."""
+        raise NotImplementedError
+
+    def get_chunk_segments(self, session_id: str) -> Dict[str, Optional[str]]:
+        raise NotImplementedError
+
+    def delete_session_dossier(self, session_id: str) -> bool:
+        raise NotImplementedError
+
+    def delete_topic_briefing(self, briefing_id: str) -> bool:
+        raise NotImplementedError
+
+    def reassign_briefings(self, briefing_ids: List[str], session_id: str) -> None:
         raise NotImplementedError
 
     # --- Web search cache ---

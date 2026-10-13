@@ -104,3 +104,30 @@ Add `SessionSegment`, `EventTransitionLog`, `BriefingKind`; extend `SessionDossi
 ### 4.4 `OverviewHub.tsx`
 
 Show the live event (if any) as a compact banner: title, elapsed time, segment count, and a link to the event card.
+
+---
+
+## 5. Implementation notes (2026-10-13)
+
+**REST (as implemented)**
+
+| Method & path | Notes |
+|---|---|
+| `GET /api/sessions?events_only=true&limit=` | Lightweight summaries (`EventSummary`): segments without briefings, top terms, last transition, micro-events. `events_only` hides legacy per-conversation sessions without segments. |
+| `GET /api/sessions/{id}` | Full `EventDetail`: segments with embedded briefings, `display_briefing` (final or latest part), `is_final`, `transitions`, `top_terms`, `research_queries`. |
+| `GET /api/sessions/{id}/chunks?segment_id=&limit=` | Transcript with each chunk's `segment_id` (null = spoken during a pause). |
+| `POST /api/sessions/{id}/pause` · `/resume` · `/conclude` | 409 when the operation does not apply (e.g. resuming an active event). |
+| `POST /api/sessions/{id}/split` | Body `{"at_time": ISO}` or `{"at_chunk_id": "…"}`. Segments straddling the point are cut and re-synthesized; whole segments keep their briefing; micro-events follow their timestamp. If the event is the open one, the new part becomes the open event. |
+| `POST /api/sessions/merge` | Body `{"session_ids": [...]}` into the earliest; stale finals deleted, final regenerated; if one of them is open, the merged event stays open. |
+| `POST /api/simulate` | Event mode accepts `categories` (scenario labels, skips the gatekeeper) and stamps chunks with the engine's virtual time. |
+| `POST /api/simulate/tick` | `{"seconds": n}` or `{"reset": true}` — virtual clock for the simulator (does not affect real wall-clock timestamps of Bee utterances). |
+| `GET /api/event-scenarios` | Scenarios for the simulator player. |
+
+**MCP:** `get_live_event_outline` (no LLM call). `get_session_dossier` speaks "still in progress / paused … First part: …" and falls back to the latest segment briefing until the final is ready.
+
+**SSE:** `event_opened`, `event_paused`, `event_resumed`, `event_checkpoint`, `segment_synthesizing`, `segment_synthesized`, `segment_skipped`, `event_concluded`, `event_final_ready`, `event_split`, `event_merged` (+ legacy `session_concluded`). The dashboard revalidates events, engine status, topics and open event cards on any `event_*` / `segment_*` message.
+
+**UI notes**
+- The **scenario player** uses realistic timings (the scenarios' offsets) and the virtual clock, so it works with the **default** profile; `EVENT_PROFILE=demo` is meant for live typing, not for the scenario player (40 s gaps would exceed the 20 s demo `T_soft`).
+- Deep link `?tab=topics|simulator|…` opens a dashboard tab directly (demo recordings, screenshots).
+- Split is offered at part boundaries ("✂ Split here"); arbitrary chunk-level split is available through the API (`at_chunk_id`).

@@ -5,7 +5,7 @@ import os
 import re
 import sqlite3
 import uuid
-from typing import Any, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 from src.core.schemas import (
     BriefingReport,
@@ -1459,6 +1459,46 @@ class SQLiteContextStore(AbstractContextStore):
                 location=json.loads(row["location_json"]) if row["location_json"] else None,
             ))
         return result
+
+    def get_chunk_segments(self, session_id: str) -> Dict[str, Optional[str]]:
+        """chunk_id -> segment_id (None for chunks logged outside any segment, e.g. during a pause)."""
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                "SELECT chunk_id, segment_id FROM session_chunks WHERE session_id = ?", (session_id,)
+            ).fetchall()
+        return {row["chunk_id"]: row["segment_id"] for row in rows}
+
+    def delete_session_dossier(self, session_id: str) -> bool:
+        with self._get_connection() as conn:
+            cur = conn.execute("DELETE FROM session_dossiers WHERE session_id = ?", (session_id,))
+            conn.commit()
+            return cur.rowcount > 0
+
+    def delete_topic_briefing(self, briefing_id: str) -> bool:
+        with self._get_connection() as conn:
+            if self._has_fts:
+                try:
+                    conn.execute(
+                        "INSERT INTO fts_briefings(fts_briefings, rowid, topic_title, deep_dive_markdown) "
+                        "SELECT 'delete', rowid, topic_title, deep_dive_markdown FROM topic_briefings WHERE id = ?",
+                        (briefing_id,),
+                    )
+                except sqlite3.OperationalError:
+                    pass
+            cur = conn.execute("DELETE FROM topic_briefings WHERE id = ?", (briefing_id,))
+            conn.commit()
+            return cur.rowcount > 0
+
+    def reassign_briefings(self, briefing_ids: List[str], session_id: str) -> None:
+        if not briefing_ids:
+            return
+        placeholders = ",".join("?" for _ in briefing_ids)
+        with self._get_connection() as conn:
+            conn.execute(
+                f"UPDATE topic_briefings SET session_id = ? WHERE id IN ({placeholders})",
+                [session_id, *briefing_ids],
+            )
+            conn.commit()
 
     def get_cached_search(self, query_norm: str, max_age_seconds: int) -> Optional[dict]:
         """Returns {'provider', 'results'} for a cached web search younger than max_age_seconds."""

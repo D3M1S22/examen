@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 import math
 import re
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable, Dict, List, Literal, Optional, Tuple
@@ -63,6 +64,11 @@ def content_terms(text: str) -> List[str]:
             continue
         terms.append(token[:_STEM_CHARS])
     return terms
+
+
+def _rank(keywords: Dict[str, float]) -> List[Tuple[str, float]]:
+    """Deterministic ranking: weight desc, then term (stable across processes / hash seeds)."""
+    return sorted(keywords.items(), key=lambda kv: (-kv[1], kv[0]))
 
 
 def _normalize(vec: List[float]) -> List[float]:
@@ -226,7 +232,7 @@ class TopicSimilarity:
         window = set(content_terms(text))
         if not window or not profile.keywords:
             return None
-        top = sorted(profile.keywords.items(), key=lambda kv: kv[1], reverse=True)[: self.config.keyword_profile_size]
+        top = _rank(profile.keywords)[: self.config.keyword_profile_size]
         known = {term for term, _ in top}
         return len(window & known) / len(window)
 
@@ -237,9 +243,10 @@ class TopicSimilarity:
         profile = profile or TopicProfile()
         alpha = self.config.alpha
         keywords = {t: w * (1.0 - alpha) for t, w in profile.keywords.items()}
-        for term in set(content_terms(text)):
-            keywords[term] = keywords.get(term, 0.0) + alpha
-        profile.keywords = dict(sorted(keywords.items(), key=lambda kv: kv[1], reverse=True)[:200])
+        # Terms repeated within the window are more salient (capped so one term cannot dominate)
+        for term, count in Counter(content_terms(text)).items():
+            keywords[term] = keywords.get(term, 0.0) + alpha * min(count, 3)
+        profile.keywords = dict(_rank(keywords)[:200])
 
         if vec is None and self.config.backend == "embedding":
             vec = self.embed(text)
@@ -288,7 +295,7 @@ class TopicSimilarity:
         try:
             from langchain_core.messages import HumanMessage, SystemMessage
 
-            top_terms = [t for t, _ in sorted(profile.keywords.items(), key=lambda kv: kv[1], reverse=True)[:15]]
+            top_terms = [t for t, _ in _rank(profile.keywords)[:15]]
             prompt = (
                 f"Ongoing event title: {event_title or 'unknown'}\n"
                 f"Parts so far: {'; '.join(profile.segment_titles) or 'n/a'}\n"

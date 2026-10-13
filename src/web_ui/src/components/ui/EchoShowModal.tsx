@@ -271,6 +271,28 @@ export function EchoShowModal({
                         </div>
                       )}
 
+                      {/* Event parts timeline (SESSION_DOSSIER_VIEWER) */}
+                      {Array.isArray(payload.segments) && payload.segments.length > 0 && (
+                        <div className="bg-black/30 border border-white/10 rounded-lg p-3 space-y-1.5">
+                          <div className="font-mono text-[10px] tracking-wider text-cyan-300 uppercase flex items-center justify-between">
+                            <span>🏛️ Event parts</span>
+                            <span className="text-zinc-400">
+                              {String(payload.status || "").toUpperCase()}
+                              {payload.is_final === false ? " · PARTIAL BRIEFING" : ""}
+                            </span>
+                          </div>
+                          {payload.segments.map((seg: any) => (
+                            <div key={seg.index} className="flex items-center justify-between gap-3 text-sm">
+                              <span className="text-zinc-200 truncate">
+                                <span className="font-mono text-[10px] text-zinc-500 mr-2">{seg.index}</span>
+                                {seg.title || (seg.status === "open" ? "Recording…" : "Awaiting synthesis")}
+                              </span>
+                              <span className="font-mono text-[10px] text-zinc-500 shrink-0">{seg.time_range}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
                       {/* Summary / Bio */}
                       {summaryText && (
                         <div className="text-zinc-300 font-sans text-body-md leading-relaxed">
