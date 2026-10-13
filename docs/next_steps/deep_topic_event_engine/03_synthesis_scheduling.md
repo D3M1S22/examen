@@ -31,6 +31,8 @@ def synthesize_briefing(text: str, topic: TopicExtraction, search: WebSearchBatc
 def node_topic_research(state):        # unchanged contract, now a thin wrapper → kind="standalone"
 ```
 
+As implemented, the engine talks to a `Synthesizer` protocol with two methods: `segment(text, session_id, outline, kind)` and `final(parts, extra_text, session_id, outline, micro_events)`, both returning a `SynthesisOutcome(briefing, research)`. The default `PipelineEventSynthesizer` chains the three steps above. Tests inject fakes.
+
 - `EventOutline` = event title, previous segment titles, accumulated `key_discussion_points`, and queries already run. It is passed to the extractor so a segment **does not re-research** what an earlier segment already covered, and to the synthesizer so the narrative continues instead of restarting.
 - `TopicExtraction.search_queries` allows up to 3 for segments and up to 2 *gap* queries for the final.
 - The heuristic paths (`_heuristic_extract_topic`, `_heuristic_synthesize_report`) remain the offline fallback for every step.
@@ -73,8 +75,8 @@ steps:
 
 | Mechanism | Scope | Storage | Behaviour |
 |---|---|---|---|
-| **Query ledger** | Per event | `SessionDossier.research_ledger` (JSON list of normalized queries + source URLs) | The extractor sees it (via `EventOutline`); `research()` drops queries whose normalized form is already in the ledger |
-| **Search cache** | Global | New table `web_search_cache` (see [04](04_data_model_and_storage.md)) | `normalize_search_query()` from [web_search.py](../../../src/pipeline/tools/web_search.py) as key; TTL 24 h; avoids hammering DuckDuckGo/SearXNG when segments overlap |
+| **Query ledger** | Per event | `SessionDossier.research_ledger` (`[{query, sources, segment_id, kind}]`) | The extractor sees it (via `EventOutline`) and is told not to repeat it; `research()` passes ledger queries as `cache_only`: they are served from the cache (context preserved) and never re-hit the network |
+| **Search cache** | Global | Table `web_search_cache` (see [04](04_data_model_and_storage.md)) | Key `cache_key()` = lower-cased `normalize_search_query()`; TTL `WEB_SEARCH_CACHE_TTL_SECONDS` (default 24 h, `0` disables); empty results are never cached; used by event syntheses only (standalone briefings keep the uncached path) |
 
 ---
 

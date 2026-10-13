@@ -650,6 +650,10 @@ class SessionDossier(BaseModel):
         default="none", description="Status of the consolidated final briefing."
     )
     final_revision: int = Field(default=0, description="Incremented whenever the final briefing is regenerated.")
+    research_ledger: List[dict] = Field(
+        default_factory=list,
+        description="Web research already run for this event: [{'query', 'sources', 'segment_id', 'kind'}].",
+    )
     transitions: List[EventTransitionLog] = Field(
         default_factory=list, description="Lifecycle audit trail."
     )

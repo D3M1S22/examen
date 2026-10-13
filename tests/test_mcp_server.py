@@ -789,6 +789,17 @@ class TestServerRestApiAndWebUi:
 
 
 
+class _StaticSynthesizer:
+    def __init__(self, briefing):
+        self.briefing = briefing
+
+    def segment(self, text, session_id, outline=None, kind="segment"):
+        return self.briefing.model_copy()
+
+    def final(self, parts, extra_text, session_id, outline=None, micro_events=None):
+        return self.briefing.model_copy()
+
+
 class TestEventEngineEndpoints:
     """Deep Topic Event Engine wiring in the serving layer (event_mode simulate, status, conclude)."""
 
@@ -807,7 +818,7 @@ class TestEventEngineEndpoints:
         engine = engine_mod.EventEngine(
             store=temp_store,
             config=engine_mod.EngineConfig(min_segment_words=3),
-            synthesizer=lambda text, sid: BriefingReport(topic_title="Raft consensus", context_type="tech_stack"),
+            synthesizer=_StaticSynthesizer(BriefingReport(topic_title="Raft consensus", context_type="tech_stack")),
         )
         monkeypatch.setattr(engine_mod, "_engine", engine)
         runtime = engine_mod.EventEngineRuntime(engine)

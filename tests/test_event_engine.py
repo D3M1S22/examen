@@ -24,6 +24,7 @@ from src.ingestion.event_engine import (
     to_iso,
 )
 from src.pipeline.graph import route_categories
+from src.pipeline.nodes.topic_research import SynthesisOutcome
 from src.pipeline.nodes.persist import node_persist
 
 T0 = datetime(2026, 10, 13, 10, 0, 0).timestamp()
@@ -46,11 +47,15 @@ STATION = {"latitude": 45.0870, "longitude": 7.6900, "accuracy_meters": 20.0, "p
 
 
 class FakeSynthesizer:
+    """Records inputs; segment() and final() mirror PipelineEventSynthesizer's interface."""
+
     def __init__(self, fail_times: int = 0):
         self.calls: List[str] = []
+        self.outlines: List = []
+        self.micro_events: List = []
         self.fail_times = fail_times
 
-    def __call__(self, text: str, session_id: str) -> Optional[BriefingReport]:
+    def _briefing(self, text: str) -> BriefingReport:
         if self.fail_times > 0:
             self.fail_times -= 1
             raise RuntimeError("synthesis backend unavailable")
@@ -62,6 +67,21 @@ class FakeSynthesizer:
             executive_summary=[f"Point {n}.a", f"Point {n}.b"],
             explanatory_synthesis=f"Synthesis {n}",
         )
+
+    def segment(self, text, session_id, outline=None, kind="segment"):
+        self.outlines.append(outline)
+        return SynthesisOutcome(
+            briefing=self._briefing(text),
+            research=[{"query": f"query for part {outline.part_index}", "sources": ["https://example.org"]}],
+        )
+
+    def final(self, parts, extra_text, session_id, outline=None, micro_events=None):
+        self.outlines.append(outline)
+        self.micro_events = list(micro_events or [])
+        text = "\n".join(f"Part {i}: {p.topic_title}" for i, p in enumerate(parts, 1))
+        if extra_text:
+            text += "\n" + extra_text
+        return self._briefing(text)
 
 
 @pytest.fixture

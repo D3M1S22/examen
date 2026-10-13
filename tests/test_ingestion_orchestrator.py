@@ -12,6 +12,17 @@ from src.ingestion.event_engine import EngineConfig, EventEngine
 from src.ingestion.orchestrator import BeeStreamOrchestrator
 from src.ingestion.stream_convo import normalize_bee_time
 
+class StaticSynthesizer:
+    def __init__(self, briefing):
+        self.briefing = briefing
+
+    def segment(self, text, session_id, outline=None, kind="segment"):
+        return self.briefing.model_copy()
+
+    def final(self, parts, extra_text, session_id, outline=None, micro_events=None):
+        return self.briefing.model_copy()
+
+
 LECTURE = "Il teorema fondamentale del calcolo collega derivata e integrale definito"
 
 
@@ -25,7 +36,7 @@ def orchestrator(store, monkeypatch):
     engine = EventEngine(
         store=store,
         config=EngineConfig(min_segment_words=5),
-        synthesizer=lambda text, sid: BriefingReport(topic_title="Calculus", context_type="academic_lecture"),
+        synthesizer=StaticSynthesizer(BriefingReport(topic_title="Calculus", context_type="academic_lecture")),
     )
     orch = BeeStreamOrchestrator(store=store, engine=engine)
     orch.engine_enabled = True

@@ -266,6 +266,7 @@ class SQLiteContextStore(AbstractContextStore):
                 "ALTER TABLE session_dossiers ADD COLUMN final_status TEXT NOT NULL DEFAULT 'none';",
                 "ALTER TABLE session_dossiers ADD COLUMN final_revision INTEGER NOT NULL DEFAULT 0;",
                 "ALTER TABLE session_dossiers ADD COLUMN transitions_json TEXT;",
+                "ALTER TABLE session_dossiers ADD COLUMN research_ledger_json TEXT;",
             ):
                 try:
                     cursor.execute(ddl)
@@ -294,6 +295,16 @@ class SQLiteContextStore(AbstractContextStore):
             """)
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_session_chunks_session_ts ON session_chunks (session_id, ts);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_session_chunks_segment ON session_chunks (segment_id);")
+
+            # 3e. Global web search cache (shared by event syntheses)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS web_search_cache (
+                    query_norm TEXT PRIMARY KEY,
+                    provider TEXT,
+                    results_json TEXT NOT NULL,
+                    fetched_at TEXT NOT NULL
+                )
+            """)
 
             # 4. System Telemetry Table (Real Execution Latencies & Averages)
             cursor.execute("""
@@ -1208,8 +1219,9 @@ class SQLiteContextStore(AbstractContextStore):
                  status, location_json, transcript_chunks_json, key_discussion_points_json,
                  linked_micro_events_json, final_briefing_id, created_at,
                  conversation_uuids_json, segments_json, anchor_location_json, last_on_topic_at,
-                 paused_at, hard_close_deadline, final_status, final_revision, transitions_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 paused_at, hard_close_deadline, final_status, final_revision, transitions_json,
+                 research_ledger_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 dossier.session_id,
                 dossier.title,
@@ -1233,6 +1245,7 @@ class SQLiteContextStore(AbstractContextStore):
                 dossier.final_status,
                 dossier.final_revision,
                 _dump([t.model_dump() for t in dossier.transitions]),
+                _dump(dossier.research_ledger),
             ))
             conn.commit()
         return dossier.session_id
@@ -1309,6 +1322,7 @@ class SQLiteContextStore(AbstractContextStore):
             final_status=(row["final_status"] if "final_status" in keys and row["final_status"] else "none"),
             final_revision=(row["final_revision"] if "final_revision" in keys and row["final_revision"] else 0),
             transitions=transitions,
+            research_ledger=_load("research_ledger_json", []),
         )
 
     def get_session_dossier(self, session_id: Optional[str] = None) -> Optional[SessionDossier]:
@@ -1430,6 +1444,32 @@ class SQLiteContextStore(AbstractContextStore):
                 location=json.loads(row["location_json"]) if row["location_json"] else None,
             ))
         return result
+
+    def get_cached_search(self, query_norm: str, max_age_seconds: int) -> Optional[dict]:
+        """Returns {'provider', 'results'} for a cached web search younger than max_age_seconds."""
+        with self._get_connection() as conn:
+            row = conn.cursor().execute(
+                "SELECT provider, results_json, fetched_at FROM web_search_cache WHERE query_norm = ?",
+                (query_norm,),
+            ).fetchone()
+        if not row:
+            return None
+        try:
+            age = (datetime.now() - datetime.fromisoformat(row["fetched_at"])).total_seconds()
+        except ValueError:
+            return None
+        if age > max_age_seconds:
+            return None
+        return {"provider": row["provider"], "results": json.loads(row["results_json"])}
+
+    def put_cached_search(self, query_norm: str, provider: str, results: List[dict]) -> None:
+        with self._get_connection() as conn:
+            conn.cursor().execute(
+                "INSERT OR REPLACE INTO web_search_cache (query_norm, provider, results_json, fetched_at) "
+                "VALUES (?, ?, ?, ?)",
+                (query_norm, provider, json.dumps(results, ensure_ascii=False), datetime.now().isoformat()),
+            )
+            conn.commit()
 
     def append_chunk_to_session(
         self, session_id: str, chunk_text: str, location: Optional[dict] = None

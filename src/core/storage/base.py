@@ -220,6 +220,15 @@ class AbstractContextStore(ABC):
         """List logged chunks of an event in chronological order."""
         raise NotImplementedError
 
+    # --- Web search cache ---
+    def get_cached_search(self, query_norm: str, max_age_seconds: int) -> Optional[dict]:
+        """Return {'provider', 'results'} for a cached search younger than max_age_seconds."""
+        return None
+
+    def put_cached_search(self, query_norm: str, provider: str, results: List[dict]) -> None:
+        """Store web search results for a normalized query."""
+        return None
+
     def record_latency(
         self,
         event_type: str,

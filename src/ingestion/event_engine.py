@@ -25,7 +25,7 @@ import uuid
 from collections import deque
 from dataclasses import dataclass, field, replace
 from datetime import datetime
-from typing import Any, Callable, Deque, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Deque, Dict, List, Optional, Protocol, Set, Tuple
 
 from src.core.config import Settings, settings
 from src.core.schemas import (
@@ -43,7 +43,18 @@ logger = logging.getLogger("examen.ingestion.event_engine")
 
 Clock = Callable[[], float]
 Listener = Callable[[str, Dict[str, Any]], None]
-Synthesizer = Callable[[str, str], Optional[BriefingReport]]
+
+
+class Synthesizer(Protocol):
+    """Produces event briefings. Implementations may return a BriefingReport or an object with
+    `.briefing` and `.research` (ledger entries), e.g. topic_research.SynthesisOutcome."""
+
+    def segment(self, text: str, session_id: str, outline: Any = None, kind: str = "segment") -> Any: ...
+
+    def final(
+        self, parts: List[BriefingReport], extra_text: str, session_id: str,
+        outline: Any = None, micro_events: Optional[List[Any]] = None,
+    ) -> Any: ...
 
 
 # ---------------------------------------------------------------------------
@@ -294,16 +305,12 @@ class SynthesisJob:
         return (self.kind, self.session_id, self.segment_id or "")
 
 
-def default_synthesizer(text: str, session_id: str) -> Optional[BriefingReport]:
-    """Runs Stage 3C (topic extraction + web research + synthesis) on aggregated event text."""
-    from src.pipeline.nodes.topic_research import node_topic_research
-
-    result = node_topic_research({
-        "raw_transcript": text,
-        "session_id": session_id,
-        "categories": ["deep_topic"],
-    })
-    return result.get("briefing_report")
+def _unpack_outcome(outcome: Any) -> Tuple[Optional[BriefingReport], List[Dict[str, Any]]]:
+    if outcome is None:
+        return None, []
+    if isinstance(outcome, BriefingReport):
+        return outcome, []
+    return getattr(outcome, "briefing", None), list(getattr(outcome, "research", []) or [])
 
 
 _CONTEXT_TYPE_TO_DOMAIN = {
@@ -316,14 +323,6 @@ _CONTEXT_TYPE_TO_DOMAIN = {
 }
 
 _PLACEHOLDER_TITLE_PREFIX = "Ongoing session"
-
-
-def _truncate_words(text: str, max_words: int) -> str:
-    words = text.split()
-    if len(words) <= max_words:
-        return text
-    half = max_words // 2
-    return " ".join(words[:half]) + " [...] " + " ".join(words[-half:])
 
 
 # ---------------------------------------------------------------------------
@@ -355,7 +354,7 @@ class EventEngine:
         self._store = store
         self.config = config or EngineConfig.from_settings()
         self.clock: Clock = clock or time.time
-        self.synthesizer: Synthesizer = synthesizer or default_synthesizer
+        self._synthesizer: Optional[Synthesizer] = synthesizer
         self._lock = threading.RLock()
         self._current: Optional[SessionDossier] = None
         self._last_seen_ts: float = 0.0
@@ -375,6 +374,16 @@ class EventEngine:
         # Resolve the global store lazily on every access unless one was injected, so that a
         # replaced store singleton (tests, /reset-db) is picked up.
         return self._store if self._store is not None else get_storage_store()
+
+    @property
+    def synthesizer(self) -> Synthesizer:
+        if self._synthesizer is None:
+            from src.pipeline.nodes.topic_research import PipelineEventSynthesizer
+
+            self._synthesizer = PipelineEventSynthesizer(
+                store_getter=lambda: self.store, max_words=self.config.synthesis_max_words
+            )
+        return self._synthesizer
 
     def add_listener(self, listener: Listener) -> None:
         self._listeners.append(listener)
@@ -839,8 +848,16 @@ class EventEngine:
             self._save(ev)
         self._emit("segment_synthesizing", {"session_id": session_id, "segment_id": segment_id})
 
-        text = _truncate_words(self._segment_text(session_id, segment_id), self.config.synthesis_max_words)
-        briefing = self.synthesizer(text, session_id)
+        with self._lock:
+            ev = self._load(session_id)
+            seg = next((s for s in ev.segments if s.segment_id == segment_id), None) if ev else None
+            if ev is None or seg is None:
+                return
+            outline = self._outline(ev, part_index=seg.index)
+            kind = "checkpoint" if seg.kind == "checkpoint" else "segment"
+
+        text = self._segment_text(session_id, segment_id)
+        briefing, research = _unpack_outcome(self.synthesizer.segment(text, session_id, outline=outline, kind=kind))
         if briefing is None:
             raise RuntimeError("Synthesizer returned no briefing")
 
@@ -852,17 +869,55 @@ class EventEngine:
             briefing.id = None
             briefing.session_id = session_id
             briefing.segment_id = segment_id
-            briefing.kind = "checkpoint" if seg.kind == "checkpoint" else "segment"
+            briefing.kind = kind  # type: ignore[assignment]
             seg.briefing_id = self.store.save_topic_briefing(briefing)
             seg.title = briefing.topic_title
             seg.status = "synthesized"
             self._adopt_title_and_domain(ev, briefing)
             if briefing.topic_title and briefing.topic_title not in ev.key_discussion_points:
                 ev.key_discussion_points.append(briefing.topic_title)
+            self._record_research(ev, research, segment_id=segment_id, kind=kind)
             self._save(ev)
             payload = self._summary(ev)
         payload["briefing"] = briefing.model_dump()
         self._emit("segment_synthesized", payload)
+
+    def _outline(self, ev: SessionDossier, part_index: Optional[int] = None) -> Any:
+        """Event context handed to the synthesizer (doc 03 §2)."""
+        from src.pipeline.nodes.topic_research import EventOutline
+
+        title = ev.title if ev.title and not ev.title.startswith(_PLACEHOLDER_TITLE_PREFIX) else None
+        context_type = next(
+            (k for k, v in _CONTEXT_TYPE_TO_DOMAIN.items() if v == ev.domain and ev.domain != "general"), None
+        )
+        return EventOutline(
+            event_title=title,
+            context_type=context_type,
+            part_index=part_index,
+            previous_parts=[
+                s.title for s in ev.segments
+                if s.title and s.status == "synthesized" and (part_index is None or s.index < part_index)
+            ],
+            key_points=list(ev.key_discussion_points),
+            researched_queries=[e.get("query") for e in ev.research_ledger if e.get("query")],
+        )
+
+    @staticmethod
+    def _record_research(
+        ev: SessionDossier, entries: List[Dict[str, Any]], segment_id: Optional[str], kind: str
+    ) -> None:
+        known = {e.get("query") for e in ev.research_ledger}
+        for entry in entries:
+            query = entry.get("query")
+            if not query or query in known:
+                continue
+            known.add(query)
+            ev.research_ledger.append({
+                "query": query,
+                "sources": list(entry.get("sources") or []),
+                "segment_id": segment_id,
+                "kind": kind,
+            })
 
     def _run_final_job(self, session_id: str) -> None:
         # Make sure every segment had its chance first (ordering guarantee, restart safety)
@@ -885,34 +940,33 @@ class EventEngine:
         unsynthesized_text = " ".join(
             self._segment_text(session_id, s.segment_id) for s in segments if s.status in ("skipped", "failed")
         ).strip()
+        with self._lock:
+            ev = self._load(session_id)
+            outline = self._outline(ev) if ev else None
+            micro_events = list(ev.linked_micro_events) if ev else []
 
         final: Optional[BriefingReport] = None
+        research: List[Dict[str, Any]] = []
         if len(synthesized) == 1 and len(unsynthesized_text.split()) < self.config.min_segment_words:
             # Single-segment shortcut: promote the segment briefing, no extra LLM call
             final = self.store.get_topic_briefing(synthesized[0].briefing_id)
-        elif synthesized:
-            parts: List[str] = []
-            for seg in synthesized:
-                b = self.store.get_topic_briefing(seg.briefing_id)
-                if not b:
-                    continue
-                bullets = " ".join(b.executive_summary)
-                parts.append(f"Part {seg.index}: {b.topic_title}. {bullets} {b.explanatory_synthesis}")
-            if unsynthesized_text:
-                parts.append(unsynthesized_text)
-            final = self.synthesizer(
-                _truncate_words("\n".join(parts), self.config.synthesis_max_words), session_id
-            )
+            if final is not None:
+                from src.pipeline.nodes.topic_research import append_micro_events_section
+
+                final = append_micro_events_section(final.model_copy(deep=True), micro_events)
         else:
-            all_text = self._segment_text(session_id, None)
-            if not all_text.strip():
+            parts = [b for b in (self.store.get_topic_briefing(s.briefing_id) for s in synthesized) if b]
+            extra_text = unsynthesized_text if parts else self._segment_text(session_id, None)
+            if not parts and not extra_text.strip():
                 with self._lock:
                     ev = self._load(session_id)
                     if ev is not None:
                         ev.final_status = "none"
                         self._save(ev)
                 return
-            final = self.synthesizer(_truncate_words(all_text, self.config.synthesis_max_words), session_id)
+            final, research = _unpack_outcome(self.synthesizer.final(
+                parts, extra_text, session_id, outline=outline, micro_events=micro_events
+            ))
 
         if final is None:
             raise RuntimeError("Synthesizer returned no final briefing")
@@ -928,6 +982,7 @@ class EventEngine:
             final.kind = "final"
             final.created_at = datetime.now().isoformat()
             final_id = self.store.save_topic_briefing(final)
+            self._record_research(ev, research, segment_id=None, kind="final")
             ev.final_briefing_id = final_id
             ev.briefing_report = final
             ev.final_status = "ready"

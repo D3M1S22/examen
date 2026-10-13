@@ -23,7 +23,10 @@ Fixes audit findings #2–#7 and #10–#12. Removes fragmented briefings for the
 
 In this phase R4 always resumes when on-topic content returns within `T_hard` (no topic split yet).
 
-### Phase B — Progressive & consolidated synthesis
+### Phase B — Progressive & consolidated synthesis — ✅ IMPLEMENTED (2026-10-13)
+
+> Code: [topic_research.py](../../../src/pipeline/nodes/topic_research.py) (`extract_topics`, `research`, `synthesize_briefing`, `condense_transcript`, `PipelineEventSynthesizer`), [web_search.py](../../../src/pipeline/tools/web_search.py) (`SearchCache`, `cache_key`), [event_engine.py](../../../src/ingestion/event_engine.py) (outline + ledger wiring); tests: [test_event_synthesis.py](../../../tests/test_event_synthesis.py). Deviation from the spec: queries already in the ledger are **served from the cache instead of being dropped**, so the synthesizer keeps their documentation as context without new network calls (`cache_only`).
+
 1. Refactor `node_topic_research` into `extract_topics` / `research` / `synthesize_briefing` — [03](03_synthesis_scheduling.md) §2.
 2. `SynthesisJobQueue` with idempotency, retries and ordering — [03](03_synthesis_scheduling.md) §5.
 3. Segment, checkpoint and final (map-reduce) synthesis; single-segment shortcut — [03](03_synthesis_scheduling.md) §3.

@@ -66,6 +66,7 @@ class Settings(BaseSettings):
     event_location_shift_meters: float = Field(default=400.0, alias="EVENT_LOCATION_SHIFT_METERS")
     event_tick_seconds: float = Field(default=15.0, alias="EVENT_TICK_SECONDS")
     event_synthesis_max_words: int = Field(default=6000, alias="EVENT_SYNTHESIS_MAX_WORDS")
+    web_search_cache_ttl_seconds: int = Field(default=86400, alias="WEB_SEARCH_CACHE_TTL_SECONDS")
 
     # Serving & MCP
     mcp_host: str = Field(default="0.0.0.0", alias="MCP_HOST")
