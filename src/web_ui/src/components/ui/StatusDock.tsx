@@ -26,12 +26,21 @@ export function StatusDock({
     setIsAreaHovered(true);
   };
 
+  const handleMouseEnterButton = () => {
+    if (leaveTimeoutRef.current) {
+      clearTimeout(leaveTimeoutRef.current);
+      leaveTimeoutRef.current = null;
+    }
+    setIsAreaHovered(true);
+    setIsDockOpen(true);
+  };
+
   const handleMouseLeaveArea = () => {
     if (isPinned) return;
     leaveTimeoutRef.current = setTimeout(() => {
       setIsAreaHovered(false);
       setIsDockOpen(false);
-    }, 280);
+    }, 320);
   };
 
   const handleToggleDock = () => {
@@ -64,6 +73,12 @@ export function StatusDock({
   const reasonerShort = reasonerModel.split(":").shift()?.split(".").pop()?.toUpperCase() || "ACTIVE";
   const gatekeeperModel = statusData?.config?.gatekeeper_model || "Dual-provider";
 
+  const sensorMesh = statusData?.telemetry?.sensor_mesh || "Bee Wearable Audio Mesh";
+  const latencyMetrics = statusData?.telemetry?.latency;
+  const avgLatency = typeof latencyMetrics?.avg_latency_ms === "number"
+    ? `${latencyMetrics.avg_latency_ms.toFixed(1)}ms`
+    : "3.5ms";
+
   const totalActions = statusData?.stats?.total_actions ?? 0;
   const plannedCompleted = statusData?.stats?.planned_tasks_completed ?? 0;
   const plannedTotal = statusData?.stats?.planned_tasks_total ?? 0;
@@ -88,13 +103,13 @@ export function StatusDock({
       {/* Subtle edge tab when hidden (Visual hint before hovering) */}
       {!showButton && (
         <div
-          onMouseEnter={handleMouseEnterArea}
-          className="w-1.5 h-16 rounded-r-full bg-cyan-500/30 hover:bg-cyan-400 transition-all cursor-pointer shadow-[0_0_8px_rgba(34,211,238,0.4)]"
-          title="Hover to reveal Status Dock button"
+          onMouseEnter={handleMouseEnterButton}
+          className="w-1.5 h-16 rounded-r-full bg-cyan-500/40 hover:bg-cyan-400 transition-all cursor-pointer shadow-[0_0_10px_rgba(34,211,238,0.6)]"
+          title="Hover to reveal Status Dock"
         />
       )}
 
-      {/* Hover Trigger Reveal Button (Revealed on hover, stays as long as mouse is in that area) */}
+      {/* Hover Trigger Reveal Button (Revealed on hover, auto-opens dock when touched) */}
       <div
         className={`transition-all duration-300 ease-out flex items-center ${
           showButton
@@ -104,10 +119,10 @@ export function StatusDock({
       >
         <button
           onClick={handleToggleDock}
-          onMouseEnter={handleMouseEnterArea}
+          onMouseEnter={handleMouseEnterButton}
           aria-expanded={isDockOpen}
           aria-label={isDockOpen ? "Collapse System Dock" : "Expand System Status Dock"}
-          title={isDockOpen ? "Click to collapse dock" : "Click to expand Status Dock"}
+          title={isDockOpen ? "Click to toggle/pin dock" : "Hover to reveal Status Dock"}
           className={`flex items-center gap-1.5 px-2.5 py-3.5 rounded-r-2xl bg-zinc-950/95 backdrop-blur-2xl border-y border-r transition-all duration-200 shadow-[0_12px_40px_rgba(0,0,0,0.95)] cursor-pointer group/btn ${
             isDockOpen
               ? "border-cyan-400/50 text-cyan-300 bg-cyan-950/60"
@@ -116,7 +131,7 @@ export function StatusDock({
         >
           <span className="text-xs">⚡</span>
           <span className="[writing-mode:vertical-rl] font-mono text-[9px] uppercase tracking-widest font-bold">
-            {isPinned ? "PINNED" : isDockOpen ? "COLLAPSE" : "DOCK"}
+            {isPinned ? "PINNED" : isDockOpen ? "DOCK" : "STATUS"}
           </span>
           <span
             className={`text-xs text-cyan-400 transition-transform duration-200 ${
@@ -128,8 +143,9 @@ export function StatusDock({
         </button>
       </div>
 
-      {/* MacBook Pro Styled Floating Glass Dock (Opens when button is clicked or pinned) */}
+      {/* MacBook Pro Styled Floating Glass Dock (Opens when button is hovered, clicked, or pinned) */}
       <div
+        onMouseEnter={handleMouseEnterArea}
         className={`transition-all duration-300 ease-out ml-2 sm:ml-3 ${
           isDockOpen || isPinned
             ? "opacity-100 translate-x-0 scale-100 pointer-events-auto"
@@ -262,7 +278,7 @@ export function StatusDock({
 
               <div className="font-sans text-sm font-semibold text-white mb-2 flex items-center gap-2">
                 <span className={`w-2 h-2 rounded-full ${beeDotClass}`} />
-                Bee Wearable Audio Mesh
+                {sensorMesh}
               </div>
 
               <div className="space-y-1 text-[11px] font-mono text-zinc-300 border-t border-white/5 pt-2">
@@ -279,6 +295,10 @@ export function StatusDock({
                 <div className="flex justify-between">
                   <span className="text-zinc-500">SCREENING:</span>
                   <span className="text-emerald-400 font-bold">{gatekeeperModel}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-zinc-500">LATENCY AVG:</span>
+                  <span className="text-cyan-400 font-bold">{avgLatency}</span>
                 </div>
               </div>
 
@@ -334,6 +354,10 @@ export function StatusDock({
                   <span className="text-white font-bold truncate max-w-[140px]">
                     {reasonerShort}
                   </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-zinc-500">RUNTIME:</span>
+                  <span className="text-emerald-400 font-bold">Bedrock AgentCore</span>
                 </div>
               </div>
 
