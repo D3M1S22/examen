@@ -1,21 +1,29 @@
 from datetime import datetime, timezone
 import json
+import logging
+import os
 import re
 import sqlite3
 import uuid
-from typing import Any, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 from src.core.schemas import (
     BriefingReport,
+    EventTransitionLog,
     MicroEventRef,
     PlannedTask,
     SessionDossier,
+    SessionSegment,
     SocialCommitment,
     SocialEntity,
     SocialWebProfile,
+    TopicProfile,
+    UtteranceChunk,
     VerifiedAction,
 )
 from src.core.storage.base import AbstractContextStore
+
+logger = logging.getLogger("examen.storage.sqlite")
 
 
 class SQLiteContextStore(AbstractContextStore):
@@ -26,8 +34,13 @@ class SQLiteContextStore(AbstractContextStore):
         self._init_db()
 
     def _get_connection(self) -> sqlite3.Connection:
+        # Recreate the schema if the database file was deleted underneath a live
+        # store instance (e.g. /reset-db while the server or tester is running).
+        needs_schema = self.db_path != ":memory:" and not os.path.exists(self.db_path)
         conn = sqlite3.connect(self.db_path, check_same_thread=False)
         conn.row_factory = sqlite3.Row
+        if needs_schema:
+            self._init_db()
         return conn
 
     def _init_db(self) -> None:
@@ -191,6 +204,17 @@ class SQLiteContextStore(AbstractContextStore):
                 cursor.execute("ALTER TABLE topic_briefings ADD COLUMN explanatory_synthesis TEXT;")
             except Exception:
                 pass
+            # Deep Topic Event Engine: briefing linkage to events/segments
+            for ddl in (
+                "ALTER TABLE topic_briefings ADD COLUMN session_id TEXT;",
+                "ALTER TABLE topic_briefings ADD COLUMN segment_id TEXT;",
+                "ALTER TABLE topic_briefings ADD COLUMN kind TEXT NOT NULL DEFAULT 'standalone';",
+            ):
+                try:
+                    cursor.execute(ddl)
+                except Exception:
+                    pass
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_briefings_session ON topic_briefings (session_id, kind);")
 
             # 3b. Utterance Diarization Cache (Milestone 3.1)
             cursor.execute("""
@@ -231,6 +255,59 @@ class SQLiteContextStore(AbstractContextStore):
                 cursor.execute("ALTER TABLE social_contacts ADD COLUMN session_id TEXT;")
             except Exception:
                 pass
+
+            # 3d. Deep Topic Event Engine: event fields + per-chunk log
+            for ddl in (
+                "ALTER TABLE session_dossiers ADD COLUMN conversation_uuids_json TEXT;",
+                "ALTER TABLE session_dossiers ADD COLUMN segments_json TEXT;",
+                "ALTER TABLE session_dossiers ADD COLUMN anchor_location_json TEXT;",
+                "ALTER TABLE session_dossiers ADD COLUMN last_on_topic_at TEXT;",
+                "ALTER TABLE session_dossiers ADD COLUMN paused_at TEXT;",
+                "ALTER TABLE session_dossiers ADD COLUMN hard_close_deadline TEXT;",
+                "ALTER TABLE session_dossiers ADD COLUMN final_status TEXT NOT NULL DEFAULT 'none';",
+                "ALTER TABLE session_dossiers ADD COLUMN final_revision INTEGER NOT NULL DEFAULT 0;",
+                "ALTER TABLE session_dossiers ADD COLUMN transitions_json TEXT;",
+                "ALTER TABLE session_dossiers ADD COLUMN research_ledger_json TEXT;",
+                "ALTER TABLE session_dossiers ADD COLUMN topic_profile_json TEXT;",
+                "ALTER TABLE session_dossiers ADD COLUMN pending_chunk_ids_json TEXT;",
+            ):
+                try:
+                    cursor.execute(ddl)
+                except Exception:
+                    pass
+            # Legacy 'finalizing' status maps to 'paused'
+            cursor.execute(
+                "UPDATE session_dossiers SET status = 'paused', paused_at = COALESCE(paused_at, last_updated_at) "
+                "WHERE status = 'finalizing';"
+            )
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS session_chunks (
+                    chunk_id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    segment_id TEXT,
+                    conversation_uuid TEXT,
+                    ts TEXT NOT NULL,
+                    text TEXT NOT NULL,
+                    word_count INTEGER NOT NULL DEFAULT 0,
+                    speaker_id TEXT,
+                    speaker_role TEXT,
+                    categories_json TEXT,
+                    on_topic INTEGER NOT NULL DEFAULT 0,
+                    location_json TEXT
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_session_chunks_session_ts ON session_chunks (session_id, ts);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_session_chunks_segment ON session_chunks (segment_id);")
+
+            # 3e. Global web search cache (shared by event syntheses)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS web_search_cache (
+                    query_norm TEXT PRIMARY KEY,
+                    provider TEXT,
+                    results_json TEXT NOT NULL,
+                    fetched_at TEXT NOT NULL
+                )
+            """)
 
             # 4. System Telemetry Table (Real Execution Latencies & Averages)
             cursor.execute("""
@@ -997,8 +1074,9 @@ class SQLiteContextStore(AbstractContextStore):
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT OR REPLACE INTO topic_briefings
-                (id, topic_title, context_type, executive_summary_json, explanatory_synthesis, deep_dive_markdown, web_sources_json, action_items_json, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (id, topic_title, context_type, executive_summary_json, explanatory_synthesis, deep_dive_markdown,
+                 web_sources_json, action_items_json, created_at, session_id, segment_id, kind)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 rec_id,
                 briefing.topic_title,
@@ -1008,7 +1086,10 @@ class SQLiteContextStore(AbstractContextStore):
                 briefing.deep_dive_markdown,
                 sources_str,
                 items_str,
-                briefing.created_at
+                briefing.created_at,
+                briefing.session_id,
+                briefing.segment_id,
+                briefing.kind,
             ))
             if self._has_fts:
                 cursor.execute("""
@@ -1017,6 +1098,28 @@ class SQLiteContextStore(AbstractContextStore):
                 """, (rec_id,))
             conn.commit()
         return rec_id
+
+    @staticmethod
+    def _row_to_briefing(row: sqlite3.Row) -> BriefingReport:
+        keys = row.keys()
+        exec_summary = json.loads(row["executive_summary_json"]) if row["executive_summary_json"] else []
+        sources = json.loads(row["web_sources_json"]) if row["web_sources_json"] else []
+        items = json.loads(row["action_items_json"]) if row["action_items_json"] else []
+        synthesis = row["explanatory_synthesis"] if "explanatory_synthesis" in keys and row["explanatory_synthesis"] else ""
+        return BriefingReport(
+            id=row["id"],
+            topic_title=row["topic_title"],
+            context_type=row["context_type"],
+            executive_summary=exec_summary,
+            explanatory_synthesis=synthesis,
+            deep_dive_markdown=row["deep_dive_markdown"] or "",
+            web_sources=sources,
+            action_items=items,
+            created_at=row["created_at"],
+            session_id=row["session_id"] if "session_id" in keys else None,
+            segment_id=row["segment_id"] if "segment_id" in keys else None,
+            kind=(row["kind"] if "kind" in keys and row["kind"] else "standalone"),
+        )
 
     def get_topic_briefing(self, query: Optional[str] = None) -> Optional[BriefingReport]:
         with self._get_connection() as conn:
@@ -1027,57 +1130,45 @@ class SQLiteContextStore(AbstractContextStore):
                 sql = """
                     SELECT * FROM topic_briefings
                     WHERE id = ? OR LOWER(topic_title) LIKE ? OR LOWER(deep_dive_markdown) LIKE ? OR LOWER(COALESCE(explanatory_synthesis, '')) LIKE ?
-                    ORDER BY created_at DESC LIMIT 1
+                    ORDER BY (id = ?) DESC, created_at DESC LIMIT 1
                 """
-                row = cursor.execute(sql, (clean_target, clean_query, clean_query, clean_query)).fetchone()
+                row = cursor.execute(
+                    sql, (clean_target, clean_query, clean_query, clean_query, clean_target)
+                ).fetchone()
             else:
                 sql = "SELECT * FROM topic_briefings ORDER BY created_at DESC LIMIT 1"
                 row = cursor.execute(sql).fetchone()
 
             if row:
-                exec_summary = json.loads(row["executive_summary_json"]) if row["executive_summary_json"] else []
-                sources = json.loads(row["web_sources_json"]) if row["web_sources_json"] else []
-                items = json.loads(row["action_items_json"]) if row["action_items_json"] else []
-                synthesis = row["explanatory_synthesis"] if "explanatory_synthesis" in row.keys() and row["explanatory_synthesis"] else ""
-                return BriefingReport(
-                    id=row["id"],
-                    topic_title=row["topic_title"],
-                    context_type=row["context_type"],
-                    executive_summary=exec_summary,
-                    explanatory_synthesis=synthesis,
-                    deep_dive_markdown=row["deep_dive_markdown"] or "",
-                    web_sources=sources,
-                    action_items=items,
-                    created_at=row["created_at"],
-                )
+                return self._row_to_briefing(row)
         return None
 
-    def list_topic_briefings(self, limit: int = 10) -> List[BriefingReport]:
-        results = []
+    def list_topic_briefings(
+        self, limit: int = 10, kind: Optional[str] = None, session_id: Optional[str] = None
+    ) -> List[BriefingReport]:
+        sql = "SELECT * FROM topic_briefings "
+        clauses: List[str] = []
+        params: List[Any] = []
+        if kind:
+            clauses.append("kind = ?")
+            params.append(kind)
+        if session_id:
+            clauses.append("session_id = ?")
+            params.append(session_id)
+        if clauses:
+            sql += "WHERE " + " AND ".join(clauses) + " "
+        sql += "ORDER BY created_at DESC LIMIT ?"
+        params.append(limit)
         with self._get_connection() as conn:
-            cursor = conn.cursor()
-            rows = cursor.execute(
-                "SELECT * FROM topic_briefings ORDER BY created_at DESC LIMIT ?", (limit,)
+            rows = conn.cursor().execute(sql, params).fetchall()
+            return [self._row_to_briefing(row) for row in rows]
+
+    def list_briefings_for_session(self, session_id: str) -> List[BriefingReport]:
+        with self._get_connection() as conn:
+            rows = conn.cursor().execute(
+                "SELECT * FROM topic_briefings WHERE session_id = ? ORDER BY created_at ASC", (session_id,)
             ).fetchall()
-            for row in rows:
-                exec_summary = json.loads(row["executive_summary_json"]) if row["executive_summary_json"] else []
-                sources = json.loads(row["web_sources_json"]) if row["web_sources_json"] else []
-                items = json.loads(row["action_items_json"]) if row["action_items_json"] else []
-                synthesis = row["explanatory_synthesis"] if "explanatory_synthesis" in row.keys() and row["explanatory_synthesis"] else ""
-                results.append(
-                    BriefingReport(
-                        id=row["id"],
-                        topic_title=row["topic_title"],
-                        context_type=row["context_type"],
-                        executive_summary=exec_summary,
-                        explanatory_synthesis=synthesis,
-                        deep_dive_markdown=row["deep_dive_markdown"] or "",
-                        web_sources=sources,
-                        action_items=items,
-                        created_at=row["created_at"],
-                    )
-                )
-        return results
+            return [self._row_to_briefing(row) for row in rows]
 
     def patch_utterance_speaker(
         self, chunk_id: str, speaker_id: str, speaker_role: Optional[str] = None
@@ -1109,23 +1200,31 @@ class SQLiteContextStore(AbstractContextStore):
     # Macro Session & Micro-Event Decoupling (Milestone 3.2)
     # =========================================================================
     def save_session_dossier(self, dossier: SessionDossier) -> str:
-        loc_str = json.dumps(dossier.location, ensure_ascii=False) if dossier.location else None
-        chunks_str = json.dumps(dossier.transcript_chunks, ensure_ascii=False)
-        points_str = json.dumps(dossier.key_discussion_points, ensure_ascii=False)
+        def _dump(value: Any) -> Optional[str]:
+            return json.dumps(value, ensure_ascii=False) if value else None
+
         events_payload = [
             e.model_dump() if hasattr(e, "model_dump") else e
             for e in dossier.linked_micro_events
         ]
-        events_str = json.dumps(events_payload, ensure_ascii=False)
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
+            # Chunks logged in session_chunks are the source of truth; the legacy JSON blob is only
+            # written for sessions that never used the per-chunk log.
+            has_chunk_log = cursor.execute(
+                "SELECT 1 FROM session_chunks WHERE session_id = ? LIMIT 1", (dossier.session_id,)
+            ).fetchone() is not None
+            chunks_str = None if has_chunk_log else json.dumps(dossier.transcript_chunks, ensure_ascii=False)
             cursor.execute("""
                 INSERT OR REPLACE INTO session_dossiers
                 (session_id, title, domain, start_time, last_updated_at, concluded_at,
                  status, location_json, transcript_chunks_json, key_discussion_points_json,
-                 linked_micro_events_json, final_briefing_id, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 linked_micro_events_json, final_briefing_id, created_at,
+                 conversation_uuids_json, segments_json, anchor_location_json, last_on_topic_at,
+                 paused_at, hard_close_deadline, final_status, final_revision, transitions_json,
+                 research_ledger_json, topic_profile_json, pending_chunk_ids_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 dossier.session_id,
                 dossier.title,
@@ -1134,15 +1233,112 @@ class SQLiteContextStore(AbstractContextStore):
                 dossier.last_updated_at,
                 dossier.concluded_at,
                 dossier.status,
-                loc_str,
+                _dump(dossier.location),
                 chunks_str,
-                points_str,
-                events_str,
+                json.dumps(dossier.key_discussion_points, ensure_ascii=False),
+                json.dumps(events_payload, ensure_ascii=False),
                 dossier.final_briefing_id,
                 dossier.start_time,
+                _dump(dossier.conversation_uuids),
+                _dump([seg.model_dump() for seg in dossier.segments]),
+                _dump(dossier.anchor_location),
+                dossier.last_on_topic_at,
+                dossier.paused_at,
+                dossier.hard_close_deadline,
+                dossier.final_status,
+                dossier.final_revision,
+                _dump([t.model_dump() for t in dossier.transitions]),
+                _dump(dossier.research_ledger),
+                dossier.topic_profile.model_dump_json() if dossier.topic_profile else None,
+                _dump(dossier.pending_chunk_ids),
             ))
             conn.commit()
         return dossier.session_id
+
+    def _row_to_session_dossier(
+        self, row: sqlite3.Row, cursor: sqlite3.Cursor, max_chunks: int = 200
+    ) -> SessionDossier:
+        def _load(column: str, default: Any) -> Any:
+            raw = row[column] if column in row.keys() else None
+            if not raw:
+                return default
+            try:
+                return json.loads(raw)
+            except (TypeError, ValueError):
+                return default
+
+        def _load_profile(raw: Any) -> Optional[TopicProfile]:
+            if not raw:
+                return None
+            try:
+                return TopicProfile(**raw)
+            except Exception:
+                return None
+
+        linked_events: List[MicroEventRef] = []
+        for item in _load("linked_micro_events_json", []):
+            try:
+                linked_events.append(MicroEventRef(**item) if isinstance(item, dict) else item)
+            except Exception:
+                pass
+
+        segments: List[SessionSegment] = []
+        for item in _load("segments_json", []):
+            try:
+                segments.append(SessionSegment(**item))
+            except Exception:
+                pass
+
+        transitions: List[EventTransitionLog] = []
+        for item in _load("transitions_json", []):
+            try:
+                transitions.append(EventTransitionLog(**item))
+            except Exception:
+                pass
+
+        # Prefer the per-chunk log; fall back to the legacy JSON blob
+        chunk_rows = cursor.execute(
+            "SELECT text FROM (SELECT text, ts, rowid FROM session_chunks WHERE session_id = ? "
+            "ORDER BY ts DESC, rowid DESC LIMIT ?) ORDER BY ts ASC, rowid ASC",
+            (row["session_id"], max_chunks),
+        ).fetchall()
+        chunks = [r["text"] for r in chunk_rows] if chunk_rows else _load("transcript_chunks_json", [])
+
+        briefing_report = None
+        if row["final_briefing_id"]:
+            briefing_report = self.get_topic_briefing(row["final_briefing_id"])
+
+        keys = row.keys()
+        status = row["status"]
+        if status == "finalizing":
+            status = "paused"
+        return SessionDossier(
+            session_id=row["session_id"],
+            title=row["title"],
+            domain=row["domain"],
+            start_time=row["start_time"],
+            last_updated_at=row["last_updated_at"],
+            concluded_at=row["concluded_at"],
+            status=status,
+            location=_load("location_json", None),
+            transcript_chunks=chunks,
+            key_discussion_points=_load("key_discussion_points_json", []),
+            linked_micro_events=linked_events,
+            final_briefing_id=row["final_briefing_id"],
+            briefing_report=briefing_report,
+            conversation_uuids=_load("conversation_uuids_json", []),
+            segments=segments,
+            anchor_location=_load("anchor_location_json", None),
+            last_on_topic_at=row["last_on_topic_at"] if "last_on_topic_at" in keys else None,
+            paused_at=row["paused_at"] if "paused_at" in keys else None,
+            hard_close_deadline=row["hard_close_deadline"] if "hard_close_deadline" in keys else None,
+            final_status=(row["final_status"] if "final_status" in keys and row["final_status"] else "none"),
+            final_revision=(row["final_revision"] if "final_revision" in keys and row["final_revision"] else 0),
+            transitions=transitions,
+            research_ledger=_load("research_ledger_json", []),
+            topic_profile=_load_profile(_load("topic_profile_json", None)),
+            pending_chunk_ids=_load("pending_chunk_ids_json", []),
+        )
 
     def get_session_dossier(self, session_id: Optional[str] = None) -> Optional[SessionDossier]:
         sql = "SELECT * FROM session_dossiers "
@@ -1158,38 +1354,7 @@ class SQLiteContextStore(AbstractContextStore):
             row = cursor.execute(sql, params).fetchone()
             if not row:
                 return None
-
-            loc = json.loads(row["location_json"]) if row["location_json"] else None
-            chunks = json.loads(row["transcript_chunks_json"]) if row["transcript_chunks_json"] else []
-            points = json.loads(row["key_discussion_points_json"]) if row["key_discussion_points_json"] else []
-            
-            raw_events = json.loads(row["linked_micro_events_json"]) if row["linked_micro_events_json"] else []
-            linked_events: List[MicroEventRef] = []
-            for item in raw_events:
-                try:
-                    linked_events.append(MicroEventRef(**item) if isinstance(item, dict) else item)
-                except Exception:
-                    pass
-
-            briefing_report = None
-            if row["final_briefing_id"]:
-                briefing_report = self.get_topic_briefing(row["final_briefing_id"])
-
-            return SessionDossier(
-                session_id=row["session_id"],
-                title=row["title"],
-                domain=row["domain"],
-                start_time=row["start_time"],
-                last_updated_at=row["last_updated_at"],
-                concluded_at=row["concluded_at"],
-                status=row["status"],
-                location=loc,
-                transcript_chunks=chunks,
-                key_discussion_points=points,
-                linked_micro_events=linked_events,
-                final_briefing_id=row["final_briefing_id"],
-                briefing_report=briefing_report,
-            )
+            return self._row_to_session_dossier(row, cursor)
 
     def list_session_dossiers(
         self, status: Optional[str] = None, limit: int = 10
@@ -1202,44 +1367,186 @@ class SQLiteContextStore(AbstractContextStore):
         sql += "ORDER BY start_time DESC LIMIT ?"
         params.append(limit)
 
-        results = []
         with self._get_connection() as conn:
             cursor = conn.cursor()
             rows = cursor.execute(sql, params).fetchall()
-            for row in rows:
-                loc = json.loads(row["location_json"]) if row["location_json"] else None
-                chunks = json.loads(row["transcript_chunks_json"]) if row["transcript_chunks_json"] else []
-                points = json.loads(row["key_discussion_points_json"]) if row["key_discussion_points_json"] else []
-                raw_events = json.loads(row["linked_micro_events_json"]) if row["linked_micro_events_json"] else []
-                linked_events: List[MicroEventRef] = []
-                for item in raw_events:
-                    try:
-                        linked_events.append(MicroEventRef(**item) if isinstance(item, dict) else item)
-                    except Exception:
-                        pass
+            return [self._row_to_session_dossier(row, cursor) for row in rows]
 
-                briefing_report = None
-                if row["final_briefing_id"]:
-                    briefing_report = self.get_topic_briefing(row["final_briefing_id"])
+    def get_open_event(self) -> Optional[SessionDossier]:
+        """Returns the most recent engine-managed event that is still active or paused."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            row = cursor.execute(
+                "SELECT * FROM session_dossiers WHERE status IN ('active', 'paused') "
+                "AND segments_json IS NOT NULL ORDER BY last_updated_at DESC LIMIT 1"
+            ).fetchone()
+            if not row:
+                return None
+            return self._row_to_session_dossier(row, cursor)
 
-                results.append(
-                    SessionDossier(
-                        session_id=row["session_id"],
-                        title=row["title"],
-                        domain=row["domain"],
-                        start_time=row["start_time"],
-                        last_updated_at=row["last_updated_at"],
-                        concluded_at=row["concluded_at"],
-                        status=row["status"],
-                        location=loc,
-                        transcript_chunks=chunks,
-                        key_discussion_points=points,
-                        linked_micro_events=linked_events,
-                        final_briefing_id=row["final_briefing_id"],
-                        briefing_report=briefing_report,
+    def list_events_pending_final(self, limit: int = 20) -> List[SessionDossier]:
+        """Returns concluded events whose final briefing has not been produced yet."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            rows = cursor.execute(
+                "SELECT * FROM session_dossiers WHERE status = 'concluded' "
+                "AND final_status IN ('pending', 'synthesizing') ORDER BY last_updated_at ASC LIMIT ?",
+                (limit,),
+            ).fetchall()
+            return [self._row_to_session_dossier(row, cursor) for row in rows]
+
+    def append_session_chunk(
+        self,
+        chunk: UtteranceChunk,
+        session_id: str,
+        segment_id: Optional[str] = None,
+        on_topic: bool = False,
+    ) -> None:
+        """Appends one utterance to the per-chunk event log (idempotent on chunk_id)."""
+        with self._get_connection() as conn:
+            conn.cursor().execute("""
+                INSERT OR REPLACE INTO session_chunks
+                (chunk_id, session_id, segment_id, conversation_uuid, ts, text, word_count,
+                 speaker_id, speaker_role, categories_json, on_topic, location_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                chunk.chunk_id,
+                session_id,
+                segment_id,
+                chunk.conversation_uuid,
+                chunk.timestamp,
+                chunk.text,
+                len(chunk.text.split()),
+                chunk.speaker_id,
+                chunk.speaker_role,
+                json.dumps(chunk.categories, ensure_ascii=False),
+                1 if on_topic else 0,
+                json.dumps(chunk.location, ensure_ascii=False) if chunk.location else None,
+            ))
+            conn.commit()
+
+    def list_session_chunks(
+        self,
+        session_id: str,
+        segment_id: Optional[str] = None,
+        in_segments_only: bool = False,
+        limit: Optional[int] = None,
+    ) -> List[UtteranceChunk]:
+        """Lists logged chunks of an event in chronological order."""
+        sql = "SELECT * FROM session_chunks WHERE session_id = ? "
+        params: List[Any] = [session_id]
+        if segment_id:
+            sql += "AND segment_id = ? "
+            params.append(segment_id)
+        elif in_segments_only:
+            sql += "AND segment_id IS NOT NULL "
+        sql += "ORDER BY ts ASC, rowid ASC"
+        if limit:
+            sql += " LIMIT ?"
+            params.append(limit)
+        with self._get_connection() as conn:
+            rows = conn.cursor().execute(sql, params).fetchall()
+        result: List[UtteranceChunk] = []
+        for row in rows:
+            result.append(UtteranceChunk(
+                chunk_id=row["chunk_id"],
+                conversation_uuid=row["conversation_uuid"] or "default_session",
+                text=row["text"],
+                speaker_id=row["speaker_id"],
+                speaker_role=row["speaker_role"] or "unknown",
+                timestamp=row["ts"],
+                categories=json.loads(row["categories_json"]) if row["categories_json"] else [],
+                location=json.loads(row["location_json"]) if row["location_json"] else None,
+            ))
+        return result
+
+    def get_chunk_segments(self, session_id: str) -> Dict[str, Optional[str]]:
+        """chunk_id -> segment_id (None for chunks logged outside any segment, e.g. during a pause)."""
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                "SELECT chunk_id, segment_id FROM session_chunks WHERE session_id = ?", (session_id,)
+            ).fetchall()
+        return {row["chunk_id"]: row["segment_id"] for row in rows}
+
+    def delete_session_dossier(self, session_id: str) -> bool:
+        with self._get_connection() as conn:
+            cur = conn.execute("DELETE FROM session_dossiers WHERE session_id = ?", (session_id,))
+            conn.commit()
+            return cur.rowcount > 0
+
+    def delete_topic_briefing(self, briefing_id: str) -> bool:
+        with self._get_connection() as conn:
+            if self._has_fts:
+                try:
+                    conn.execute(
+                        "INSERT INTO fts_briefings(fts_briefings, rowid, topic_title, deep_dive_markdown) "
+                        "SELECT 'delete', rowid, topic_title, deep_dive_markdown FROM topic_briefings WHERE id = ?",
+                        (briefing_id,),
                     )
-                )
-        return results
+                except sqlite3.OperationalError:
+                    pass
+            cur = conn.execute("DELETE FROM topic_briefings WHERE id = ?", (briefing_id,))
+            conn.commit()
+            return cur.rowcount > 0
+
+    def reassign_briefings(self, briefing_ids: List[str], session_id: str) -> None:
+        if not briefing_ids:
+            return
+        placeholders = ",".join("?" for _ in briefing_ids)
+        with self._get_connection() as conn:
+            conn.execute(
+                f"UPDATE topic_briefings SET session_id = ? WHERE id IN ({placeholders})",
+                [session_id, *briefing_ids],
+            )
+            conn.commit()
+
+    def get_cached_search(self, query_norm: str, max_age_seconds: int) -> Optional[dict]:
+        """Returns {'provider', 'results'} for a cached web search younger than max_age_seconds."""
+        with self._get_connection() as conn:
+            row = conn.cursor().execute(
+                "SELECT provider, results_json, fetched_at FROM web_search_cache WHERE query_norm = ?",
+                (query_norm,),
+            ).fetchone()
+        if not row:
+            return None
+        try:
+            age = (datetime.now() - datetime.fromisoformat(row["fetched_at"])).total_seconds()
+        except ValueError:
+            return None
+        if age > max_age_seconds:
+            return None
+        return {"provider": row["provider"], "results": json.loads(row["results_json"])}
+
+    def put_cached_search(self, query_norm: str, provider: str, results: List[dict]) -> None:
+        with self._get_connection() as conn:
+            conn.cursor().execute(
+                "INSERT OR REPLACE INTO web_search_cache (query_norm, provider, results_json, fetched_at) "
+                "VALUES (?, ?, ?, ?)",
+                (query_norm, provider, json.dumps(results, ensure_ascii=False), datetime.now().isoformat()),
+            )
+            conn.commit()
+
+    def assign_chunks(
+        self,
+        chunk_ids: List[str],
+        session_id: str,
+        segment_id: Optional[str],
+        on_topic: Optional[bool] = None,
+    ) -> None:
+        """Moves logged chunks to an event/segment (resume after pause, split on topic change)."""
+        if not chunk_ids:
+            return
+        placeholders = ",".join("?" for _ in chunk_ids)
+        sql = f"UPDATE session_chunks SET session_id = ?, segment_id = ?"
+        params: List[Any] = [session_id, segment_id]
+        if on_topic is not None:
+            sql += ", on_topic = ?"
+            params.append(1 if on_topic else 0)
+        sql += f" WHERE chunk_id IN ({placeholders})"
+        params.extend(chunk_ids)
+        with self._get_connection() as conn:
+            conn.execute(sql, params)
+            conn.commit()
 
     def append_chunk_to_session(
         self, session_id: str, chunk_text: str, location: Optional[dict] = None
@@ -1257,6 +1564,10 @@ class SQLiteContextStore(AbstractContextStore):
                 location=location,
                 transcript_chunks=[chunk_text] if chunk_text and chunk_text.strip() else [],
             )
+        elif dossier.status == "concluded":
+            # Never silently grow a concluded session: callers must open a new one
+            logger.warning(f"Refusing to append chunk to concluded session '{session_id}'.")
+            return dossier
         else:
             if chunk_text and chunk_text.strip():
                 dossier.transcript_chunks.append(chunk_text.strip())
@@ -1294,7 +1605,17 @@ class SQLiteContextStore(AbstractContextStore):
             )
             if not exists:
                 dossier.linked_micro_events.append(event_ref)
-            dossier.last_updated_at = now_iso
+            # Update only the micro-event columns: the Deep Topic Event Engine owns the lifecycle
+            # fields and may be writing them concurrently from another thread.
+            events_payload = [e.model_dump() for e in dossier.linked_micro_events]
+            with self._get_connection() as conn:
+                conn.execute(
+                    "UPDATE session_dossiers SET linked_micro_events_json = ?, last_updated_at = ? "
+                    "WHERE session_id = ?",
+                    (json.dumps(events_payload, ensure_ascii=False), now_iso, session_id),
+                )
+                conn.commit()
+            return True
 
         self.save_session_dossier(dossier)
         return True

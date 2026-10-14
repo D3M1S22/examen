@@ -73,15 +73,11 @@ export interface SocialWebProfile {
   organization?: string;
   current_role?: string;
   bio_summary?: string;
-  executive_summary?: string;
   areas_of_expertise?: string[];
-  notable_work?: string[];
-  shared_interests?: string[];
   linkedin_url?: string | null;
   github_url?: string | null;
   website_url?: string | null;
   confidence_score?: number;
-  enrichment_source?: string;
   enriched_at: string;
   disambiguation_report?: DisambiguationResult | null;
 }
@@ -102,35 +98,130 @@ export interface SocialEntity {
   timestamp: string;
 }
 
+export type BriefingKind = "standalone" | "segment" | "checkpoint" | "final";
+
 export interface BriefingReport {
   id: string;
   topic_title: string;
-  context_type: "bug" | "feature_discussion" | "tech_stack" | "academic_lecture";
+  context_type: "bug" | "feature_discussion" | "tech_stack" | "academic_lecture" | "system_incident" | "general_meeting";
   explanatory_synthesis?: string;
   executive_summary: string[];
   action_items: string[];
   web_sources: string[];
   deep_dive_markdown?: string;
   created_at: string;
+  kind?: BriefingKind;
+  session_id?: string | null;
+  segment_id?: string | null;
 }
 
 export interface MicroEventRef {
-  event_type: "action" | "social" | "topic";
-  event_id: string;
-  summary: string;
+  event_type: "action" | "social_contact" | "task_scheduled" | "social_commitment";
+  record_id: string;
+  headline: string;
   timestamp: string;
 }
 
-export interface SessionDossier {
-  id: string;
-  session_name: string;
+// Deep Topic Event Engine (docs/next_steps/deep_topic_event_engine/)
+export type EventStatus = "active" | "paused" | "finalizing" | "concluded";
+export type FinalStatus = "none" | "pending" | "synthesizing" | "ready" | "failed";
+export type SegmentStatus = "open" | "closed" | "synthesizing" | "synthesized" | "skipped" | "failed";
+
+export interface SessionSegment {
+  segment_id: string;
+  index: number;
+  kind: "segment" | "checkpoint";
+  title?: string | null;
+  status: SegmentStatus;
   start_time: string;
-  end_time?: string;
-  status: "active" | "concluded";
-  participants: string[];
-  summary?: string;
-  micro_events: MicroEventRef[];
+  end_time?: string | null;
+  time_range: string;
+  word_count: number;
+  close_reason?: string | null;
+  briefing_id?: string | null;
+  briefing?: BriefingReport | null;
 }
+
+export interface EventTransitionLog {
+  at: string;
+  from_status?: string | null;
+  to_status: string;
+  rule: string;
+  reason: string;
+  detail?: string | null;
+}
+
+/** Lightweight event card returned by GET /api/sessions */
+export interface EventSummary {
+  session_id: string;
+  title?: string | null;
+  domain: string;
+  status: EventStatus;
+  final_status: FinalStatus;
+  start_time: string;
+  last_updated_at: string;
+  concluded_at?: string | null;
+  paused_at?: string | null;
+  hard_close_deadline?: string | null;
+  location_name?: string | null;
+  conversation_uuids: string[];
+  segments: SessionSegment[];
+  final_briefing_id?: string | null;
+  final_title?: string | null;
+  micro_events_count: number;
+  linked_micro_events: MicroEventRef[];
+  last_transition?: EventTransitionLog | null;
+  transitions_count: number;
+  top_terms: string[];
+  transcript_chunks_count: number;
+}
+
+/** Full event returned by GET /api/sessions/{id} */
+export interface EventDetail {
+  found: boolean;
+  session_id: string;
+  title: string;
+  domain: string;
+  status: EventStatus;
+  final_status: FinalStatus;
+  start_time: string;
+  concluded_at?: string | null;
+  briefing_report?: BriefingReport | null;
+  display_briefing?: BriefingReport | null;
+  is_final: boolean;
+  segments: SessionSegment[];
+  transitions: EventTransitionLog[];
+  linked_micro_events: MicroEventRef[];
+  top_terms: string[];
+  research_queries: string[];
+  spoken_summary: string;
+  paused_at?: string | null;
+  hard_close_deadline?: string | null;
+}
+
+export interface EventEngineStatus {
+  enabled: boolean;
+  profile: string;
+  config: { t_soft_seconds: number; t_hard_seconds: number; t_checkpoint_seconds: number; min_segment_words: number };
+  clock_offset_seconds: number;
+  virtual_now: string;
+  active_event: {
+    session_id: string;
+    title: string;
+    status: EventStatus;
+    segments: number;
+    open_segment_words: number;
+    last_on_topic_at?: string | null;
+    paused_at?: string | null;
+    pending_chunks: number;
+    top_terms: string[];
+  } | null;
+  pending_jobs: number;
+  continuity_backend?: string | null;
+}
+
+/** @deprecated kept for older components; use EventSummary / EventDetail */
+export type SessionDossier = EventSummary;
 
 export interface EchoShowCardResponse {
   card_type?: string;

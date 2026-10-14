@@ -84,3 +84,23 @@ def has_active_model_credentials(provider: Literal["bedrock", "mantle"]) -> bool
     if provider == "mantle":
         return settings.has_mantle_credentials
     return settings.has_aws_credentials
+
+
+def get_embedding_model():
+    """Returns the Bedrock text embedding model used for topic continuity (Titan Text Embeddings V2 by default).
+
+    Embeddings always use the native Bedrock runtime (Mantle exposes chat models only).
+    """
+    from langchain_aws import BedrockEmbeddings
+
+    model_kwargs = {"dimensions": settings.embedding_dimensions, "normalize": True}
+    if not settings.embedding_model_id.startswith("amazon.titan-embed-text-v2"):
+        model_kwargs = {}  # dimensions/normalize are Titan V2 specific
+    return BedrockEmbeddings(
+        model_id=settings.embedding_model_id,
+        region_name=settings.aws_region,
+        aws_access_key_id=settings.aws_access_key_id,
+        aws_secret_access_key=settings.aws_secret_access_key,
+        aws_session_token=settings.aws_session_token,
+        model_kwargs=model_kwargs or None,
+    )

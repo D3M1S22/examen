@@ -1,8 +1,13 @@
 """Session Manager for EXAMEN Macro-Sessions & Micro-Event Decoupling (Milestone 3.2).
 
+LEGACY: the live ingestion path now uses the Deep Topic Event Engine
+(src/ingestion/event_engine.py). This module keeps the shared boundary helpers
+(closing phrases, Haversine distance) and the per-conversation SessionManager used by
+scripts/simulate_mock_conversations.py and legacy sessions without segments.
+
 Tracks continuous conversation sessions (meetings, lectures, technical debates)
 originating from wearable audio streams (e.g., Bee conversation_uuid).
-Maintains session lifecycle (active -> finalizing -> concluded), buffers raw chunks
+Maintains session lifecycle (active -> paused -> concluded), buffers raw chunks
 without triggering expensive redundant web research on each 15-30s chunk,
 detects session boundaries (inactivity timeout, closing phrases, spatial location shifts),
 and delegates holistic synthesis upon boundary triggers.
@@ -155,7 +160,7 @@ class SessionManager:
         )
 
         if boundary_triggered:
-            dossier.status = "finalizing"
+            dossier.status = "paused"
             self.store.save_session_dossier(dossier)
 
         # Update in-memory metadata
@@ -169,7 +174,7 @@ class SessionManager:
     def check_inactivity_timeouts(
         self, current_time: Optional[float] = None
     ) -> List[str]:
-        """Scans active sessions and transitions timed out sessions to finalizing."""
+        """Scans active sessions and transitions timed out sessions to paused."""
         now = current_time if current_time is not None else time.time()
         timed_out = []
         for sess_id, meta in list(self._active_sessions.items()):
@@ -178,7 +183,7 @@ class SessionManager:
                 timed_out.append(sess_id)
                 dossier = self.store.get_session_dossier(sess_id)
                 if dossier and dossier.status == "active":
-                    dossier.status = "finalizing"
+                    dossier.status = "paused"
                     self.store.save_session_dossier(dossier)
         return timed_out
 
@@ -228,6 +233,8 @@ class SessionManager:
             synth_res = node_topic_research(synth_state)
             briefing = synth_res.get("briefing_report")
             if briefing:
+                briefing.session_id = session_id
+                briefing.kind = "final"
                 briefing_id = self.store.save_topic_briefing(briefing)
                 if auto_conclude:
                     self.conclude_session(session_id, briefing_report_id=briefing_id)

@@ -1,0 +1,1169 @@
+{
+  "version": "1.0",
+  "description": "Deep Topic Event Engine replay scenarios (docs/next_steps/deep_topic_event_engine/07). offset = seconds from scenario start; categories = gatekeeper labels; expected_event = ground-truth event label (null = don't care).",
+  "scenarios": [
+    {
+      "id": "lecture_with_break",
+      "title": "Single lecture interrupted by a coffee break (limits, then derivatives)",
+      "expect": {
+        "events": 1,
+        "segments": [
+          2
+        ]
+      },
+      "utterances": [
+        {
+          "offset": 0,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Oggi parliamo di limiti di funzioni reali di una variabile reale e della definizione con epsilon e delta che useremo per tutto il corso.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 40,
+          "categories": [
+            "noop"
+          ],
+          "text": "Quindi prendiamo una funzione f definita in un intorno del punto x zero, eventualmente escluso il punto stesso, e scriviamo la definizione.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 80,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Diciamo che il limite di f per x che tende a x zero vale l se per ogni epsilon positivo esiste un delta positivo opportuno.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 120,
+          "categories": [
+            "noop"
+          ],
+          "text": "Tale che per ogni x nell'intorno di raggio delta, escluso x zero, la distanza tra f di x e l è minore di epsilon.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 160,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Il teorema di unicità del limite dice che se il limite esiste allora è unico, e la dimostrazione si fa per assurdo con la disuguaglianza triangolare.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 200,
+          "categories": [
+            "noop"
+          ],
+          "text": "Scrivetelo bene sul quaderno perché questa dimostrazione per assurdo all'esame la chiedo spesso, soprattutto la scelta di epsilon uguale alla metà della distanza.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 240,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Il teorema della permanenza del segno afferma che se il limite è positivo allora la funzione è positiva in tutto un intorno del punto.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 280,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Poi c'è il teorema del confronto, detto dei carabinieri: se una funzione è compresa tra due funzioni con lo stesso limite, anche lei ha quel limite.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 320,
+          "categories": [
+            "noop"
+          ],
+          "text": "Con il confronto dimostriamo il limite notevole di seno di x su x per x che tende a zero, che vale uno, usando la circonferenza goniometrica.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 360,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Passiamo alla continuità: una funzione è continua in un punto se il limite per x che tende al punto coincide con il valore della funzione nel punto.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 400,
+          "categories": [
+            "noop"
+          ],
+          "text": "Le funzioni elementari come polinomi, esponenziali, logaritmi, seno e coseno sono continue in tutto il loro dominio di definizione naturale.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 440,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Le discontinuità si classificano in eliminabili, di salto e di seconda specie, a seconda di come si comportano il limite destro e il limite sinistro.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 480,
+          "categories": [
+            "noop"
+          ],
+          "text": "Ad esempio la funzione segno ha una discontinuità di salto nell'origine, perché il limite destro vale uno e il limite sinistro vale meno uno.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 520,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Il teorema di Weierstrass garantisce che una funzione continua su un intervallo chiuso e limitato ammette massimo e minimo assoluti.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 560,
+          "categories": [
+            "noop"
+          ],
+          "text": "Mentre il teorema degli zeri di Bolzano dice che una funzione continua che cambia segno agli estremi di un intervallo si annulla almeno in un punto interno.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 600,
+          "categories": [
+            "noop"
+          ],
+          "text": "Facciamo dieci minuti di pausa e poi riprendiamo.",
+          "expected_event": null
+        },
+        {
+          "offset": 630,
+          "categories": [
+            "social"
+          ],
+          "text": "Andiamo a prendere un caffè al bar del secondo piano? Di solito c'è meno fila.",
+          "expected_event": null
+        },
+        {
+          "offset": 660,
+          "categories": [
+            "noop"
+          ],
+          "text": "Sì dai, io prendo anche un cornetto, stamattina non ho fatto colazione.",
+          "expected_event": null
+        },
+        {
+          "offset": 690,
+          "categories": [
+            "noop"
+          ],
+          "text": "Hai visto la partita ieri sera? Alla fine hanno pareggiato all'ultimo minuto.",
+          "expected_event": null
+        },
+        {
+          "offset": 720,
+          "categories": [
+            "noop"
+          ],
+          "text": "Torniamo in aula che sta per ricominciare.",
+          "expected_event": null
+        },
+        {
+          "offset": 1500,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Riprendiamo dalla continuità e introduciamo la derivata di una funzione in un punto come limite del rapporto incrementale per h che tende a zero.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 1540,
+          "categories": [
+            "noop"
+          ],
+          "text": "Geometricamente la derivata è il coefficiente angolare della retta tangente al grafico della funzione nel punto x zero, f di x zero.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 1580,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Una funzione derivabile in un punto è anche continua in quel punto, ma il viceversa è falso, come mostra il valore assoluto nell'origine.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 1620,
+          "categories": [
+            "noop"
+          ],
+          "text": "Nel punto zero il valore assoluto ha un punto angoloso, perché la derivata destra vale uno e la derivata sinistra vale meno uno.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 1660,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Le regole di derivazione: la derivata della somma è la somma delle derivate e la derivata del prodotto segue la regola di Leibniz.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 1700,
+          "categories": [
+            "noop"
+          ],
+          "text": "Poi la derivata del quoziente e soprattutto la regola della catena per la funzione composta, che userete continuamente negli esercizi.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 1740,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Il teorema di Fermat dice che nei punti di massimo o minimo locale interni di una funzione derivabile la derivata si annulla.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 1780,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Il teorema di Rolle: se una funzione è continua sull'intervallo chiuso, derivabile all'interno e assume valori uguali agli estremi, esiste un punto con derivata nulla.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 1820,
+          "categories": [
+            "noop"
+          ],
+          "text": "Da Rolle segue il teorema di Lagrange, o del valor medio, che lega il rapporto incrementale sull'intervallo alla derivata in un punto interno.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 1860,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Conseguenza di Lagrange: se la derivata è positiva su un intervallo la funzione è strettamente crescente, se è negativa è decrescente.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 1900,
+          "categories": [
+            "noop"
+          ],
+          "text": "Quindi lo studio del segno della derivata prima ci dice dove la funzione cresce e decresce e dove si trovano massimi e minimi relativi.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 1940,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "La derivata seconda descrive la concavità e la convessità della funzione e i punti di flesso dove la concavità cambia.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 1980,
+          "categories": [
+            "noop"
+          ],
+          "text": "Il teorema di de l'Hôpital permette di calcolare limiti nelle forme indeterminate zero su zero e infinito su infinito usando le derivate.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 2020,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Infine il polinomio di Taylor approssima una funzione derivabile più volte vicino a un punto, con il resto nella forma di Peano o di Lagrange.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 2060,
+          "categories": [
+            "noop"
+          ],
+          "text": "Con gli sviluppi di Taylor si risolvono moltissimi limiti che con i limiti notevoli sarebbero lunghi da calcolare.",
+          "expected_event": "E1"
+        }
+      ]
+    },
+    {
+      "id": "back_to_back_lectures_same_room",
+      "title": "Analysis lecture followed by a chemistry lecture in the same room, 9 minutes apart",
+      "expect": {
+        "events": 2
+      },
+      "utterances": [
+        {
+          "offset": 0,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Oggi parliamo di limiti di funzioni reali di una variabile reale e della definizione con epsilon e delta che useremo per tutto il corso.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 40,
+          "categories": [
+            "noop"
+          ],
+          "text": "Quindi prendiamo una funzione f definita in un intorno del punto x zero, eventualmente escluso il punto stesso, e scriviamo la definizione.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 80,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Diciamo che il limite di f per x che tende a x zero vale l se per ogni epsilon positivo esiste un delta positivo opportuno.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 120,
+          "categories": [
+            "noop"
+          ],
+          "text": "Tale che per ogni x nell'intorno di raggio delta, escluso x zero, la distanza tra f di x e l è minore di epsilon.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 160,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Il teorema di unicità del limite dice che se il limite esiste allora è unico, e la dimostrazione si fa per assurdo con la disuguaglianza triangolare.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 200,
+          "categories": [
+            "noop"
+          ],
+          "text": "Scrivetelo bene sul quaderno perché questa dimostrazione per assurdo all'esame la chiedo spesso, soprattutto la scelta di epsilon uguale alla metà della distanza.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 240,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Il teorema della permanenza del segno afferma che se il limite è positivo allora la funzione è positiva in tutto un intorno del punto.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 280,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Poi c'è il teorema del confronto, detto dei carabinieri: se una funzione è compresa tra due funzioni con lo stesso limite, anche lei ha quel limite.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 320,
+          "categories": [
+            "noop"
+          ],
+          "text": "Con il confronto dimostriamo il limite notevole di seno di x su x per x che tende a zero, che vale uno, usando la circonferenza goniometrica.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 360,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Passiamo alla continuità: una funzione è continua in un punto se il limite per x che tende al punto coincide con il valore della funzione nel punto.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 400,
+          "categories": [
+            "noop"
+          ],
+          "text": "Le funzioni elementari come polinomi, esponenziali, logaritmi, seno e coseno sono continue in tutto il loro dominio di definizione naturale.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 440,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Le discontinuità si classificano in eliminabili, di salto e di seconda specie, a seconda di come si comportano il limite destro e il limite sinistro.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 480,
+          "categories": [
+            "noop"
+          ],
+          "text": "Ad esempio la funzione segno ha una discontinuità di salto nell'origine, perché il limite destro vale uno e il limite sinistro vale meno uno.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 520,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Il teorema di Weierstrass garantisce che una funzione continua su un intervallo chiuso e limitato ammette massimo e minimo assoluti.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 560,
+          "categories": [
+            "noop"
+          ],
+          "text": "Mentre il teorema degli zeri di Bolzano dice che una funzione continua che cambia segno agli estremi di un intervallo si annulla almeno in un punto interno.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 700,
+          "categories": [
+            "social"
+          ],
+          "text": "Andiamo a prendere un caffè al bar del secondo piano? Di solito c'è meno fila.",
+          "expected_event": null
+        },
+        {
+          "offset": 740,
+          "categories": [
+            "noop"
+          ],
+          "text": "Sì dai, io prendo anche un cornetto, stamattina non ho fatto colazione.",
+          "expected_event": null
+        },
+        {
+          "offset": 780,
+          "categories": [
+            "noop"
+          ],
+          "text": "Hai visto la partita ieri sera? Alla fine hanno pareggiato all'ultimo minuto.",
+          "expected_event": null
+        },
+        {
+          "offset": 1100,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Buongiorno, benvenuti al corso di chimica organica: oggi parliamo degli idrocarburi saturi, cioè gli alcani, e della loro nomenclatura IUPAC.",
+          "expected_event": "E2"
+        },
+        {
+          "offset": 1140,
+          "categories": [
+            "noop"
+          ],
+          "text": "Gli alcani hanno formula generale CnH2n+2 e tutti gli atomi di carbonio sono ibridati sp3 con geometria tetraedrica e angoli di circa 109 gradi.",
+          "expected_event": "E2"
+        },
+        {
+          "offset": 1180,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Per la nomenclatura si individua la catena carboniosa più lunga, si numerano gli atomi di carbonio e si indicano i sostituenti alchilici.",
+          "expected_event": "E2"
+        },
+        {
+          "offset": 1220,
+          "categories": [
+            "noop"
+          ],
+          "text": "Il metano, l'etano, il propano e il butano sono i primi termini della serie omologa, poi si usano i prefissi greci pent, es, ept, ott.",
+          "expected_event": "E2"
+        },
+        {
+          "offset": 1260,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Gli isomeri strutturali hanno la stessa formula molecolare ma diversa connettività: il butano e l'isobutano sono il primo esempio.",
+          "expected_event": "E2"
+        },
+        {
+          "offset": 1300,
+          "categories": [
+            "noop"
+          ],
+          "text": "Le conformazioni dell'etano si vedono bene con le proiezioni di Newman: sfalsata più stabile ed eclissata meno stabile per la tensione torsionale.",
+          "expected_event": "E2"
+        },
+        {
+          "offset": 1340,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Nel cicloesano la conformazione a sedia è la più stabile perché elimina la tensione angolare e torsionale, con legami assiali ed equatoriali.",
+          "expected_event": "E2"
+        },
+        {
+          "offset": 1380,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Gli alcani sono poco reattivi ma danno la reazione di alogenazione radicalica con cloro o bromo in presenza di luce ultravioletta.",
+          "expected_event": "E2"
+        },
+        {
+          "offset": 1420,
+          "categories": [
+            "noop"
+          ],
+          "text": "Il meccanismo radicalico ha tre fasi: inizio con la rottura omolitica dell'alogeno, propagazione e terminazione per accoppiamento dei radicali.",
+          "expected_event": "E2"
+        },
+        {
+          "offset": 1460,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Il bromo è più selettivo del cloro e sostituisce preferibilmente l'idrogeno sul carbonio terziario, per la stabilità del radicale terziario.",
+          "expected_event": "E2"
+        },
+        {
+          "offset": 1500,
+          "categories": [
+            "noop"
+          ],
+          "text": "Gli alcheni invece contengono un doppio legame carbonio carbonio con ibridazione sp2 e danno reazioni di addizione elettrofila.",
+          "expected_event": "E2"
+        },
+        {
+          "offset": 1540,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "La regola di Markovnikov dice che nell'addizione di acido bromidrico l'idrogeno va sul carbonio del doppio legame con più idrogeni.",
+          "expected_event": "E2"
+        },
+        {
+          "offset": 1580,
+          "categories": [
+            "noop"
+          ],
+          "text": "Questo perché si forma il carbocatione più stabile, e la stabilità dei carbocationi cresce da primario a secondario a terziario.",
+          "expected_event": "E2"
+        },
+        {
+          "offset": 1620,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "I gruppi funzionali principali che vedremo sono alcoli, eteri, aldeidi, chetoni, acidi carbossilici, esteri e ammine.",
+          "expected_event": "E2"
+        },
+        {
+          "offset": 1660,
+          "categories": [
+            "noop"
+          ],
+          "text": "Per la prossima esercitazione portate il modellino molecolare, costruiremo insieme le conformazioni del cicloesano e del metilcicloesano.",
+          "expected_event": "E2"
+        }
+      ]
+    },
+    {
+      "id": "lecture_topic_drift",
+      "title": "One lecture moving from limits to derivatives without a break (must not split)",
+      "expect": {
+        "events": 1
+      },
+      "utterances": [
+        {
+          "offset": 0,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Oggi parliamo di limiti di funzioni reali di una variabile reale e della definizione con epsilon e delta che useremo per tutto il corso.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 40,
+          "categories": [
+            "noop"
+          ],
+          "text": "Quindi prendiamo una funzione f definita in un intorno del punto x zero, eventualmente escluso il punto stesso, e scriviamo la definizione.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 80,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Diciamo che il limite di f per x che tende a x zero vale l se per ogni epsilon positivo esiste un delta positivo opportuno.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 120,
+          "categories": [
+            "noop"
+          ],
+          "text": "Tale che per ogni x nell'intorno di raggio delta, escluso x zero, la distanza tra f di x e l è minore di epsilon.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 160,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Il teorema di unicità del limite dice che se il limite esiste allora è unico, e la dimostrazione si fa per assurdo con la disuguaglianza triangolare.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 200,
+          "categories": [
+            "noop"
+          ],
+          "text": "Scrivetelo bene sul quaderno perché questa dimostrazione per assurdo all'esame la chiedo spesso, soprattutto la scelta di epsilon uguale alla metà della distanza.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 240,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Il teorema della permanenza del segno afferma che se il limite è positivo allora la funzione è positiva in tutto un intorno del punto.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 280,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Poi c'è il teorema del confronto, detto dei carabinieri: se una funzione è compresa tra due funzioni con lo stesso limite, anche lei ha quel limite.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 320,
+          "categories": [
+            "noop"
+          ],
+          "text": "Con il confronto dimostriamo il limite notevole di seno di x su x per x che tende a zero, che vale uno, usando la circonferenza goniometrica.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 360,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Passiamo alla continuità: una funzione è continua in un punto se il limite per x che tende al punto coincide con il valore della funzione nel punto.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 400,
+          "categories": [
+            "noop"
+          ],
+          "text": "Le funzioni elementari come polinomi, esponenziali, logaritmi, seno e coseno sono continue in tutto il loro dominio di definizione naturale.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 440,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Le discontinuità si classificano in eliminabili, di salto e di seconda specie, a seconda di come si comportano il limite destro e il limite sinistro.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 480,
+          "categories": [
+            "noop"
+          ],
+          "text": "Ad esempio la funzione segno ha una discontinuità di salto nell'origine, perché il limite destro vale uno e il limite sinistro vale meno uno.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 520,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Il teorema di Weierstrass garantisce che una funzione continua su un intervallo chiuso e limitato ammette massimo e minimo assoluti.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 560,
+          "categories": [
+            "noop"
+          ],
+          "text": "Mentre il teorema degli zeri di Bolzano dice che una funzione continua che cambia segno agli estremi di un intervallo si annulla almeno in un punto interno.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 600,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Riprendiamo dalla continuità e introduciamo la derivata di una funzione in un punto come limite del rapporto incrementale per h che tende a zero.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 640,
+          "categories": [
+            "noop"
+          ],
+          "text": "Geometricamente la derivata è il coefficiente angolare della retta tangente al grafico della funzione nel punto x zero, f di x zero.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 680,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Una funzione derivabile in un punto è anche continua in quel punto, ma il viceversa è falso, come mostra il valore assoluto nell'origine.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 720,
+          "categories": [
+            "noop"
+          ],
+          "text": "Nel punto zero il valore assoluto ha un punto angoloso, perché la derivata destra vale uno e la derivata sinistra vale meno uno.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 760,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Le regole di derivazione: la derivata della somma è la somma delle derivate e la derivata del prodotto segue la regola di Leibniz.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 800,
+          "categories": [
+            "noop"
+          ],
+          "text": "Poi la derivata del quoziente e soprattutto la regola della catena per la funzione composta, che userete continuamente negli esercizi.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 840,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Il teorema di Fermat dice che nei punti di massimo o minimo locale interni di una funzione derivabile la derivata si annulla.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 880,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Il teorema di Rolle: se una funzione è continua sull'intervallo chiuso, derivabile all'interno e assume valori uguali agli estremi, esiste un punto con derivata nulla.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 920,
+          "categories": [
+            "noop"
+          ],
+          "text": "Da Rolle segue il teorema di Lagrange, o del valor medio, che lega il rapporto incrementale sull'intervallo alla derivata in un punto interno.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 960,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Conseguenza di Lagrange: se la derivata è positiva su un intervallo la funzione è strettamente crescente, se è negativa è decrescente.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 1000,
+          "categories": [
+            "noop"
+          ],
+          "text": "Quindi lo studio del segno della derivata prima ci dice dove la funzione cresce e decresce e dove si trovano massimi e minimi relativi.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 1040,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "La derivata seconda descrive la concavità e la convessità della funzione e i punti di flesso dove la concavità cambia.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 1080,
+          "categories": [
+            "noop"
+          ],
+          "text": "Il teorema di de l'Hôpital permette di calcolare limiti nelle forme indeterminate zero su zero e infinito su infinito usando le derivate.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 1120,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Infine il polinomio di Taylor approssima una funzione derivabile più volte vicino a un punto, con il resto nella forma di Peano o di Lagrange.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 1160,
+          "categories": [
+            "noop"
+          ],
+          "text": "Con gli sviluppi di Taylor si risolvono moltissimi limiti che con i limiti notevoli sarebbero lunghi da calcolare.",
+          "expected_event": "E1"
+        }
+      ]
+    },
+    {
+      "id": "conference_talks_no_gap",
+      "title": "Kubernetes talk immediately followed by a GDPR talk (no silence)",
+      "expect": {
+        "events": 2
+      },
+      "utterances": [
+        {
+          "offset": 0,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Benvenuti, nel mio talk parlo di autoscaling su Kubernetes in produzione e di come abbiamo ridotto i costi del cluster del quaranta per cento.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 30,
+          "categories": [
+            "noop"
+          ],
+          "text": "Partiamo dall'Horizontal Pod Autoscaler, che aumenta o riduce il numero di repliche di un deployment in base alle metriche osservate.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 60,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Di default l'HPA usa la CPU media dei pod rispetto alle requests, quindi impostare bene le resource requests è fondamentale.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 90,
+          "categories": [
+            "noop"
+          ],
+          "text": "Noi abbiamo esposto metriche custom tramite Prometheus Adapter, per esempio la lunghezza della coda dei messaggi per ogni worker.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 120,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Il Vertical Pod Autoscaler invece corregge requests e limits dei container osservando il consumo reale di CPU e memoria.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 150,
+          "categories": [
+            "noop"
+          ],
+          "text": "Attenzione a non usare HPA e VPA sulla stessa metrica di CPU, perché i due controller entrano in conflitto e il deployment oscilla.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 180,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Per i nodi usiamo il Cluster Autoscaler, che aggiunge nodi quando ci sono pod in stato pending per mancanza di risorse.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 210,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Recentemente siamo passati a Karpenter su AWS, che sceglie il tipo di istanza EC2 più adatto ai pod in attesa e consolida i nodi sottoutilizzati.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 240,
+          "categories": [
+            "noop"
+          ],
+          "text": "Con Karpenter usiamo istanze spot per i workload stateless e on demand per i database, con i taint e le tolerations giuste.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 270,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Un problema tipico è il cold start: lo scale up dei nodi richiede minuti, quindi teniamo un buffer di pod a bassa priorità come overprovisioning.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 300,
+          "categories": [
+            "noop"
+          ],
+          "text": "Quando arriva un pod importante, lo scheduler fa preemption dei pod segnaposto e il nuovo pod parte subito su capacità già pronta.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 330,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Per lo scale to zero dei servizi event driven usiamo KEDA, che attiva i deployment in base a eventi Kafka o SQS.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 360,
+          "categories": [
+            "noop"
+          ],
+          "text": "Abbiamo anche configurato i PodDisruptionBudget per evitare che la consolidazione dei nodi butti giù troppe repliche insieme.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 390,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "In sintesi: requests corrette, metriche custom per l'HPA, Karpenter per i nodi e KEDA per i carichi a eventi.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 420,
+          "categories": [
+            "noop"
+          ],
+          "text": "Le slide e i manifest YAML di esempio sono sul repository che trovate nel link della conferenza.",
+          "expected_event": "E1"
+        },
+        {
+          "offset": 450,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Grazie, il prossimo intervento è sul GDPR: vediamo cosa cambia per chi sviluppa prodotti digitali che trattano dati personali degli utenti.",
+          "expected_event": "E2"
+        },
+        {
+          "offset": 480,
+          "categories": [
+            "noop"
+          ],
+          "text": "Il regolamento europeo sulla protezione dei dati si applica a chiunque tratti dati di persone che si trovano nell'Unione Europea.",
+          "expected_event": "E2"
+        },
+        {
+          "offset": 510,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Ogni trattamento deve avere una base giuridica: consenso, contratto, obbligo legale, interesse vitale, interesse pubblico o legittimo interesse.",
+          "expected_event": "E2"
+        },
+        {
+          "offset": 540,
+          "categories": [
+            "noop"
+          ],
+          "text": "Il consenso deve essere libero, specifico, informato e inequivocabile, quindi niente caselle già spuntate nei form di registrazione.",
+          "expected_event": "E2"
+        },
+        {
+          "offset": 570,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Il principio di minimizzazione impone di raccogliere solo i dati strettamente necessari per la finalità dichiarata nell'informativa.",
+          "expected_event": "E2"
+        },
+        {
+          "offset": 600,
+          "categories": [
+            "noop"
+          ],
+          "text": "Privacy by design e by default significa progettare il sistema fin dall'inizio con impostazioni che proteggono i dati personali.",
+          "expected_event": "E2"
+        },
+        {
+          "offset": 630,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Gli interessati hanno diritto di accesso, rettifica, cancellazione, limitazione, portabilità e opposizione al trattamento.",
+          "expected_event": "E2"
+        },
+        {
+          "offset": 660,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Il diritto all'oblio obbliga il titolare a cancellare i dati senza ingiustificato ritardo quando non sono più necessari.",
+          "expected_event": "E2"
+        },
+        {
+          "offset": 690,
+          "categories": [
+            "noop"
+          ],
+          "text": "In caso di violazione dei dati personali, il data breach va notificato al Garante entro settantadue ore dalla scoperta.",
+          "expected_event": "E2"
+        },
+        {
+          "offset": 720,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Per i trattamenti ad alto rischio serve la valutazione d'impatto, la DPIA, prima di iniziare il trattamento.",
+          "expected_event": "E2"
+        },
+        {
+          "offset": 750,
+          "categories": [
+            "noop"
+          ],
+          "text": "Molte aziende devono nominare un responsabile della protezione dei dati, il DPO, che vigila sulla conformità.",
+          "expected_event": "E2"
+        },
+        {
+          "offset": 780,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "I trasferimenti di dati verso paesi extra UE richiedono decisioni di adeguatezza o clausole contrattuali standard.",
+          "expected_event": "E2"
+        },
+        {
+          "offset": 810,
+          "categories": [
+            "noop"
+          ],
+          "text": "Dopo la sentenza Schrems due il trasferimento verso gli Stati Uniti è stato regolato dal nuovo Data Privacy Framework.",
+          "expected_event": "E2"
+        },
+        {
+          "offset": 840,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Le sanzioni arrivano fino a venti milioni di euro o al quattro per cento del fatturato mondiale annuo.",
+          "expected_event": "E2"
+        },
+        {
+          "offset": 870,
+          "categories": [
+            "noop"
+          ],
+          "text": "Il mio consiglio è tenere un registro dei trattamenti aggiornato e coinvolgere il DPO in ogni nuova funzionalità.",
+          "expected_event": "E2"
+        },
+        {
+          "offset": 900,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Parliamo ora dei cookie: quelli tecnici non richiedono consenso, mentre quelli di profilazione e analytics di terze parti sì.",
+          "expected_event": "E2"
+        },
+        {
+          "offset": 930,
+          "categories": [
+            "noop"
+          ],
+          "text": "Il banner deve permettere di rifiutare tutti i cookie con la stessa facilità con cui si accettano, senza dark pattern.",
+          "expected_event": "E2"
+        },
+        {
+          "offset": 960,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "La pseudonimizzazione riduce il rischio ma i dati pseudonimizzati restano dati personali, a differenza dei dati anonimi.",
+          "expected_event": "E2"
+        },
+        {
+          "offset": 990,
+          "categories": [
+            "noop"
+          ],
+          "text": "Per l'anonimizzazione vera bisogna escludere la possibilità di reidentificare l'interessato anche incrociando altre fonti.",
+          "expected_event": "E2"
+        },
+        {
+          "offset": 1020,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Con i fornitori cloud serve un accordo di nomina a responsabile del trattamento, il data processing agreement previsto dall'articolo ventotto.",
+          "expected_event": "E2"
+        },
+        {
+          "offset": 1050,
+          "categories": [
+            "noop"
+          ],
+          "text": "Nel contratto vanno indicati i sub responsabili, le misure di sicurezza e l'obbligo di assistere il titolare nelle richieste degli interessati.",
+          "expected_event": "E2"
+        },
+        {
+          "offset": 1080,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Le misure di sicurezza adeguate includono cifratura dei dati a riposo e in transito, controllo degli accessi e log di audit.",
+          "expected_event": "E2"
+        },
+        {
+          "offset": 1110,
+          "categories": [
+            "noop"
+          ],
+          "text": "Le richieste di accesso degli interessati vanno evase entro un mese, prorogabile di altri due nei casi complessi.",
+          "expected_event": "E2"
+        },
+        {
+          "offset": 1140,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Il profilazione automatizzata con effetti giuridici richiede garanzie specifiche e il diritto a ottenere l'intervento umano.",
+          "expected_event": "E2"
+        },
+        {
+          "offset": 1170,
+          "categories": [
+            "noop"
+          ],
+          "text": "Concludo dicendo che la conformità al GDPR è un processo continuo, non un adempimento da fare una volta sola.",
+          "expected_event": "E2"
+        }
+      ]
+    },
+    {
+      "id": "isolated_question",
+      "title": "A single technical question in a hallway",
+      "expect": {
+        "events": 1,
+        "segments": [
+          1
+        ]
+      },
+      "utterances": [
+        {
+          "offset": 0,
+          "categories": [
+            "deep_topic"
+          ],
+          "text": "Mi spieghi la differenza tra derivata parziale e derivata direzionale?",
+          "expected_event": "E1"
+        }
+      ]
+    }
+  ]
+}

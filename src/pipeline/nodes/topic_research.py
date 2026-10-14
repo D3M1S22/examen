@@ -8,8 +8,11 @@ from __future__ import annotations
 
 import logging
 import re
+from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
+
+from pydantic import BaseModel, Field
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -21,8 +24,10 @@ from src.core.models import (
 )
 from src.core.schemas import BriefingReport, ExamenState, TopicExtraction
 from src.pipeline.tools.web_search import (
-    execute_search_batch,
+    SearchCache,
     WebSearchBatchResult,
+    cache_key,
+    execute_search_batch,
 )
 
 logger = logging.getLogger("examen.pipeline.topic_research")
@@ -236,59 +241,125 @@ The system initiated autonomous background research into **{title}** to consolid
     )
 
 
-def node_topic_research(state: ExamenState) -> Dict[str, Any]:
-    """LangGraph node: Stage 3C Deep Research & Briefing Synthesizer.
+# ---------------------------------------------------------------------------
+# Reusable Stage 3C steps (shared by the LangGraph node and the Deep Topic Event Engine)
+# ---------------------------------------------------------------------------
 
-    Executes topic extraction, autonomous web search with retry feedback, and dossier synthesis.
-    """
-    transcript = state.get("raw_transcript", "").strip()
-    if not transcript:
-        return {"topic_extracted": None, "briefing_report": None}
+class EventOutline(BaseModel):
+    """What is already known about the event a text belongs to (doc 03 §2)."""
+    event_title: Optional[str] = None
+    context_type: Optional[str] = None
+    part_index: Optional[int] = None
+    previous_parts: List[str] = Field(default_factory=list)
+    key_points: List[str] = Field(default_factory=list)
+    researched_queries: List[str] = Field(default_factory=list)
 
-    # --- Step 1: Topic Extraction ---
-    topic: Optional[TopicExtraction] = None
-    if settings.mock_ai or not has_active_model_credentials(settings.gatekeeper_provider):
-        logger.debug("Extracting topic via heuristic fallback (mock_ai or no credentials).")
-        topic = _heuristic_extract_topic(transcript)
-    else:
-        try:
-            fast_extractor = _get_fast_extractor()
-            extract_prompt = (
-                f"Identify the technical topic, bug, or lecture subject discussed.\n"
-                f"Generate 1-2 focused search queries.\n\n"
-                f"Transcript: \"{transcript}\""
+    def as_prompt(self) -> str:
+        lines: List[str] = []
+        if self.part_index:
+            what = self.context_type.replace("_", " ") if self.context_type else "event"
+            title = f" titled '{self.event_title}'" if self.event_title else ""
+            lines.append(f"This text is part {self.part_index} of an ongoing {what}{title}.")
+        if self.previous_parts:
+            lines.append("Earlier parts covered: " + "; ".join(self.previous_parts) + ".")
+        if self.key_points:
+            lines.append("Key points so far: " + "; ".join(self.key_points[:10]) + ".")
+        if self.researched_queries:
+            lines.append(
+                "Web queries already researched for this event (do NOT repeat them or trivial variants): "
+                + "; ".join(self.researched_queries[:20]) + "."
             )
-            messages = [
+        return "\n".join(lines)
+
+
+@dataclass
+class SynthesisOutcome:
+    briefing: BriefingReport
+    research: List[Dict[str, Any]] = field(default_factory=list)  # [{"query": cache_key, "sources": [...]}]
+    topic: Optional[TopicExtraction] = None
+
+
+def _llm_available(provider: str) -> bool:
+    return not settings.mock_ai and has_active_model_credentials(provider)
+
+
+def extract_topics(
+    text: str,
+    *,
+    outline: Optional[EventOutline] = None,
+    max_queries: int = 2,
+    gap_only: bool = False,
+) -> TopicExtraction:
+    """Step 1: topic, context type and focused search queries.
+
+    gap_only: only propose queries for important concepts not covered by outline.researched_queries
+              (consolidated event synthesis); an empty query list is a valid answer.
+    """
+    topic: Optional[TopicExtraction] = None
+    if _llm_available(settings.gatekeeper_provider):
+        try:
+            context = outline.as_prompt() if outline else ""
+            if gap_only:
+                instruction = (
+                    f"Identify the overall subject of this event from its partial briefings.\n"
+                    f"Propose at most {max_queries} search queries ONLY for important concepts that the already "
+                    f"researched queries do not cover. Return an empty search_queries list if coverage is sufficient."
+                )
+            else:
+                instruction = (
+                    f"Identify the technical topic, bug, or lecture subject discussed.\n"
+                    f"Generate 1-{max_queries} focused search queries."
+                )
+            prompt = f"{instruction}\n\n{context}\n\nTranscript: \"{text}\"" if context else (
+                f"{instruction}\n\nTranscript: \"{text}\""
+            )
+            topic = _get_fast_extractor().invoke([
                 SystemMessage(content=TOPIC_EXTRACTOR_SYSTEM_PROMPT),
-                HumanMessage(content=extract_prompt),
-            ]
-            topic = fast_extractor.invoke(messages)
+                HumanMessage(content=prompt),
+            ])
         except Exception as e:
             logger.warning(f"Topic extraction model failed: {e}. Falling back to heuristic.")
-            topic = _heuristic_extract_topic(transcript)
+            topic = None
+    else:
+        logger.debug("Extracting topic via heuristic fallback (mock_ai or no credentials).")
 
     if not topic:
-        topic = _heuristic_extract_topic(transcript)
+        topic = _heuristic_extract_topic(text)
+    topic.search_queries = list(topic.search_queries or [])[:max_queries]
+    return topic
 
-    # --- Step 2: Autonomous Web Search with Retry Loop ---
-    queries = topic.search_queries if topic.search_queries else [topic.topic_title]
+
+def research(
+    topic: TopicExtraction,
+    text: str,
+    *,
+    outline: Optional[EventOutline] = None,
+    cache: Optional[SearchCache] = None,
+    allow_empty: bool = False,
+) -> WebSearchBatchResult:
+    """Step 2: web search with retry feedback. Queries the event already researched are served from the
+    cache only (never re-hit the network)."""
+    queries = list(topic.search_queries or [])
+    if not queries and not allow_empty:
+        queries = [topic.topic_title]
+    if not queries:
+        return execute_search_batch([])
+
+    already = set(outline.researched_queries) if outline else set()
     logger.info(f"Executing web search for queries: {queries}")
-    search_batch = execute_search_batch(queries, count_per_query=3)
+    search_batch = execute_search_batch(queries, count_per_query=3, cache=cache, cache_only=already)
 
-    # Retry loop: if search yielded no satisfactory results and needs_retry is True
     if search_batch.needs_retry and search_batch.retry_feedback:
-        logger.info(f"Initial web search yielded insufficient results. Triggering retry loop.")
+        logger.info("Initial web search yielded insufficient results. Triggering retry loop.")
         refined_query = None
-
-        if not settings.mock_ai and has_active_model_credentials(settings.gatekeeper_provider):
+        if _llm_available(settings.gatekeeper_provider):
             try:
-                fast_extractor = _get_fast_extractor()
                 retry_prompt = (
-                    f"Context transcript: \"{transcript}\"\n\n"
+                    f"Context transcript: \"{text[:2000]}\"\n\n"
                     f"{search_batch.retry_feedback}\n\n"
                     f"Please reformulate a higher-precision technical search query for topic '{topic.topic_title}'."
                 )
-                refined_topic: TopicExtraction = fast_extractor.invoke([
+                refined_topic: TopicExtraction = _get_fast_extractor().invoke([
                     SystemMessage(content=TOPIC_EXTRACTOR_SYSTEM_PROMPT),
                     HumanMessage(content=retry_prompt),
                 ])
@@ -298,51 +369,218 @@ def node_topic_research(state: ExamenState) -> Dict[str, Any]:
                 logger.warning(f"Query reformulation prompt failed: {e}")
 
         if not refined_query:
-            # Clean fallback query focusing purely on topic title
             refined_query = f"{topic.topic_title} documentation"
 
         logger.info(f"Retrying web search with refined query: '{refined_query}'")
-        second_batch = execute_search_batch([refined_query], count_per_query=3)
+        second_batch = execute_search_batch([refined_query], count_per_query=3, cache=cache)
         if second_batch.has_satisfactory_results:
             search_batch = second_batch
 
-    # --- Step 3: Deep Synthesis with Reasoner Model ---
+    return search_batch
+
+
+_KIND_INSTRUCTIONS = {
+    "segment": (
+        "EVENT PART BRIEFING: the transcript is one part of a longer event. Focus on what is new in this "
+        "part; mention earlier parts only for continuity. Do not restart the explanation from scratch."
+    ),
+    "checkpoint": (
+        "EVENT CHECKPOINT BRIEFING: the transcript is the latest stretch of an event that is still running. "
+        "Focus on what is new in this stretch; mention earlier parts only for continuity."
+    ),
+    "final": (
+        "CONSOLIDATED EVENT BRIEFING: the input contains the partial briefings (Part 1..N) of one whole event. "
+        "Produce a single cohesive narrative that follows the order of the parts, merges overlapping points, "
+        "and does not drop concepts from any part. The topic_title must describe the whole event."
+    ),
+}
+
+
+def synthesize_briefing(
+    text: str,
+    topic: TopicExtraction,
+    search_batch: WebSearchBatchResult,
+    *,
+    kind: str = "standalone",
+    outline: Optional[EventOutline] = None,
+) -> BriefingReport:
+    """Step 3: deep synthesis with the reasoner model (heuristic fallback offline)."""
     report: Optional[BriefingReport] = None
-    if settings.mock_ai or not has_active_model_credentials(settings.reasoner_provider):
-        logger.debug("Synthesizing briefing report via heuristic fallback (mock_ai or no credentials).")
-        report = _heuristic_synthesize_report(topic, transcript, search_batch)
-    else:
+    if _llm_available(settings.reasoner_provider):
         try:
-            synthesizer = _get_reasoner_synthesizer()
+            extra = ""
+            if kind in _KIND_INSTRUCTIONS:
+                extra = _KIND_INSTRUCTIONS[kind] + "\n"
+                if outline:
+                    extra += outline.as_prompt() + "\n"
+            label = "Partial briefings of the event" if kind == "final" else "User discussion transcript"
             prompt = (
-                f"User discussion transcript:\n\"{transcript}\"\n\n"
+                f"{extra}\n{label}:\n\"{text}\"\n\n"
                 f"Identified topic: '{topic.topic_title}' (Context: {topic.context_type})\n"
                 f"Key questions to address: {', '.join(topic.key_questions)}\n\n"
                 f"Retrieved Web Documentation:\n{search_batch.formatted_markdown}\n\n"
                 f"Synthesize an Executive Briefing Report with detailed technical markdown."
             )
-            messages = [
+            report = _get_reasoner_synthesizer().invoke([
                 SystemMessage(content=SYNTHESIZER_SYSTEM_PROMPT),
                 HumanMessage(content=prompt),
-            ]
-            report = synthesizer.invoke(messages)
-            # Ensure web sources, deep dive markdown, and explanatory synthesis are populated
+            ])
             if report:
                 if not report.web_sources:
                     report.web_sources = search_batch.source_urls
                 if not report.deep_dive_markdown or len(report.deep_dive_markdown.strip()) < 10:
-                    heuristic = _heuristic_synthesize_report(topic, transcript, search_batch)
-                    report.deep_dive_markdown = heuristic.deep_dive_markdown
+                    report.deep_dive_markdown = _heuristic_synthesize_report(topic, text, search_batch).deep_dive_markdown
                 if not report.explanatory_synthesis:
-                    heuristic = _heuristic_synthesize_report(topic, transcript, search_batch)
-                    report.explanatory_synthesis = heuristic.explanatory_synthesis
+                    report.explanatory_synthesis = _heuristic_synthesize_report(topic, text, search_batch).explanatory_synthesis
         except Exception as e:
             logger.warning(f"Briefing synthesis model failed: {e}. Falling back to heuristic.")
-            report = _heuristic_synthesize_report(topic, transcript, search_batch)
+            report = None
+    else:
+        logger.debug("Synthesizing briefing report via heuristic fallback (mock_ai or no credentials).")
 
     if not report:
-        report = _heuristic_synthesize_report(topic, transcript, search_batch)
+        report = _heuristic_synthesize_report(topic, text, search_batch)
+    report.kind = kind  # type: ignore[assignment]
+    return report
 
+
+def condense_transcript(text: str, max_words: int, block_words: int = 1500) -> str:
+    """Keeps long transcripts within budget: older blocks become dense notes (fast model), the most
+    recent block stays verbatim (doc 03 §2.1)."""
+    words = text.split()
+    if len(words) <= max_words:
+        return text
+    blocks = [" ".join(words[i:i + block_words]) for i in range(0, len(words), block_words)]
+    notes: List[str] = []
+    for idx, block in enumerate(blocks[:-1], 1):
+        summary = None
+        if _llm_available(settings.gatekeeper_provider):
+            try:
+                result = get_fast_model().invoke([
+                    SystemMessage(content=(
+                        "Condense this lecture/meeting transcript block into dense factual notes (max 150 words). "
+                        "Keep definitions, formulas, names, numbers and decisions. No preamble."
+                    )),
+                    HumanMessage(content=block),
+                ])
+                summary = str(getattr(result, "content", "") or "").strip() or None
+            except Exception as e:
+                logger.warning(f"Transcript condensation failed on block {idx}: {e}")
+        if not summary:
+            summary = " ".join(block.split()[:150]) + " …"
+        notes.append(f"[Notes block {idx}] {summary}")
+    return "\n".join(notes) + f"\n[Latest block, verbatim] {blocks[-1]}"
+
+
+def research_entries(search_batch: WebSearchBatchResult) -> List[Dict[str, Any]]:
+    """Ledger entries for the queries that returned results (cache hits included). Failed queries are
+    left out so a later segment may retry them (e.g. after a transient captcha/rate limit)."""
+    entries = []
+    for ev in search_batch.evaluations:
+        if not ev.results:
+            continue
+        entries.append({
+            "query": cache_key(ev.normalized_query or ev.query),
+            "sources": [r.url for r in ev.results],
+        })
+    return entries
+
+
+_MICRO_EVENT_LABELS = {
+    "action": "Verified actions",
+    "social_contact": "Contacts encountered",
+    "task_scheduled": "Scheduled tasks",
+    "social_commitment": "Commitments",
+}
+
+
+def append_micro_events_section(report: BriefingReport, micro_events: List[Any]) -> BriefingReport:
+    """Adds the deterministic 'During this event' section (doc 03 §3) to a consolidated briefing."""
+    if not micro_events:
+        return report
+    grouped: Dict[str, List[str]] = {}
+    for ref in micro_events:
+        event_type = getattr(ref, "event_type", None) or (ref.get("event_type") if isinstance(ref, dict) else None)
+        headline = getattr(ref, "headline", None) or (ref.get("headline") if isinstance(ref, dict) else None)
+        if event_type and headline:
+            grouped.setdefault(event_type, []).append(headline)
+    if not grouped:
+        return report
+    lines = ["", "## During this event"]
+    for event_type, headlines in grouped.items():
+        lines.append(f"### {_MICRO_EVENT_LABELS.get(event_type, event_type)}")
+        lines.extend(f"- {h}" for h in headlines)
+    report.deep_dive_markdown = (report.deep_dive_markdown or "").rstrip() + "\n" + "\n".join(lines)
+    return report
+
+
+class PipelineEventSynthesizer:
+    """Default synthesizer of the Deep Topic Event Engine: segment/checkpoint and consolidated final
+    briefings with event context, research reuse (ledger + cache) and long-transcript condensation."""
+
+    def __init__(self, store_getter: Callable[[], Any], max_words: int = 6000):
+        self._store_getter = store_getter
+        self.max_words = max_words
+
+    def _cache(self) -> SearchCache:
+        return SearchCache(self._store_getter(), ttl_seconds=settings.web_search_cache_ttl_seconds)
+
+    def segment(
+        self, text: str, session_id: str, outline: Optional[EventOutline] = None, kind: str = "segment"
+    ) -> SynthesisOutcome:
+        condensed = condense_transcript(text, self.max_words)
+        topic = extract_topics(condensed, outline=outline, max_queries=3)
+        batch = research(topic, condensed, outline=outline, cache=self._cache())
+        report = synthesize_briefing(condensed, topic, batch, kind=kind, outline=outline)
+        return SynthesisOutcome(briefing=report, research=research_entries(batch), topic=topic)
+
+    def final(
+        self,
+        parts: List[BriefingReport],
+        extra_text: str,
+        session_id: str,
+        outline: Optional[EventOutline] = None,
+        micro_events: Optional[List[Any]] = None,
+    ) -> SynthesisOutcome:
+        sections: List[str] = []
+        for idx, part in enumerate(parts, 1):
+            bullets = " ".join(part.executive_summary)
+            sections.append(f"Part {idx}: {part.topic_title}\nSummary: {bullets}\nNarrative: {part.explanatory_synthesis}")
+        if extra_text.strip():
+            label = "Additional transcript (not covered by part briefings)" if parts else "Transcript"
+            sections.append(f"{label}: {condense_transcript(extra_text, self.max_words)}")
+        text = "\n\n".join(sections)
+
+        if parts:
+            # Gap research only: concepts the parts already researched are not searched again
+            topic = extract_topics(text, outline=outline, max_queries=2, gap_only=True)
+            batch = research(topic, text, outline=outline, cache=self._cache(), allow_empty=True)
+        else:
+            topic = extract_topics(text, outline=outline, max_queries=2)
+            batch = research(topic, text, outline=outline, cache=self._cache())
+
+        report = synthesize_briefing(text, topic, batch, kind="final", outline=outline)
+        merged_sources: List[str] = []
+        for url in [u for p in parts for u in p.web_sources] + list(report.web_sources) + batch.source_urls:
+            if url and url not in merged_sources:
+                merged_sources.append(url)
+        report.web_sources = merged_sources
+        append_micro_events_section(report, micro_events or [])
+        return SynthesisOutcome(briefing=report, research=research_entries(batch), topic=topic)
+
+
+def node_topic_research(state: ExamenState) -> Dict[str, Any]:
+    """LangGraph node: Stage 3C Deep Research & Briefing Synthesizer (standalone invocation).
+
+    Executes topic extraction, autonomous web search with retry feedback, and dossier synthesis.
+    """
+    transcript = state.get("raw_transcript", "").strip()
+    if not transcript:
+        return {"topic_extracted": None, "briefing_report": None}
+
+    topic = extract_topics(transcript, max_queries=2)
+    search_batch = research(topic, transcript)
+    report = synthesize_briefing(transcript, topic, search_batch, kind="standalone")
     return {
         "topic_extracted": topic,
         "briefing_report": report

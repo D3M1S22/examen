@@ -20,7 +20,8 @@ export function SocialRolodex({
 }: SocialRolodexProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [activeFilter, setActiveFilter] = useState<string>("ALL");
-  const [selectedDossierContact, setSelectedDossierContact] = useState<SocialEntity | null>(null);
+  // Track the selected contact by id so the open dossier re-renders with fresh SWR data (e.g. after enrichment)
+  const [selectedDossierId, setSelectedDossierId] = useState<string | null>(null);
   const [selectedFollowUpContact, setSelectedFollowUpContact] = useState<SocialEntity | null>(null);
 
   // Deduplicate contacts by normalized person name to prevent duplicate card rendering
@@ -28,6 +29,8 @@ export function SocialRolodex({
   const contacts = rawContacts.filter((c, idx, arr) => {
     return idx === arr.findIndex((other) => other.name.trim().toLowerCase() === c.name.trim().toLowerCase());
   });
+
+  const selectedDossierContact = contacts.find((c) => c.id === selectedDossierId) || null;
 
   const needsActionCount = contacts.filter((c) => c.commitments && c.commitments.length > 0).length;
   const enrichedCount = contacts.filter((c) => !!c.web_profile).length;
@@ -85,7 +88,7 @@ export function SocialRolodex({
       <ExecutiveDossierModal
         contact={selectedDossierContact}
         isOpen={!!selectedDossierContact}
-        onClose={() => setSelectedDossierContact(null)}
+        onClose={() => setSelectedDossierId(null)}
         onEnrich={onEnrichContact}
         onToggleCommitment={onToggleCommitment}
       />
@@ -385,7 +388,7 @@ export function SocialRolodex({
                     </button>
 
                     <button
-                      onClick={() => setSelectedDossierContact(contact)}
+                      onClick={() => setSelectedDossierId(contact.id)}
                       className="px-4 py-2 rounded-lg border border-amber-500/50 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 font-mono text-[9px] font-bold tracking-[0.2em] flex items-center gap-1.5 transition-colors uppercase"
                       title="Open Executive Dossier"
                     >
@@ -421,14 +424,19 @@ export function SocialRolodex({
                       </div>
                     </div>
 
-                    {contact.web_profile?.executive_summary && (
+                    {contact.web_profile?.bio_summary && (
                       <div className="bg-[#101217] border border-[#232731] rounded-xl p-3.5 mt-2">
                         <div className="font-mono text-[8px] text-cyan-400 tracking-widest uppercase mb-1 flex items-center gap-1">
                           <span>⚡</span>
                           <span>AI Executive Brief</span>
                         </div>
+                        {contact.web_profile.headline && (
+                          <div className="font-sans text-xs text-primary font-semibold mb-1">
+                            {contact.web_profile.headline}
+                          </div>
+                        )}
                         <p className="font-sans text-xs text-secondary leading-relaxed line-clamp-3">
-                          {contact.web_profile.executive_summary}
+                          {contact.web_profile.bio_summary}
                         </p>
                       </div>
                     )}

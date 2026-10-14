@@ -82,8 +82,13 @@ amazon_challenge/
 │   ├── ingestion/                        # 🐝 [TARGET: Edge / Companion Ingestion Layer]
 │   │   ├── __init__.py
 │   │   ├── gatekeeper.py                 # Stage 1: Screening Gatekeeper (Fast Haiku/Luna/Nemotron + dynamic task injection)
-│   │   ├── stream_convo.py               # Live SSE client connected to bee-cli (BeeClient)
-│   │   └── orchestrator.py               # Sliding window buffer & edge screening orchestrator
+│   │   ├── stream_convo.py               # Live SSE client connected to bee-cli (BeeClient, receive-time capture)
+│   │   ├── orchestrator.py               # Per-utterance screening, event engine feeding & pipeline dispatch
+│   │   ├── ring_buffer.py                # Context ring buffer for anaphora resolution (M3.1)
+│   │   ├── event_engine.py               # Deep Topic Event Engine: events, segments, timers, synthesis jobs
+│   │   ├── topic_continuity.py           # Topic profile & similarity (Titan V2 embeddings / heuristic / LLM judge)
+│   │   ├── scenario_replay.py            # Virtual-clock replay of resources/event_scenarios.json
+│   │   └── session_manager.py            # Legacy per-conversation sessions + shared boundary helpers
 │   │
 │   └── web_ui/                           # 🖥️ [TARGET: S3 + CloudFront / Echo Show Ext-Apps]
 │       ├── index.html                    # Multimodal interactive dashboard
@@ -92,7 +97,8 @@ amazon_challenge/
 │       └── assets/                       # SVG icons and visual assets
 │
 ├── scripts/                              # 📊 Benchmarking & Telemetry Tools
-│   └── run_live_benchmark.py             # 25-scenario evaluation runner with latency/token tracking
+│   ├── run_live_benchmark.py             # 25-scenario evaluation runner with latency/token tracking
+│   └── replay_event_scenarios.py         # Event engine scenario replay & similarity threshold calibration
 │
 ├── deploy/                               # 🚀 Cloud Deployment & Automation Scripts
 │   ├── build_agentcore_bundle.sh         # Download arm64 wheels via uv and package code.zip
@@ -100,7 +106,7 @@ amazon_challenge/
 │   ├── deploy_ext_apps_s3.sh             # Sync web_ui to S3 + invalidate CloudFront CDN
 │   └── alexa_addon.json                  # Manifest registration for Alexa+ Developer Console
 │
-├── tests/                                # 🧪 Test Suite & Validation (85 tests, 100% pass)
+├── tests/                                # 🧪 Test Suite & Validation (272 tests, 100% pass)
 │   ├── fixtures/                         # Mock audio transcript datasets
 │   ├── test_storage.py                   # Unit tests on persistence layer (SQLite & FTS5)
 │   ├── test_gatekeeper.py                # Screening drop-rate (>90% drop) & task matching
@@ -108,7 +114,11 @@ amazon_challenge/
 │   ├── test_mcp_server.py                # 19 tests: 5 MCP tools, REST APIs & static UI
 │   ├── test_model_factory.py             # Dual-provider Bedrock vs Mantle model unit tests
 │   ├── test_pipeline_nodes.py            # Unit tests for social, action, and topic sub-agents
-│   ├── test_ingestion_orchestrator.py    # Sliding window audio buffer tests
+│   ├── test_ingestion_orchestrator.py    # Screening, event engine feeding & pipeline dispatch
+│   ├── test_event_engine.py              # Event lifecycle state machine (rules R0-R8)
+│   ├── test_event_synthesis.py           # Segment/final synthesis, search cache, query ledger
+│   ├── test_topic_continuity.py          # Topic continuity, drift/split, scenario replays
+│   ├── test_event_serving.py             # Manual event operations, REST endpoints, MCP tools
 │   └── test_web_search.py                # Autonomous DDGS search tool tests
 │
 ├── pyproject.toml                        # Python build config & pytest setup
@@ -166,7 +176,8 @@ amazon_challenge/
 ### 4. `src/ingestion/` (Edge / Companion Bridge)
 * **`gatekeeper.py`:** Fast screening gatekeeper with dynamic planned task injection, capable of dropping >90% of ambient banter at sub-second latency.
 * **`stream_convo.py`:** Subscribes to the `bee-cli` Server-Sent Events stream (`new-utterance`), aggregating transcribed chunks in a sliding window.
-* **`orchestrator.py`:** Orchestrates edge audio buffer sliding windows and feeds the pipeline.
+* **`orchestrator.py`:** Screens every utterance, feeds the Deep Topic Event Engine and dispatches qualified chunks to the pipeline (off the event loop).
+* **`event_engine.py` / `topic_continuity.py`:** Group deep-topic speech into events (lectures, meetings, talks), split them into parts at breaks, decide resume vs. new event by topic similarity, and schedule part/final syntheses. Specification: [docs/next_steps/deep_topic_event_engine/](next_steps/deep_topic_event_engine/00_overview.md).
 
 ---
 

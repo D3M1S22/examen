@@ -1,16 +1,34 @@
-import React, { useState } from "react";
-import { BriefingReport } from "@/types/schemas";
+import React, { useEffect, useState } from "react";
+import { BriefingReport, EventEngineStatus, EventSummary } from "@/types/schemas";
 import { ScreenHeader } from "../ui/ScreenHeader";
 import { StatusBadge } from "../ui/StatusBadge";
 import { TopicDetailModal } from "../ui/TopicDetailModal";
+import { EventAction, EventCard } from "../ui/EventCard";
 import { speakAlexaReassurance } from "@/utils/audioEffects";
 
 interface TopicDossiersProps {
   topicsData: { topics: BriefingReport[] } | undefined;
   statusData?: any;
+  sessionsData?: { sessions: EventSummary[] };
+  engineStatus?: EventEngineStatus;
+  onEventAction?: (action: EventAction, event: EventSummary, extra?: Record<string, any>) => Promise<void>;
 }
 
-export function TopicDossiers({ topicsData, statusData }: TopicDossiersProps) {
+const KIND_BADGES: Record<string, { label: string; cls: string }> = {
+  final: { label: "★ EVENT FINAL", cls: "text-amber-300 border-amber-500/50 bg-amber-950/40" },
+  segment: { label: "EVENT PART", cls: "text-cyan-300 border-cyan-500/40 bg-cyan-950/30" },
+  checkpoint: { label: "CHECKPOINT", cls: "text-cyan-300 border-cyan-500/40 bg-cyan-950/30" },
+  standalone: { label: "STANDALONE", cls: "text-zinc-300 border-white/10 bg-[#1c1f26]" },
+};
+
+export function TopicDossiers({ topicsData, statusData, sessionsData, engineStatus, onEventAction }: TopicDossiersProps) {
+  const events = sessionsData?.sessions || [];
+  const [view, setView] = useState<"events" | "briefings">(events.length > 0 ? "events" : "briefings");
+  const [viewTouched, setViewTouched] = useState(false);
+  useEffect(() => {
+    // Events arrive asynchronously: default to the event view once they exist, unless the user chose
+    if (!viewTouched && events.length > 0) setView("events");
+  }, [events.length, viewTouched]);
   const [activeFilter, setActiveFilter] = useState<string>("ALL");
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedTopic, setSelectedTopic] = useState<BriefingReport | null>(null);
@@ -42,6 +60,17 @@ export function TopicDossiers({ topicsData, statusData }: TopicDossiersProps) {
       (t.context_type || "").toLowerCase().includes(searchLower);
 
     return matchesFilter && matchesSearch;
+  });
+
+  const filteredEvents = events.filter((ev) => {
+    if (!searchQuery) return true;
+    const q = searchQuery.toLowerCase();
+    return (
+      (ev.title || "").toLowerCase().includes(q) ||
+      (ev.final_title || "").toLowerCase().includes(q) ||
+      ev.top_terms.some((t) => t.includes(q)) ||
+      ev.segments.some((s) => (s.title || "").toLowerCase().includes(q))
+    );
   });
 
   const handleBroadcast = (topic: BriefingReport) => {
@@ -86,7 +115,7 @@ export function TopicDossiers({ topicsData, statusData }: TopicDossiersProps) {
           <span className="absolute left-4 top-1/2 -translate-y-1/2 text-secondary text-sm">🔍</span>
           <input
             type="text"
-            placeholder="Search dossiers by topic, thesis, keywords, or citations..."
+            placeholder={view === "events" ? "Search events by title, part or key term..." : "Search dossiers by topic, thesis, keywords, or citations..."}
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="w-full bg-[#121419] border border-surface-container-highest rounded-full py-2.5 pl-10 pr-10 text-body-sm font-sans text-primary placeholder-zinc-500 focus:outline-none focus:border-primary transition-colors"
@@ -102,8 +131,26 @@ export function TopicDossiers({ topicsData, statusData }: TopicDossiersProps) {
           )}
         </div>
 
+        {/* View toggle */}
+        <div className="flex items-center gap-1 p-1 rounded-full bg-[#121419] border border-surface-container-highest">
+          {(["events", "briefings"] as const).map((v) => (
+            <button
+              key={v}
+              onClick={() => {
+                setView(v);
+                setViewTouched(true);
+              }}
+              className={`px-4 py-1.5 rounded-full font-mono text-[10px] font-bold tracking-widest transition-colors ${
+                view === v ? "bg-primary text-background" : "text-secondary hover:text-primary"
+              }`}
+            >
+              {v === "events" ? `🏛️ EVENTS (${events.length})` : `📚 ALL BRIEFINGS (${topics.length})`}
+            </button>
+          ))}
+        </div>
+
         {/* Filters */}
-        <div className="flex flex-wrap items-center gap-2">
+        <div className={`flex flex-wrap items-center gap-2 ${view === "events" ? "hidden" : ""}`}>
           <button
             onClick={() => setActiveFilter("ALL")}
             className={`px-4 py-2 rounded-full font-mono text-[10px] font-bold tracking-widest transition-colors ${
@@ -136,8 +183,36 @@ export function TopicDossiers({ topicsData, statusData }: TopicDossiersProps) {
         </div>
       </div>
 
+      {/* Events view (Deep Topic Event Engine) */}
+      {view === "events" && (
+        <div className="space-y-space-lg">
+          {filteredEvents.length === 0 ? (
+            <div className="p-12 text-center border border-dashed border-surface-container-highest rounded-2xl bg-[#121419]">
+              <div className="text-3xl mb-3">🏛️</div>
+              <div className="font-serif text-xl text-primary mb-2">No Lectures or Meetings Recorded Yet</div>
+              <p className="font-sans text-secondary text-sm max-w-md mx-auto">
+                Turn on Event mode in the Ambient Simulator (or wear the Bee during a lecture): deep-topic speech is grouped into events,
+                synthesized part by part at each break and consolidated when the event ends.
+              </p>
+            </div>
+          ) : (
+            filteredEvents.map((ev, i) => (
+              <EventCard
+                key={ev.session_id}
+                event={ev}
+                previousEvent={filteredEvents[i + 1] || null}
+                tHardSeconds={engineStatus?.config?.t_hard_seconds}
+                onAction={onEventAction || (async () => {})}
+                onOpenBriefing={(b) => setSelectedTopic(b)}
+                defaultExpanded={i === 0}
+              />
+            ))
+          )}
+        </div>
+      )}
+
       {/* Dossiers List */}
-      {filteredTopics.length === 0 ? (
+      {view === "events" ? null : filteredTopics.length === 0 ? (
         <div className="p-12 text-center border border-dashed border-surface-container-highest rounded-2xl bg-[#121419]">
           <div className="text-3xl mb-3">📚</div>
           <div className="font-serif text-xl text-primary mb-2">No Topic Dossiers Found</div>
@@ -173,6 +248,11 @@ export function TopicDossiers({ topicsData, statusData }: TopicDossiersProps) {
                     </h3>
 
                     <div className="flex items-center gap-2">
+                      {topic.kind && KIND_BADGES[topic.kind] && (
+                        <span className={`px-2.5 py-1 rounded border font-mono text-[9px] tracking-widest uppercase ${KIND_BADGES[topic.kind].cls}`}>
+                          {KIND_BADGES[topic.kind].label}
+                        </span>
+                      )}
                       <span className="px-2.5 py-1 rounded bg-[#1c1f26] border border-white/5 font-mono text-[9px] text-secondary tracking-widest uppercase">
                         {topic.context_type?.replace(/_/g, " ").toUpperCase() || "GENERAL RESEARCH"}
                       </span>

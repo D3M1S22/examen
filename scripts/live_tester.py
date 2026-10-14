@@ -23,9 +23,11 @@ from __future__ import annotations
 import argparse
 from datetime import datetime
 import json
+import logging
 import os
 import sys
 import time
+import traceback
 import uuid
 from typing import Any, Dict, List, Optional
 
@@ -43,12 +45,22 @@ from src.core.schemas import (
     PlannedTask,
     SocialEntity,
     TopicExtraction,
+    UtteranceChunk,
     VerifiedAction,
 )
 from src.core.storage import get_storage_store
 from src.core.storage.sqlite_store import SQLiteContextStore
+from src.ingestion.event_engine import (
+    EngineConfig,
+    EventEngine,
+    Transition,
+    build_continuity_from_settings,
+    to_iso,
+)
 from src.ingestion.gatekeeper import classify_chunk, is_noop
 from src.pipeline.graph import pipeline_graph
+
+logger = logging.getLogger("examen.scripts.live_tester")
 
 # ANSI Terminal Colors
 RESET = "\033[0m"
@@ -67,6 +79,57 @@ BG_DARK = "\033[100m"
 # Price estimates for nvidia.nemotron-super-3-120b on AWS Bedrock ($ per 1M tokens)
 PRICE_INPUT_PER_1M = 0.15
 PRICE_OUTPUT_PER_1M = 0.65
+
+# ---------------------------------------------------------------------------
+# Deep Topic Event Engine mode (virtual clock: /tick <seconds> fast-forwards time)
+# ---------------------------------------------------------------------------
+EVENT_MODE = {"enabled": False, "clock_offset": 0.0}
+_LIVE_ENGINE: Optional[EventEngine] = None
+
+
+def get_live_engine() -> EventEngine:
+    global _LIVE_ENGINE
+    if _LIVE_ENGINE is None:
+        _LIVE_ENGINE = EventEngine(
+            store=get_storage_store(),
+            config=EngineConfig.from_settings(),
+            clock=lambda: time.time() + EVENT_MODE["clock_offset"],
+            continuity=build_continuity_from_settings(),
+        )
+    return _LIVE_ENGINE
+
+
+def print_transitions(transitions: List[Transition]) -> None:
+    for t in transitions:
+        print(f"  {MAGENTA}⚙ {t.rule}{RESET} → {BOLD}{t.to_status.upper()}{RESET} "
+              f"({t.reason}) {DIM}{t.detail}{RESET}")
+
+
+def print_event_status(engine: EventEngine) -> None:
+    ev = engine.current_event()
+    cfg = engine.config
+    print(f"  {DIM}Virtual clock: {to_iso(engine.now())} (offset +{EVENT_MODE['clock_offset']:.0f}s) | "
+          f"T_soft={cfg.t_soft:.0f}s T_hard={cfg.t_hard:.0f}s min_words={cfg.min_segment_words}{RESET}")
+    if not ev:
+        print(f"  {DIM}No open event.{RESET}")
+        return
+    print(f"  {BOLD}Event:{RESET} {CYAN}{ev.title}{RESET} [{YELLOW}{ev.status.upper()}{RESET}] {DIM}{ev.session_id}{RESET}")
+    for seg in ev.segments:
+        print(f"    • Segment {seg.index} [{seg.status}] {seg.word_count} words "
+              f"{DIM}{seg.start_time} → {seg.end_time or '…'}{RESET} {seg.title or ''}")
+
+
+def drain_event_jobs(engine: EventEngine) -> None:
+    """Runs pending segment/final syntheses inline and prints the produced briefings."""
+    pending = engine.pending_jobs()
+    if not pending:
+        return
+    print(f"  {CYAN}⏳ Running {pending} synthesis job(s)...{RESET}")
+    engine.run_pending_jobs_sync()
+    store = get_storage_store()
+    for d in store.list_session_dossiers(limit=3):
+        for b in store.list_briefings_for_session(d.session_id)[-3:]:
+            print(f"    {GREEN}✓ [{b.kind}]{RESET} {BOLD}{b.topic_title}{RESET} {DIM}({d.session_id[:8]}){RESET}")
 
 
 def estimate_tokens(text: str) -> int:
@@ -102,7 +165,7 @@ def print_banner(db_path: str):
     print(f" {BOLD}Model:{RESET}        {YELLOW}{model}{RESET}")
     print(f" {BOLD}Credentials:{RESET}  {cred_status}")
     print(f" {BOLD}Storage:{RESET}      {WHITE}SQLite ({db_path}){RESET} — {CYAN}{pending_tasks_count} active planned tasks{RESET}")
-    print(f" {DIM}Commands: /tasks, /actions, /commitments, /sessions, /profiles, /social, /topics, /simulate, /reset-db, /help, /exit{RESET}")
+    print(f" {DIM}Commands: /tasks, /actions, /commitments, /sessions, /profiles, /social, /topics, /simulate, /event, /tick, /conclude, /reset-db, /help, /exit{RESET}")
     print(f"{DIM}──────────────────────────────────────────────────────────────────────────────────{RESET}\n")
 
 
@@ -131,6 +194,9 @@ def handle_subcommand(cmd: str, store: SQLiteContextStore) -> bool:
         print(f"  {CYAN}/social{RESET}                 List stored social contacts and bilateral commitments")
         print(f"  {CYAN}/topics{RESET}                 List recent deep topic briefings and explanatory syntheses [M1.1]")
         print(f"  {CYAN}/simulate [name]{RESET}        Run Phase 1-3 mock conversation scenarios interactively")
+        print(f"  {CYAN}/event [on|off]{RESET}         Toggle Deep Topic Event Engine mode / show the open event")
+        print(f"  {CYAN}/tick <seconds>{RESET}          Fast-forward the event engine virtual clock and run timers")
+        print(f"  {CYAN}/conclude{RESET}               Conclude the open event now and run the final synthesis")
         print(f"  {CYAN}/reset-db [--seed]{RESET}       Reset local SQLite database to clean state (optional baseline seed)")
         print(f"  {CYAN}/clear{RESET}                  Clear terminal screen")
         print(f"  {CYAN}/exit{RESET}                   Exit the interactive tester")
@@ -281,6 +347,40 @@ def handle_subcommand(cmd: str, store: SQLiteContextStore) -> bool:
             print(f"Run with: {YELLOW}/simulate <id>{RESET}\n")
         return True
 
+    elif action == "/event":
+        if len(parts) > 1 and parts[1].lower() in ("on", "off"):
+            EVENT_MODE["enabled"] = parts[1].lower() == "on"
+        state = f"{GREEN}ON{RESET}" if EVENT_MODE["enabled"] else f"{YELLOW}OFF{RESET}"
+        print_section(f"Deep Topic Event Engine — event mode {state}", "🧠", MAGENTA)
+        print_event_status(get_live_engine())
+        return True
+
+    elif action == "/tick":
+        try:
+            seconds = float(parts[1]) if len(parts) > 1 else 60.0
+        except ValueError:
+            print(f"{RED}Usage: /tick <seconds>{RESET}")
+            return True
+        EVENT_MODE["clock_offset"] += seconds
+        engine = get_live_engine()
+        print_section(f"Virtual clock +{seconds:.0f}s", "⏩", MAGENTA)
+        transitions = engine.tick()
+        print_transitions(transitions) if transitions else print(f"  {DIM}No transition.{RESET}")
+        drain_event_jobs(engine)
+        print_event_status(engine)
+        return True
+
+    elif action == "/conclude":
+        engine = get_live_engine()
+        event_id = engine.current_event_id()
+        if not event_id:
+            print(f"  {DIM}No open event to conclude.{RESET}")
+            return True
+        engine.conclude(event_id)
+        print_section("Event concluded (R8)", "🏁", MAGENTA)
+        drain_event_jobs(engine)
+        return True
+
     elif action == "/reset-db":
         from scripts.reset_db import reset_database
         seed = "--seed" in cmd
@@ -322,9 +422,11 @@ def run_pipeline_test(
     print_section("Stage 1: Semantic Gatekeeper Screening", "🛡️", CYAN)
     t0_gate = time.perf_counter()
 
+    event_hint = get_live_engine().active_event_hint() if EVENT_MODE["enabled"] else ""
     classification: ChunkClassification = classify_chunk(
         transcript=transcript,
         active_tasks=active_titles if active_titles else None,
+        prior_context=event_hint or None,
         force_mock=force_mock,
     )
     t_gate = time.perf_counter() - t0_gate
@@ -342,6 +444,22 @@ def run_pipeline_test(
     print(f"  {BOLD}Confidence:{RESET}   {WHITE}{confidence * 100:.1f}%{RESET}")
     print(f"  {BOLD}Summary Hint:{RESET} {WHITE}{hint}{RESET}")
     print(f"  {BOLD}Latency:{RESET}      {CYAN}{t_gate:.3f}s{RESET}")
+
+    # Deep Topic Event Engine (event mode): accumulate deep_topic content into macro events
+    event_id: Optional[str] = None
+    if EVENT_MODE["enabled"]:
+        engine = get_live_engine()
+        outcome = engine.record_chunk(UtteranceChunk(
+            conversation_uuid="live_tester",
+            text=transcript,
+            timestamp=to_iso(engine.clock()),
+            categories=list(categories),
+        ))
+        event_id = outcome.event_id
+        print_section("Deep Topic Event Engine", "🧠", MAGENTA)
+        print_transitions(outcome.transitions)
+        print_event_status(engine)
+        drain_event_jobs(engine)
 
     if is_chunk_noop and not force_pipeline:
         print(f"\n  {YELLOW}⚡ Pipeline Short-Circuit:{RESET} Chunk deemed casual chit-chat or background noise.")
@@ -364,12 +482,13 @@ def run_pipeline_test(
     # =========================================================================
     print_section("Stage 2 & 3: LangGraph Extraction & Autonomous Research", "⚡", MAGENTA)
 
-    session_id = f"cli-test-{uuid.uuid4().hex[:6]}"
+    session_id = event_id or f"cli-test-{uuid.uuid4().hex[:6]}"
     state_categories = categories if not (is_chunk_noop and force_pipeline) else ["action", "social", "deep_topic"]
 
     initial_state: ExamenState = {
         "raw_transcript": transcript,
         "session_id": session_id,
+        "event_managed": event_id is not None,
         "categories": state_categories,
         "confidence": confidence,
         "action_data": None,
@@ -444,6 +563,9 @@ def run_pipeline_test(
                 print(f"    • {BOLD}Action Items:{RESET}")
                 for item in briefing_report.action_items:
                     print(f"      > {YELLOW}{item}{RESET}")
+        elif event_id:
+            print(f"    • {CYAN}Accumulated into event {event_id[:8]}{RESET} — synthesized per segment/event "
+                  f"(see /event, /tick, /conclude)")
         else:
             print(f"    • {YELLOW}No technical topic dossier generated.{RESET}")
 
@@ -455,7 +577,15 @@ def run_pipeline_test(
     if action_data:
         persisted_items.append(f"VerifiedAction ('{action_data.action_type}')")
     if social_data:
-        persisted_items.append(f"SocialEntity ('{social_data.person_name}')")
+        # node_persist swallows storage errors, so confirm the contact actually landed
+        try:
+            social_persisted = store.get_social_contact(social_data.person_name) is not None
+        except Exception:
+            social_persisted = False
+        if social_persisted:
+            persisted_items.append(f"SocialEntity ('{social_data.person_name}')")
+        else:
+            print(f"  {RED}✗ SocialEntity ('{social_data.person_name}') was NOT persisted (see logs above).{RESET}")
     if briefing_report:
         persisted_items.append(f"BriefingReport ('{briefing_report.topic_title}')")
 
@@ -538,7 +668,8 @@ def interactive_loop():
         except KeyboardInterrupt:
             print(f"\n\n{YELLOW}Interrupted. Type /exit to quit or continue testing.{RESET}\n")
         except Exception as e:
-            print(f"\n{RED}{BOLD}Error executing pipeline:{RESET} {e}\n", exc_info=True)
+            print(f"\n{RED}{BOLD}Error executing pipeline:{RESET} {e}\n")
+            traceback.print_exc()
 
 
 def main():
@@ -560,8 +691,13 @@ def main():
     parser.add_argument(
         "--no-persist", action="store_true", help="Dry-run mode: do not commit entities to storage."
     )
+    parser.add_argument(
+        "--event-mode", action="store_true",
+        help="Route chunks through the Deep Topic Event Engine (use /tick and /conclude to drive timers).",
+    )
 
     args = parser.parse_args()
+    EVENT_MODE["enabled"] = args.event_mode
 
     # Determine input text
     transcript: Optional[str] = None

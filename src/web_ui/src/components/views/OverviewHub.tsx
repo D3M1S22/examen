@@ -1,5 +1,5 @@
 import React from "react";
-import { PlannedTask, VerifiedAction, SocialEntity, BriefingReport } from "@/types/schemas";
+import { PlannedTask, VerifiedAction, SocialEntity, BriefingReport, EventEngineStatus } from "@/types/schemas";
 import { StatusBadge, DomainBadge } from "../ui/StatusBadge";
 import { speakAlexaReassurance } from "@/utils/audioEffects";
 
@@ -9,6 +9,7 @@ interface OverviewHubProps {
   actionsData: { actions: VerifiedAction[] } | undefined;
   socialData: { contacts: SocialEntity[] } | undefined;
   topicsData: { topics: BriefingReport[] } | undefined;
+  engineStatus?: EventEngineStatus;
   setActiveTab: (tab: string) => void;
   setSimText: (text: string) => void;
   handleToggleRoutine: (task: PlannedTask) => void;
@@ -21,11 +22,13 @@ export function OverviewHub({
   actionsData,
   socialData,
   topicsData,
+  engineStatus,
   setActiveTab,
   setSimText,
   handleToggleRoutine,
   onOpenEchoModal,
 }: OverviewHubProps) {
+  const liveEvent = engineStatus?.active_event || null;
   const tasks = routinesData?.tasks || [];
   const actions = actionsData?.actions || [];
   const contacts = socialData?.contacts || [];
@@ -103,6 +106,35 @@ export function OverviewHub({
           </button>
         </div>
       </div>
+
+      {/* Live lecture / meeting banner (Deep Topic Event Engine) */}
+      {liveEvent && (
+        <div
+          onClick={() => setActiveTab("topics")}
+          className={`card-elevated px-space-xl py-4 rounded-2xl border cursor-pointer flex flex-col md:flex-row md:items-center justify-between gap-3 transition-colors ${
+            liveEvent.status === "active"
+              ? "bg-emerald-950/20 border-emerald-500/40 hover:border-emerald-400"
+              : "bg-amber-950/20 border-amber-500/40 hover:border-amber-400"
+          }`}
+        >
+          <div className="flex items-center gap-4 min-w-0">
+            <span className={`w-3 h-3 rounded-full shrink-0 ${liveEvent.status === "active" ? "bg-emerald-400 animate-pulse" : "bg-amber-400"}`} />
+            <div className="min-w-0">
+              <div className={`font-mono text-[9px] tracking-[0.2em] uppercase font-bold ${liveEvent.status === "active" ? "text-emerald-300" : "text-amber-300"}`}>
+                {liveEvent.status === "active" ? "LIVE EVENT // RECORDING" : "LIVE EVENT // PAUSED"}
+              </div>
+              <div className="font-serif text-[22px] text-primary truncate">
+                {liveEvent.title?.startsWith("Ongoing session") ? "Lecture / meeting in progress" : liveEvent.title}
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center gap-4 font-mono text-[9px] text-secondary tracking-widest uppercase shrink-0">
+            <span>{liveEvent.segments} PART(S)</span>
+            {liveEvent.top_terms?.length > 0 && <span className="hidden lg:inline">{liveEvent.top_terms.slice(0, 4).join(" · ")}</span>}
+            <span className="text-primary">OPEN TIMELINE →</span>
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-space-lg">
         {/* SECTOR 01: Peace of Mind */}

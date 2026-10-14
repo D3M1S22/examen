@@ -13,6 +13,7 @@ from src.serving.tools.social_tools import (
 )
 from src.serving.tools.topic_tools import get_topic_briefing
 from src.serving.tools.session_tools import (
+    get_live_event_outline,
     get_session_dossier,
     list_session_dossiers,
 )
@@ -26,6 +27,7 @@ __all__ = [
     "get_contact_profile",
     "get_social_commitments",
     "get_topic_briefing",
+    "get_live_event_outline",
     "get_session_dossier",
     "list_session_dossiers",
 ]

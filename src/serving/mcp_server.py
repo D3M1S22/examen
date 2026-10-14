@@ -33,6 +33,7 @@ from src.core.storage import get_storage_store
 from src.pipeline.app import agent_invocation
 from src.serving.tools import (
     create_planned_task,
+    get_live_event_outline,
     get_contact_profile,
     get_daily_actions_recap,
     get_session_dossier,
@@ -69,6 +70,24 @@ def broadcast_event(event_type: str, data: Optional[Dict[str, Any]] = None) -> N
             _sse_subscribers.discard(q)
 
 
+_engine_listener_registered = False
+
+
+def _ensure_event_engine() -> Any:
+    """Starts the Deep Topic Event Engine runtime (tick loop + synthesis worker) on this loop
+    and forwards engine lifecycle events to SSE subscribers. Returns the shared engine."""
+    global _engine_listener_registered
+    from src.ingestion.event_engine import get_event_engine_runtime
+
+    runtime = get_event_engine_runtime()
+    if not _engine_listener_registered:
+        runtime.add_listener(lambda event_type, payload: broadcast_event(event_type, payload))
+        _engine_listener_registered = True
+    if settings.event_engine_enabled:
+        runtime.ensure_started()
+    return runtime.engine
+
+
 # Register the 10 core MCP tools for Alexa+
 mcp.tool()(create_planned_task)
 mcp.tool()(get_upcoming_tasks)
@@ -80,6 +99,7 @@ mcp.tool()(get_social_commitments)
 mcp.tool()(get_topic_briefing)
 mcp.tool()(get_session_dossier)
 mcp.tool()(list_session_dossiers)
+mcp.tool()(get_live_event_outline)
 
 
 # ---------------------------------------------------------------------------
@@ -118,7 +138,9 @@ class OrchestratorManager:
         try:
             from src.ingestion.orchestrator import BeeStreamOrchestrator
             store = get_storage_store()
-            self.orchestrator = BeeStreamOrchestrator(debug_mode="none", store=store)
+            self.orchestrator = BeeStreamOrchestrator(
+                debug_mode="none", store=store, engine=_ensure_event_engine()
+            )
             logger.info("Ingestion Orchestrator background service started.")
             await self.orchestrator.run()
         except asyncio.CancelledError:
@@ -145,7 +167,6 @@ class OrchestratorManager:
             "running": self.is_started and (self.task is not None and not self.task.done()),
             "status": "LISTENING" if self.is_started else "STANDBY",
             "mode": "ambient_sse",
-            "buffer_chars": 0,
             "chunks_screened": 0,
             "utterances_received": 0,
             "detail": "Orchestrator initializing background stream",
@@ -555,6 +576,7 @@ async def api_orchestrator_stop(request: Request) -> JSONResponse:
 @mcp.custom_route("/api/status", methods=["GET"])
 async def api_status(request: Request) -> JSONResponse:
     """Returns system status, active models/providers, real telemetry averages, and entity counts."""
+    _ensure_event_engine()
     store = get_storage_store()
     recent_actions = store.list_recent_actions(limit=100)
     planned_tasks = store.list_planned_tasks()
@@ -1352,6 +1374,12 @@ async def api_cards_preview(request: Request) -> JSONResponse:
                 "actions": [{"headline": "Terraform apply executed (Tables created in eu-west-1)"}],
                 "tasks": [{"headline": "Deliver latency benchmarks to Marco"}],
                 "contacts": [{"headline": "Dr. Sarah Lin (Datadog Principal Architect)"}],
+                "status": "concluded",
+                "is_final": True,
+                "segments": [
+                    {"index": 1, "title": "Postgres limits & access patterns", "status": "synthesized", "time_range": "14:00–14:22", "kind": "segment"},
+                    {"index": 2, "title": "DynamoDB single-table design", "status": "synthesized", "time_range": "14:27–14:45", "kind": "segment"},
+                ],
             },
         }
 
@@ -1377,7 +1405,11 @@ async def api_topics(request: Request) -> JSONResponse:
     """Lists recent synthesized technical briefings."""
     store = get_storage_store()
     limit = int(request.query_params.get("limit", "10"))
-    topics = store.list_topic_briefings(limit=limit)
+    topics = store.list_topic_briefings(
+        limit=limit,
+        kind=request.query_params.get("kind") or None,
+        session_id=request.query_params.get("session_id") or None,
+    )
 
     result = []
     for t in topics:
@@ -1391,6 +1423,9 @@ async def api_topics(request: Request) -> JSONResponse:
             "action_items": t.action_items,
             "deep_dive_markdown": t.deep_dive_markdown,
             "created_at": t.created_at,
+            "kind": t.kind,
+            "session_id": t.session_id,
+            "segment_id": t.segment_id,
         })
     return JSONResponse({"topics": result, "count": len(result)})
 
@@ -1401,9 +1436,41 @@ async def api_sessions(request: Request) -> JSONResponse:
     store = get_storage_store()
     status = request.query_params.get("status")
     limit = int(request.query_params.get("limit", "10"))
-    dossiers = store.list_session_dossiers(status=status, limit=limit)
-    result = [d.model_dump() for d in dossiers]
+    events_only = request.query_params.get("events_only", "").lower() in ("1", "true", "yes")
+    dossiers = store.list_session_dossiers(status=status, limit=limit * 3 if events_only else limit)
+    if events_only:
+        dossiers = [d for d in dossiers if d.segments][:limit]
+    result = [_session_summary(d) for d in dossiers]
     return JSONResponse({"sessions": result, "count": len(result)})
+
+
+def _session_summary(d: Any) -> Dict[str, Any]:
+    """Lightweight event/session card for lists (no transcript, no embedding centroid)."""
+    from src.serving.tools.session_tools import _segment_payload, _top_terms
+
+    return {
+        "session_id": d.session_id,
+        "title": d.title,
+        "domain": d.domain,
+        "status": d.status,
+        "final_status": d.final_status,
+        "start_time": d.start_time,
+        "last_updated_at": d.last_updated_at,
+        "concluded_at": d.concluded_at,
+        "paused_at": d.paused_at,
+        "hard_close_deadline": d.hard_close_deadline,
+        "location_name": (d.location or {}).get("place_name") if d.location else None,
+        "conversation_uuids": d.conversation_uuids,
+        "segments": [{k: v for k, v in _segment_payload(s, {}).items() if k != "briefing"} for s in d.segments],
+        "final_briefing_id": d.final_briefing_id,
+        "final_title": d.briefing_report.topic_title if d.briefing_report else None,
+        "micro_events_count": len(d.linked_micro_events),
+        "linked_micro_events": [e.model_dump() for e in d.linked_micro_events],
+        "last_transition": d.transitions[-1].model_dump() if d.transitions else None,
+        "transitions_count": len(d.transitions),
+        "top_terms": _top_terms(d, 6),
+        "transcript_chunks_count": len(d.transcript_chunks),
+    }
 
 
 @mcp.custom_route("/api/sessions/{session_id}", methods=["GET"])
@@ -1419,14 +1486,10 @@ async def api_session_detail(request: Request) -> JSONResponse:
 
 @mcp.custom_route("/api/sessions/{session_id}/conclude", methods=["POST"])
 async def api_session_conclude(request: Request) -> JSONResponse:
-    """Marks a session dossier as concluded, with optional briefing report synthesis."""
+    """Concludes a session/event (rule R8). Final synthesis is scheduled asynchronously."""
     session_id = request.path_params.get("session_id")
     if not session_id:
         return JSONResponse({"error": "Missing session_id"}, status_code=400)
-
-    from src.ingestion.session_manager import SessionManager
-    store = get_storage_store()
-    mgr = SessionManager(store=store)
 
     body = {}
     try:
@@ -1434,17 +1497,25 @@ async def api_session_conclude(request: Request) -> JSONResponse:
     except Exception:
         pass
 
+    store = get_storage_store()
     briefing_id = body.get("briefing_report_id")
-    auto_synthesize = body.get("auto_synthesize", False)
+    existing = store.get_session_dossier(session_id)
+    if existing is None:
+        return JSONResponse({"error": f"Session '{session_id}' not found"}, status_code=404)
 
-    if auto_synthesize and not briefing_id:
-        mgr.synthesize_session_dossier(session_id=session_id, auto_conclude=True)
-        dossier = store.get_session_dossier(session_id)
-        if dossier:
-            broadcast_event("session_concluded", dossier.model_dump())
-            return JSONResponse({"success": True, "concluded": True, "dossier": dossier.model_dump()})
+    if briefing_id or (not existing.segments and body.get("auto_synthesize")):
+        # Legacy sessions (no segments) or explicit briefing linkage
+        from src.ingestion.session_manager import SessionManager
+        mgr = SessionManager(store=store)
+        if briefing_id:
+            dossier = mgr.conclude_session(session_id=session_id, briefing_report_id=briefing_id)
+        else:
+            await asyncio.to_thread(mgr.synthesize_session_dossier, session_id, True)
+            dossier = store.get_session_dossier(session_id)
+    else:
+        engine = _ensure_event_engine()
+        dossier = engine.conclude(session_id)
 
-    dossier = mgr.conclude_session(session_id=session_id, briefing_report_id=briefing_id)
     if not dossier:
         return JSONResponse({"error": f"Session '{session_id}' not found"}, status_code=404)
 
@@ -1452,11 +1523,154 @@ async def api_session_conclude(request: Request) -> JSONResponse:
     return JSONResponse({"success": True, "concluded": True, "dossier": dossier.model_dump()})
 
 
+@mcp.custom_route("/api/sessions/{session_id}/chunks", methods=["GET"])
+async def api_session_chunks(request: Request) -> JSONResponse:
+    """Paginated transcript of an event (session_chunks)."""
+    session_id = request.path_params.get("session_id")
+    store = get_storage_store()
+    segment_id = request.query_params.get("segment_id") or None
+    limit = int(request.query_params.get("limit", "500"))
+    seg_of = store.get_chunk_segments(session_id)
+    chunks = store.list_session_chunks(session_id, segment_id=segment_id, limit=limit)
+    return JSONResponse({
+        "session_id": session_id,
+        "count": len(chunks),
+        "chunks": [
+            {
+                "chunk_id": c.chunk_id,
+                "timestamp": c.timestamp,
+                "text": c.text,
+                "speaker_id": c.speaker_id,
+                "speaker_role": c.speaker_role,
+                "categories": c.categories,
+                "segment_id": seg_of.get(c.chunk_id),
+            }
+            for c in chunks
+        ],
+    })
+
+
+def _engine_op_response(event_type: str, dossier: Any, error: str) -> JSONResponse:
+    if dossier is None:
+        return JSONResponse({"success": False, "error": error}, status_code=409)
+    payload = _session_summary(dossier)
+    broadcast_event(event_type, payload)
+    return JSONResponse({"success": True, "event": payload})
+
+
+@mcp.custom_route("/api/sessions/{session_id}/pause", methods=["POST"])
+async def api_session_pause(request: Request) -> JSONResponse:
+    """Manual soft close: closes the current segment and synthesizes it now."""
+    engine = _ensure_event_engine()
+    dossier = await asyncio.to_thread(engine.pause, request.path_params.get("session_id"))
+    return _engine_op_response("event_paused", dossier, "Only the active event can be paused")
+
+
+@mcp.custom_route("/api/sessions/{session_id}/resume", methods=["POST"])
+async def api_session_resume(request: Request) -> JSONResponse:
+    """Forces the paused current event to resume (overrides a pending split decision)."""
+    engine = _ensure_event_engine()
+    dossier = await asyncio.to_thread(engine.resume, request.path_params.get("session_id"))
+    return _engine_op_response("event_resumed", dossier, "Only the paused current event can be resumed")
+
+
+@mcp.custom_route("/api/sessions/{session_id}/split", methods=["POST"])
+async def api_session_split(request: Request) -> JSONResponse:
+    """Manual split: {"at_time": ISO} or {"at_chunk_id": str}; later chunks move to a new event."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    engine = _ensure_event_engine()
+    result = await asyncio.to_thread(
+        engine.split, request.path_params.get("session_id"), body.get("at_time"), body.get("at_chunk_id")
+    )
+    if result is None:
+        return JSONResponse({"success": False, "error": "Nothing to split at that point"}, status_code=409)
+    old, new = result
+    payload = {"old": _session_summary(old), "new": _session_summary(new)}
+    broadcast_event("event_split", payload)
+    return JSONResponse({"success": True, **payload})
+
+
+@mcp.custom_route("/api/sessions/merge", methods=["POST"])
+async def api_sessions_merge(request: Request) -> JSONResponse:
+    """Manual merge: {"session_ids": [...]} into the earliest event; its final briefing is regenerated."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    ids = body.get("session_ids") or []
+    engine = _ensure_event_engine()
+    target = await asyncio.to_thread(engine.merge, ids)
+    return _engine_op_response("event_merged", target, "Provide at least two existing events")
+
+
+@mcp.custom_route("/api/simulate/tick", methods=["POST"])
+async def api_simulate_tick(request: Request) -> JSONResponse:
+    """Simulator: fast-forwards the event engine virtual clock by {"seconds": n} and runs its timers."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    engine = _ensure_event_engine()
+    if body.get("reset"):
+        engine.clock_offset = 0.0
+        transitions = []
+    else:
+        transitions = await asyncio.to_thread(engine.advance_clock, float(body.get("seconds", 60)))
+    return JSONResponse({
+        "success": True,
+        "clock_offset_seconds": engine.clock_offset,
+        "virtual_now": datetime.fromtimestamp(engine.now()).isoformat(),
+        "transitions": [
+            {"rule": t.rule, "to_status": t.to_status, "reason": t.reason, "detail": t.detail} for t in transitions
+        ],
+        **engine.status_summary(),
+    })
+
+
+@mcp.custom_route("/api/event-scenarios", methods=["GET"])
+async def api_event_scenarios(request: Request) -> JSONResponse:
+    """Replay scenarios for the simulator scenario player (resources/event_scenarios.json)."""
+    from src.ingestion.scenario_replay import load_event_scenarios
+
+    try:
+        scenarios = load_event_scenarios()
+    except FileNotFoundError:
+        scenarios = []
+    return JSONResponse({"scenarios": scenarios, "count": len(scenarios)})
+
+
+@mcp.custom_route("/api/event-engine/status", methods=["GET"])
+async def api_event_engine_status(request: Request) -> JSONResponse:
+    """Returns the Deep Topic Event Engine state (open event, pending synthesis jobs, config)."""
+    engine = _ensure_event_engine()
+    cfg = engine.config
+    return JSONResponse({
+        "enabled": settings.event_engine_enabled,
+        "profile": settings.event_profile,
+        "config": {
+            "t_soft_seconds": cfg.t_soft,
+            "t_hard_seconds": cfg.t_hard,
+            "t_checkpoint_seconds": cfg.t_checkpoint,
+            "min_segment_words": cfg.min_segment_words,
+        },
+        "clock_offset_seconds": engine.clock_offset,
+        "virtual_now": datetime.fromtimestamp(engine.now()).isoformat(),
+        **engine.status_summary(),
+    })
+
+
 @mcp.custom_route("/api/simulate", methods=["POST"])
 async def api_simulate(request: Request) -> JSONResponse:
     """Simulates an ambient speech chunk through the AgentCore pipeline.
     
-    Accepts: {"transcript_chunk": str, "actor_id": Optional[str]}
+    Accepts: {"transcript_chunk": str, "actor_id": Optional[str], "event_mode": Optional[bool],
+              "timestamp": Optional[ISO str], "location": Optional[dict], "speaker_role": Optional[str],
+              "conversation_uuid": Optional[str]}
+    With event_mode the chunk is routed through the Deep Topic Event Engine (deep_topic content is
+    accumulated into an event and synthesized per segment/event instead of per utterance).
     Returns: Complete execution response with gatekeeper decision and extracted state.
     """
     try:
@@ -1469,16 +1683,73 @@ async def api_simulate(request: Request) -> JSONResponse:
         return JSONResponse({"error": "Field 'transcript_chunk' is required"}, status_code=400)
 
     actor_id = body.get("actor_id", "user_web_sim")
-    payload = {
+    timestamp = body.get("timestamp") or datetime.now().isoformat()
+    payload: Dict[str, Any] = {
         "raw_transcript": chunk.strip(),
         "transcript_chunk": chunk.strip(),
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": timestamp,
         "actor_id": actor_id,
     }
+    if body.get("location"):
+        payload["location"] = body["location"]
+    if body.get("speaker_role"):
+        payload["speaker_role"] = body["speaker_role"]
 
     start_time = datetime.now()
     try:
-        result = agent_invocation(payload=payload)
+        event_info: Optional[Dict[str, Any]] = None
+        if body.get("event_mode") and settings.event_engine_enabled:
+            # Route through the shared Deep Topic Event Engine (doc 05 §4)
+            from src.core.schemas import UtteranceChunk
+            from src.ingestion.gatekeeper import aclassify_chunk
+
+            from src.core.schemas import ChunkClassification
+
+            engine = _ensure_event_engine()
+            if not body.get("timestamp"):
+                # Engine time includes the simulator virtual clock offset
+                timestamp = datetime.fromtimestamp(engine.now()).isoformat()
+                payload["timestamp"] = timestamp
+            if body.get("categories"):
+                # Scenario player: replay the recorded gatekeeper labels (fast, deterministic)
+                classification = ChunkClassification(
+                    categories=list(body["categories"]), confidence=1.0, summary_hint="scenario label"
+                )
+            else:
+                event_hint = engine.active_event_hint()
+                classification = await aclassify_chunk(transcript=chunk.strip(), prior_context=event_hint or None)
+            utterance = UtteranceChunk(
+                conversation_uuid=body.get("conversation_uuid") or "web_simulator",
+                text=chunk.strip(),
+                speaker_role=body.get("speaker_role") or "unknown",
+                timestamp=timestamp,
+                received_at=timestamp,
+                categories=list(classification.categories),
+                location=body.get("location"),
+            )
+            outcome = await asyncio.to_thread(engine.record_chunk, utterance)
+            event_info = {
+                "session_id": outcome.event_id,
+                "status": outcome.event_status,
+                "on_topic": outcome.on_topic,
+                "transitions": [
+                    {"rule": t.rule, "to_status": t.to_status, "reason": t.reason, "detail": t.detail}
+                    for t in outcome.transitions
+                ],
+            }
+            payload.update({
+                "categories": classification.categories,
+                "confidence": classification.confidence,
+                "summary_hint": classification.summary_hint,
+                "session_id": outcome.event_id or utterance.conversation_uuid,
+                "utterance_id": utterance.chunk_id,
+                "event_managed": outcome.event_managed,
+            })
+
+        # agent_invocation is synchronous: keep it off the event loop
+        result = await asyncio.to_thread(agent_invocation, payload)
+        if event_info is not None:
+            result["event"] = event_info
         elapsed_sec = (datetime.now() - start_time).total_seconds()
         elapsed_ms = round(elapsed_sec * 1000.0, 1)
 

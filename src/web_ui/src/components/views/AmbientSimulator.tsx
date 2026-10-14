@@ -1,7 +1,26 @@
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
+import useSWR from "swr";
 import { ScreenHeader } from "../ui/ScreenHeader";
 import { StatusBadge, DomainBadge } from "../ui/StatusBadge";
 import { playAcousticVerificationTone } from "@/utils/audioEffects";
+import { EventEngineStatus } from "@/types/schemas";
+import { getApiBaseUrl } from "@/utils/api";
+
+const fetcher = (url: string) => fetch(`${getApiBaseUrl()}${url}`).then((res) => res.json());
+
+interface ScenarioUtterance {
+  offset: number;
+  text: string;
+  categories: string[];
+  expected_event?: string | null;
+}
+
+interface EventScenario {
+  id: string;
+  title: string;
+  expect?: { events?: number };
+  utterances: ScenarioUtterance[];
+}
 
 interface AmbientSimulatorProps {
   simText: string;
@@ -10,6 +29,213 @@ interface AmbientSimulatorProps {
   runSimulation: () => void;
   simResult: any;
   statusData?: any;
+  eventMode?: boolean;
+  setEventMode?: (v: boolean) => void;
+  engineStatus?: EventEngineStatus;
+  onTick?: (seconds: number, reset?: boolean) => Promise<any>;
+  simulateUtterance?: (text: string, categories?: string[]) => Promise<any>;
+  onOpenEvents?: () => void;
+}
+
+const fmtClock = (iso?: string) => {
+  if (!iso) return "--:--";
+  const d = new Date(iso);
+  return isNaN(d.getTime()) ? iso : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+};
+
+function EventEnginePanel({
+  eventMode,
+  setEventMode,
+  engineStatus,
+  onTick,
+  simulateUtterance,
+  onOpenEvents,
+}: Pick<AmbientSimulatorProps, "eventMode" | "setEventMode" | "engineStatus" | "onTick" | "simulateUtterance" | "onOpenEvents">) {
+  const { data: scenarioData } = useSWR<{ scenarios: EventScenario[] }>("/api/event-scenarios", fetcher);
+  const scenarios = scenarioData?.scenarios || [];
+  const [scenarioId, setScenarioId] = useState<string>("");
+  const [playing, setPlaying] = useState(false);
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+  const [log, setLog] = useState<string[]>([]);
+  const stopRef = useRef(false);
+
+  const ev = engineStatus?.active_event;
+  const cfg = engineStatus?.config;
+  const pushLog = (lines: string[]) => setLog((prev) => [...lines, ...prev].slice(0, 40));
+
+  const describe = (t: any) => `${t.rule} → ${String(t.to_status).toUpperCase()} · ${String(t.reason).replace(/_/g, " ")}`;
+
+  const tick = async (seconds: number, reset = false) => {
+    if (!onTick) return;
+    const res = await onTick(seconds, reset);
+    const lines = (res?.transitions || []).map(describe);
+    pushLog(reset ? ["⟲ virtual clock reset"] : [`⏩ +${Math.round(seconds / 60)} min`, ...lines]);
+  };
+
+  const play = async () => {
+    const sc = scenarios.find((s) => s.id === (scenarioId || scenarios[0]?.id));
+    if (!sc || !simulateUtterance || !onTick) return;
+    setEventMode?.(true);
+    setPlaying(true);
+    stopRef.current = false;
+    setLog([]);
+    pushLog([`▶ ${sc.title}`]);
+    let prev = 0;
+    for (let i = 0; i < sc.utterances.length; i++) {
+      if (stopRef.current) break;
+      const u = sc.utterances[i];
+      const delta = u.offset - prev;
+      prev = u.offset;
+      if (delta > 0) {
+        const res = await onTick(delta);
+        const lines = (res?.transitions || []).map(describe);
+        if (lines.length) pushLog(lines);
+      }
+      const res = await simulateUtterance(u.text, u.categories);
+      const lines = (res?.result?.event?.transitions || []).map(describe);
+      if (lines.length) pushLog(lines.map((l: string) => `“${u.text.slice(0, 32)}…” ${l}`));
+      setProgress({ done: i + 1, total: sc.utterances.length });
+    }
+    setPlaying(false);
+    pushLog(["■ scenario finished — fast-forward to close the event"]);
+  };
+
+  const fastForwardToEnd = () => {
+    const seconds = (cfg?.t_soft_seconds || 300) + (cfg?.t_hard_seconds || 1800) + 60;
+    tick(seconds);
+  };
+
+  return (
+    <div className="card-elevated p-space-lg bg-surface-container-low border-surface-container-highest rounded-2xl">
+      <div className="flex items-center justify-between mb-4 pb-2 border-b border-white/5">
+        <div className="font-mono text-[10px] text-primary tracking-[0.2em] uppercase flex items-center gap-2 font-bold">
+          <span>🏛️</span>
+          <span>DEEP TOPIC EVENT ENGINE</span>
+        </div>
+        <button
+          onClick={() => setEventMode?.(!eventMode)}
+          className={`relative w-[112px] h-7 rounded-full border font-mono text-[9px] tracking-widest font-bold transition-colors ${
+            eventMode ? "bg-emerald-500/20 border-emerald-500/60 text-emerald-300" : "bg-[#121419] border-white/10 text-zinc-400"
+          }`}
+          title="Route injected utterances through the event engine (grouped into lectures/meetings)"
+        >
+          {eventMode ? "● EVENT MODE" : "○ EVENT MODE"}
+        </button>
+      </div>
+
+      {/* Live event */}
+      <div className="bg-[#121419] border border-white/5 rounded-xl p-3.5 mb-3">
+        <div className="flex items-center justify-between font-mono text-[9px] text-secondary tracking-widest uppercase mb-2">
+          <span>VIRTUAL CLOCK {fmtClock(engineStatus?.virtual_now)}</span>
+          <span>
+            {engineStatus?.clock_offset_seconds ? `+${Math.round(engineStatus.clock_offset_seconds / 60)} MIN` : "REAL TIME"} ·{" "}
+            {(engineStatus?.continuity_backend || "time-only").toUpperCase()}
+          </span>
+        </div>
+        {ev ? (
+          <div>
+            <div className="flex items-center gap-2 mb-1">
+              <StatusBadge status={ev.status === "active" ? "active" : "pending"} label={ev.status.toUpperCase()} />
+              <span className="font-serif text-sm text-primary truncate">
+                {ev.title?.startsWith("Ongoing session") ? "Recording (untitled)" : ev.title}
+              </span>
+            </div>
+            <div className="font-mono text-[9px] text-zinc-400 tracking-wider">
+              {ev.segments} PART(S) · {ev.open_segment_words} WORDS IN OPEN PART
+              {ev.pending_chunks ? ` · ${ev.pending_chunks} UTTERANCE(S) AWAITING RESUME/SPLIT DECISION` : ""}
+              {engineStatus?.pending_jobs ? ` · ${engineStatus.pending_jobs} SYNTHESIS JOB(S)` : ""}
+            </div>
+            {ev.top_terms?.length > 0 && (
+              <div className="flex flex-wrap gap-1 mt-2">
+                {ev.top_terms.map((t) => (
+                  <span key={t} className="px-1.5 py-0.5 rounded bg-white/5 font-mono text-[8px] text-zinc-300">{t}</span>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="font-sans text-xs text-zinc-500">
+            No open event. Inject deep-topic speech in event mode (or play a scenario) to start one.
+          </div>
+        )}
+      </div>
+
+      {/* Virtual clock */}
+      <div className="flex flex-wrap items-center gap-2 mb-3">
+        <span className="font-mono text-[9px] text-secondary tracking-widest uppercase mr-1">FAST-FORWARD</span>
+        {[60, 300, 1800].map((s) => (
+          <button
+            key={s}
+            onClick={() => tick(s)}
+            className="px-3 py-1.5 rounded-lg border border-white/10 hover:bg-white/5 text-zinc-300 font-mono text-[9px] tracking-widest"
+          >
+            +{s / 60} MIN
+          </button>
+        ))}
+        <button
+          onClick={() => tick(0, true)}
+          className="px-3 py-1.5 rounded-lg border border-white/10 hover:bg-white/5 text-zinc-500 font-mono text-[9px] tracking-widest"
+        >
+          RESET
+        </button>
+        <span className="font-mono text-[8px] text-zinc-500 ml-auto">
+          T_SOFT {Math.round((cfg?.t_soft_seconds || 0) / 60)}m · T_HARD {Math.round((cfg?.t_hard_seconds || 0) / 60)}m
+        </span>
+      </div>
+
+      {/* Scenario player */}
+      <div className="flex flex-wrap items-center gap-2 mb-3">
+        <select
+          value={scenarioId || scenarios[0]?.id || ""}
+          onChange={(e) => setScenarioId(e.target.value)}
+          className="flex-1 min-w-[200px] bg-[#101216] border border-surface-container-highest rounded-lg px-3 py-2 font-mono text-[10px] text-primary focus:outline-none focus:border-amber-400"
+        >
+          {scenarios.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.title} ({s.utterances.length} utterances{s.expect?.events ? `, expect ${s.expect.events} event(s)` : ""})
+            </option>
+          ))}
+        </select>
+        {playing ? (
+          <button
+            onClick={() => (stopRef.current = true)}
+            className="px-4 py-2 rounded-lg border border-rose-500/50 text-rose-300 font-mono text-[9px] tracking-widest font-bold"
+          >
+            ■ STOP {progress ? `${progress.done}/${progress.total}` : ""}
+          </button>
+        ) : (
+          <button
+            onClick={play}
+            disabled={!scenarios.length}
+            className="px-4 py-2 rounded-lg bg-primary text-background font-mono text-[9px] tracking-widest font-bold disabled:opacity-40"
+          >
+            ▶ PLAY SCENARIO
+          </button>
+        )}
+        <button
+          onClick={fastForwardToEnd}
+          className="px-3 py-2 rounded-lg border border-amber-500/40 text-amber-300 hover:bg-amber-500/10 font-mono text-[9px] tracking-widest"
+          title="Advance past T_soft + T_hard so open events conclude and the final synthesis runs"
+        >
+          ⏭ CLOSE EVENTS
+        </button>
+        <button
+          onClick={onOpenEvents}
+          className="px-3 py-2 rounded-lg border border-white/10 text-zinc-300 hover:bg-white/5 font-mono text-[9px] tracking-widest"
+        >
+          VIEW EVENTS →
+        </button>
+      </div>
+
+      {log.length > 0 && (
+        <div className="bg-[#0a0b0e] border border-white/5 rounded-xl p-3 max-h-[180px] overflow-y-auto space-y-1">
+          {log.map((line, i) => (
+            <div key={i} className="font-mono text-[9px] text-emerald-300/90 leading-snug">{line}</div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export function AmbientSimulator({
@@ -19,6 +245,12 @@ export function AmbientSimulator({
   runSimulation,
   simResult,
   statusData,
+  eventMode,
+  setEventMode,
+  engineStatus,
+  onTick,
+  simulateUtterance,
+  onOpenEvents,
 }: AmbientSimulatorProps) {
   const [activeResultTab, setActiveResultTab] = useState<"parsed" | "raw">("parsed");
 
@@ -168,6 +400,15 @@ export function AmbientSimulator({
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-space-lg">
         {/* Left Column: Presets + Utterance Input */}
         <div className="lg:col-span-7 flex flex-col gap-space-lg">
+          <EventEnginePanel
+            eventMode={eventMode}
+            setEventMode={setEventMode}
+            engineStatus={engineStatus}
+            onTick={onTick}
+            simulateUtterance={simulateUtterance}
+            onOpenEvents={onOpenEvents}
+          />
+
           {/* Presets */}
           <div className="card-elevated p-space-lg bg-surface-container-low border-surface-container-highest rounded-2xl">
             <div className="flex items-center justify-between mb-4 pb-2 border-b border-white/5">
@@ -357,6 +598,28 @@ export function AmbientSimulator({
                             {cat.replace(/_/g, " ")}
                           </span>
                         ))}
+                      </div>
+                    )}
+
+                    {/* Event engine outcome (event mode) */}
+                    {res?.event && (
+                      <div className="bg-[#121419] p-3 rounded-xl border border-emerald-500/30">
+                        <div className="font-mono text-[9px] text-emerald-300 uppercase tracking-widest font-bold mb-1">
+                          🏛️ Event Engine · {res.event.status ? String(res.event.status).toUpperCase() : "NO EVENT"}
+                          {res.event.on_topic ? " · ON-TOPIC" : ""}
+                        </div>
+                        {(res.event.transitions || []).length === 0 ? (
+                          <div className="font-sans text-xs text-zinc-400">
+                            {res.event.session_id ? "Accumulated into the open event (synthesized at the next break)." : "Not part of any event."}
+                          </div>
+                        ) : (
+                          (res.event.transitions || []).map((t: any, i: number) => (
+                            <div key={i} className="font-mono text-[10px] text-zinc-200">
+                              {t.rule} → {String(t.to_status).toUpperCase()} · {String(t.reason).replace(/_/g, " ")}
+                              {t.detail ? <span className="text-zinc-500"> — {t.detail}</span> : null}
+                            </div>
+                          ))
+                        )}
                       </div>
                     )}
 

@@ -68,7 +68,8 @@ export function ExecutiveDossierModal({
   };
 
   const contactName = contact.name || contact.person_name || "Contact";
-  const matchConfidence = disambiguation?.confidence_score ?? (webProfile ? 0.98 : 0.85);
+  const matchConfidence = disambiguation?.confidence_score ?? webProfile?.confidence_score;
+  const expertise = webProfile?.areas_of_expertise || [];
 
   return createPortal(
     <div
@@ -100,10 +101,12 @@ export function ExecutiveDossierModal({
                 <h2 className="font-serif text-[28px] text-primary leading-tight">
                   {contactName}
                 </h2>
-                <StatusBadge
-                  status="verified"
-                  label={`⚡ ${(matchConfidence * 100).toFixed(0)}% MATCH`}
-                />
+                {matchConfidence != null && (
+                  <StatusBadge
+                    status="verified"
+                    label={`⚡ ${(matchConfidence * 100).toFixed(0)}% MATCH`}
+                  />
+                )}
               </div>
               <div className="font-sans text-body-md text-amber-200/80 mb-2">
                 {contact.company_or_role || "Professional Contact"}
@@ -176,20 +179,44 @@ export function ExecutiveDossierModal({
           <div>
             <div className="font-mono text-[9px] text-secondary tracking-widest uppercase mb-2 flex items-center justify-between">
               <span>Executive Intelligence Dossier</span>
-              {webProfile && (
+              {webProfile?.enriched_at && (
                 <span className="text-amber-400">
-                  Enriched via {webProfile.enrichment_source || "Web Intelligence"}
+                  Enriched {webProfile.enriched_at.split("T")[0]}
                 </span>
               )}
             </div>
-            <div className="bg-[#0e1014] border border-[#232731] rounded-xl p-4 font-sans text-body-sm text-secondary leading-relaxed">
-              {webProfile?.executive_summary || (
+            <div className="bg-[#0e1014] border border-[#232731] rounded-xl p-4 font-sans text-body-sm text-secondary leading-relaxed space-y-2">
+              {webProfile?.headline && (
+                <div className="font-sans text-body-md text-primary font-semibold">{webProfile.headline}</div>
+              )}
+              {webProfile?.bio_summary ? (
+                <p>{webProfile.bio_summary}</p>
+              ) : (
                 <span className="italic opacity-60">
                   Passively extracted encounter metadata. Click "Run Live AI Enrichment" below to synthesize LinkedIn, GitHub, and professional background.
                 </span>
               )}
             </div>
           </div>
+
+          {/* Areas of Expertise (web dossier) */}
+          {expertise.length > 0 && (
+            <div>
+              <div className="font-mono text-[9px] text-secondary tracking-widest uppercase mb-2">
+                Areas of Expertise
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {expertise.map((area, idx) => (
+                  <span
+                    key={idx}
+                    className="px-3 py-1 rounded-md bg-cyan-500/10 border border-cyan-500/30 font-mono text-[10px] text-cyan-200/90"
+                  >
+                    {area}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Disambiguation & Source Integrity Audit Drawer */}
           {disambiguation && (

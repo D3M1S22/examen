@@ -3,10 +3,27 @@ import json
 import os
 import platform
 import shutil
+from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
 from src.ingestion.debug import Debug
+
+
+def normalize_bee_time(value) -> Optional[str]:
+    """Converts a Bee time value (epoch seconds/milliseconds or ISO string) to a local ISO string."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, (int, float)):
+        seconds = value / 1000.0 if value > 1e11 else float(value)
+        return datetime.fromtimestamp(seconds).isoformat()
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone().replace(tzinfo=None)
+    return parsed.isoformat()
 
 
 def get_bee_binary_path() -> Optional[str]:
@@ -117,6 +134,7 @@ class BeeClient(Debug):
                         self.debug("Stream process ended unexpectedly. Reconnecting...")
                         break 
                     
+                    received_at = datetime.now().isoformat()
                     line = line_bytes.decode('utf-8').strip()
                     if not line:
                         continue 
@@ -135,6 +153,10 @@ class BeeClient(Debug):
                                     "text": utt.get("text") or data.get("text") or "",
                                     "speaker": utt.get("speaker") or data.get("speaker"),
                                     "conversation_uuid": data.get("conversation_id") or data.get("conversation_uuid") or "default_session",
+                                    # Utterance timing: the documented stream payload has no time fields,
+                                    # so capture the receive time here (before screening/queueing).
+                                    "received_at": received_at,
+                                    "spoken_at": normalize_bee_time(utt.get("spoken_at") or data.get("spoken_at")),
                                 }
                             }
                         elif msg_type == "update-location":
@@ -152,6 +174,16 @@ class BeeClient(Debug):
                                     "conversation_uuid": data.get("conversation_id") or data.get("data", {}).get("conversation_id") or "default_session",
                                 }
                             }
+                        elif msg_type in ("new-conversation", "update-conversation", "update-conversation-summary"):
+                            payload = data.get("data") if isinstance(data.get("data"), dict) else data
+                            yield {"event": msg_type, "data": payload}
+                        elif not msg_type and isinstance(data.get("conversation"), dict):
+                            # `bee stream --json` prints only the SSE data: detect conversation events structurally
+                            conv = data["conversation"]
+                            inferred = "update-conversation" if (conv.get("short_summary") or conv.get("title")) else "new-conversation"
+                            yield {"event": inferred, "data": data}
+                        elif not msg_type and "conversation_id" in data and "short_summary" in data:
+                            yield {"event": "update-conversation-summary", "data": data}
                         elif "timestamp" in data and not msg_type:
                             yield {
                                 "event": "stream-heartbeat",

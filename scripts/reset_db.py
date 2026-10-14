@@ -20,6 +20,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from src.core.config import settings
 from src.core.schemas import PlannedTask
 from src.core.storage import get_storage_store
+from src.core.storage.sqlite_store import SQLiteContextStore
 
 
 # ANSI styling
@@ -91,8 +92,13 @@ def reset_database(backup: bool = True, seed: bool = False, db_path: str | None 
     else:
         print(f"{DIM}No existing database file found at '{target_path}'. Creating new one.{RESET}")
 
-    # 2. Reinitialize fresh schema
+    # 2. Reinitialize fresh schema. get_storage_store() returns the cached singleton,
+    # whose schema init already ran against the deleted file, so re-run it explicitly.
     store = get_storage_store()
+    if isinstance(store, SQLiteContextStore) and os.path.abspath(store.db_path) == os.path.abspath(target_path):
+        store._init_db()
+    else:
+        store = SQLiteContextStore(db_path=target_path)
     print(f"{GREEN}✓ Fresh schema and FTS5 indexes reinitialized successfully.{RESET}")
 
     # 3. Seed baseline peace-of-mind tasks if requested

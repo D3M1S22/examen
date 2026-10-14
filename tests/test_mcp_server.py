@@ -931,3 +931,82 @@ class TestAuthAndGdprEndpoints:
 
 
 
+
+
+class _StaticSynthesizer:
+    def __init__(self, briefing):
+        self.briefing = briefing
+
+    def segment(self, text, session_id, outline=None, kind="segment"):
+        return self.briefing.model_copy()
+
+    def final(self, parts, extra_text, session_id, outline=None, micro_events=None):
+        return self.briefing.model_copy()
+
+
+class TestEventEngineEndpoints:
+    """Deep Topic Event Engine wiring in the serving layer (event_mode simulate, status, conclude)."""
+
+    @pytest.fixture
+    def engine_client(self, monkeypatch):
+        from src.core.schemas import BriefingReport, ChunkClassification
+        import src.core.storage as storage_mod
+        import src.ingestion.event_engine as engine_mod
+        import src.serving.mcp_server as server_mod
+
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+            db_path = f.name
+        temp_store = SQLiteContextStore(db_path=db_path)
+        monkeypatch.setattr(storage_mod, "_store_instance", temp_store)
+
+        engine = engine_mod.EventEngine(
+            store=temp_store,
+            config=engine_mod.EngineConfig(min_segment_words=3),
+            synthesizer=_StaticSynthesizer(BriefingReport(topic_title="Raft consensus", context_type="tech_stack")),
+        )
+        monkeypatch.setattr(engine_mod, "_engine", engine)
+        runtime = engine_mod.EventEngineRuntime(engine)
+        # Jobs are drained explicitly in tests (no background worker racing the assertions)
+        monkeypatch.setattr(runtime, "ensure_started", lambda: True)
+        monkeypatch.setattr(engine_mod, "_runtime", runtime)
+        monkeypatch.setattr(server_mod, "_engine_listener_registered", False)
+
+        async def _classify(transcript, active_tasks=None, prior_context=None):
+            return ChunkClassification(categories=["deep_topic"], confidence=0.9, summary_hint="raft")
+
+        dispatched = []
+        monkeypatch.setattr("src.ingestion.gatekeeper.aclassify_chunk", _classify)
+        monkeypatch.setattr(server_mod, "agent_invocation", lambda payload: dispatched.append(payload) or {"status": "ok"})
+
+        client = TestClient(create_app())
+        yield client, engine, temp_store, dispatched
+        if os.path.exists(db_path):
+            os.remove(db_path)
+
+    def test_simulate_event_mode_opens_event(self, engine_client):
+        client, engine, store, dispatched = engine_client
+        res = client.post("/api/simulate", json={
+            "transcript_chunk": "Raft elects a leader and replicates the log to followers",
+            "event_mode": True,
+            "timestamp": "2026-10-13T10:00:00",
+        })
+        assert res.status_code == 200
+        event = res.json()["result"]["event"]
+        assert event["status"] == "active" and event["transitions"][0]["rule"] == "R0"
+        assert dispatched[0]["event_managed"] is True and dispatched[0]["session_id"] == event["session_id"]
+
+        status = client.get("/api/event-engine/status").json()
+        assert status["active_event"]["session_id"] == event["session_id"]
+
+        concl = client.post(f"/api/sessions/{event['session_id']}/conclude", json={})
+        assert concl.status_code == 200 and concl.json()["dossier"]["status"] == "concluded"
+        engine.run_pending_jobs_sync()
+        assert store.get_session_dossier(event["session_id"]).final_status == "ready"
+
+    def test_simulate_without_event_mode_is_unchanged(self, engine_client):
+        client, engine, store, dispatched = engine_client
+        res = client.post("/api/simulate", json={"transcript_chunk": "Raft leader election"})
+        assert res.status_code == 200
+        assert "event" not in res.json()["result"]
+        assert "event_managed" not in dispatched[0]
+        assert engine.current_event_id() is None

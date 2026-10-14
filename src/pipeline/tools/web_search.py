@@ -11,7 +11,7 @@ import ipaddress
 import logging
 import os
 import re
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Collection, Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, quote, urljoin, urlparse
 
 from pydantic import BaseModel, Field
@@ -513,6 +513,41 @@ def search_with_fallback(query: str, count: int = 3) -> Tuple[List[SearchResultI
     return [], "none"
 
 
+# ── Search Result Cache ─────────────────────────────────────────────────────
+def cache_key(query: str) -> str:
+    """Normalized cache / ledger key for a search query."""
+    return " ".join(normalize_search_query(query).lower().split())
+
+
+class SearchCache:
+    """Context-store backed cache of web search results (keyed by normalized query)."""
+
+    def __init__(self, store: Any, ttl_seconds: int = 86400):
+        self.store = store
+        self.ttl_seconds = ttl_seconds
+
+    def get(self, query: str) -> Optional[Tuple[List[SearchResultItem], str]]:
+        if self.ttl_seconds <= 0:
+            return None
+        try:
+            hit = self.store.get_cached_search(cache_key(query), self.ttl_seconds)
+        except Exception as e:
+            logger.debug(f"Search cache read failed for '{query}': {e}")
+            return None
+        if not hit:
+            return None
+        results = [SearchResultItem(**item) for item in hit.get("results", [])]
+        return results, f"{hit.get('provider') or 'cache'} (cached)"
+
+    def put(self, query: str, provider: str, results: List[SearchResultItem]) -> None:
+        if self.ttl_seconds <= 0 or not results:
+            return  # never cache empty/failed searches: they are usually transient
+        try:
+            self.store.put_cached_search(cache_key(query), provider, [r.model_dump() for r in results])
+        except Exception as e:
+            logger.debug(f"Search cache write failed for '{query}': {e}")
+
+
 # ── Retry Diagnostics & Batch Execution ─────────────────────────────────────
 def build_retry_feedback(failed_evaluations: List[QueryEvaluation]) -> str:
     """Format structured diagnostic feedback for the LLM when search queries fail.
@@ -545,19 +580,39 @@ def build_retry_feedback(failed_evaluations: List[QueryEvaluation]) -> str:
     return "\n".join(feedback_lines)
 
 
-def execute_search_batch(queries: List[str], count_per_query: int = 3) -> WebSearchBatchResult:
-    """Execute search across a batch of queries with deduplication, prompt guards, and retry evaluation."""
+def execute_search_batch(
+    queries: List[str],
+    count_per_query: int = 3,
+    cache: Optional[SearchCache] = None,
+    cache_only: Optional[Collection[str]] = None,
+) -> WebSearchBatchResult:
+    """Execute search across a batch of queries with deduplication, prompt guards, and retry evaluation.
+
+    cache: optional result cache consulted before the network and filled after successful searches.
+    cache_only: cache keys (see cache_key) that must never hit the network; they are served from the
+                cache when available and skipped otherwise (used for queries an event already researched).
+    """
     evaluations: List[QueryEvaluation] = []
     seen_urls = set()
     all_clean_results: List[SearchResultItem] = []
     failed_evaluations: List[QueryEvaluation] = []
+    offline_keys = set(cache_only or ())
 
     for raw_q in queries:
         clean_q = normalize_search_query(raw_q)
         if not clean_q:
             continue
 
-        results, provider = search_with_fallback(clean_q, count=count_per_query)
+        cached = cache.get(clean_q) if cache else None
+        if cached is not None:
+            results, provider = cached
+        elif cache_key(clean_q) in offline_keys:
+            logger.debug(f"Skipping already-researched query without cache entry: '{clean_q}'")
+            continue
+        else:
+            results, provider = search_with_fallback(clean_q, count=count_per_query)
+            if cache:
+                cache.put(clean_q, provider, results)
         is_empty = len(results) == 0
         is_relevant = len(results) > 0 and len(filter_irrelevant_results(clean_q, results)) > 0
 

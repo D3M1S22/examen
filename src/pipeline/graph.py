@@ -36,7 +36,9 @@ def route_categories(state: ExamenState) -> List[str]:
         targets.append("extract_action")
     if "social" in categories:
         targets.append("extract_social")
-    if "deep_topic" in categories:
+    # When the Deep Topic Event Engine owns the chunk, deep_topic content is accumulated in the
+    # event and synthesized per segment/event instead of being researched utterance by utterance.
+    if "deep_topic" in categories and not state.get("event_managed"):
         targets.append("topic_research")
     if "scheduled_task" in categories:
         targets.append("extract_scheduled_task")
