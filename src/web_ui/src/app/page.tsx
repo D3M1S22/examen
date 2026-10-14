@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import useSWR from "swr";
-import { PlannedTask, VerifiedAction, SocialEntity, BriefingReport } from "@/types/schemas";
+import { PlannedTask, VerifiedAction, SocialEntity, BriefingReport, DemoUser } from "@/types/schemas";
 
 import { SystemBar } from "@/components/SystemBar";
 import { StatusDock } from "@/components/ui/StatusDock";
@@ -14,7 +14,9 @@ import { SocialRolodex } from "@/components/views/SocialRolodex";
 import { TopicDossiers } from "@/components/views/TopicDossiers";
 import { AmbientSimulator } from "@/components/views/AmbientSimulator";
 import { EchoShowModal } from "@/components/ui/EchoShowModal";
+import { LoginModal } from "@/components/ui/LoginModal";
 import { getApiBaseUrl } from "@/utils/api";
+import { getLocalUser, logoutUser, disconnectBee, purgeUserData } from "@/utils/auth";
 
 const fetcher = (url: string) => fetch(`${getApiBaseUrl()}${url}`).then((res) => res.json());
 
@@ -25,8 +27,19 @@ export default function Dashboard() {
   const [simRunning, setSimRunning] = useState(false);
   const [simResult, setSimResult] = useState<any>(null);
   const [showGlobalEchoModal, setShowGlobalEchoModal] = useState(false);
+  const [showLoginModal, setShowLoginModal] = useState(false);
+  const [loginModalConnectBee, setLoginModalConnectBee] = useState(false);
+  const [currentUser, setCurrentUser] = useState<DemoUser | null>(null);
   const [sseConnected, setSseConnected] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  // Initialize local user session on mount
+  useEffect(() => {
+    const user = getLocalUser();
+    if (user) {
+      setCurrentUser(user);
+    }
+  }, []);
 
   // SWR Data Fetching
   const { data: statusData, mutate: mutateStatus } = useSWR("/api/status", fetcher, { refreshInterval: 10000 });
@@ -99,6 +112,9 @@ export default function Dashboard() {
             mutateTopics();
             mutateStatus();
           }
+          if (eventType.includes("user_logged_in") || eventType.includes("user_logged_out") || eventType.includes("bee_disconnected")) {
+            mutateStatus();
+          }
         } catch {
           // heartbeat or raw text
         }
@@ -115,6 +131,50 @@ export default function Dashboard() {
       console.warn("SSE connection error:", err);
     }
   }, [mutateActions, mutateRoutines, mutateSocial, mutateTopics, mutateStatus]);
+
+  // Auth & GDPR Handlers
+  const handleLoginSuccess = (user: DemoUser) => {
+    setCurrentUser(user);
+    showToast(`Welcome, ${user.handle}! Demo session initialized.`);
+    mutateStatus();
+  };
+
+  const handleLogout = async () => {
+    await logoutUser(currentUser?.user_id);
+    setCurrentUser(null);
+    showToast("Logged out successfully. Session credentials cleared.");
+    mutateStatus();
+  };
+
+  const handlePurgeData = async () => {
+    await purgeUserData(currentUser?.user_id);
+    setCurrentUser(null);
+    showToast("All user session telemetry permanently erased under GDPR Art. 17.");
+    mutateStatus();
+    mutateActions();
+    mutateRoutines();
+    mutateSocial();
+    mutateTopics();
+  };
+
+  const handleDisconnectBee = async () => {
+    const success = await disconnectBee(currentUser?.user_id);
+    if (success && currentUser) {
+      setCurrentUser({
+        ...currentUser,
+        bee_connected: false,
+        bee_account: null,
+        bee_pairing: null,
+      });
+      showToast("Bee Wearable AI disconnected and credentials removed.");
+    }
+    mutateStatus();
+  };
+
+  const handleOpenBeePairing = () => {
+    setLoginModalConnectBee(true);
+    setShowLoginModal(true);
+  };
 
   // Simulator Execution
   const runSimulation = async () => {
@@ -282,7 +342,16 @@ export default function Dashboard() {
         onClose={() => setShowGlobalEchoModal(false)}
       />
 
-      {/* Left-Side Floating Status Dock (MacBook Pro Style) */}
+      {/* GDPR-Compliant Login & Bee Pairing Modal */}
+      <LoginModal
+        isOpen={showLoginModal}
+        onClose={() => setShowLoginModal(false)}
+        onLoginSuccess={handleLoginSuccess}
+        currentUser={currentUser}
+        initialConnectBee={loginModalConnectBee}
+      />
+
+      {/* Left-Side Auto-Hiding Floating Status Dock (MacBook Pro Style) */}
       <StatusDock
         sseConnected={sseConnected}
         statusData={statusData}
@@ -297,10 +366,19 @@ export default function Dashboard() {
           onOpenEchoModal={() => setShowGlobalEchoModal(true)}
           sseConnected={sseConnected}
           statusData={statusData}
+          currentUser={currentUser}
+          onOpenLoginModal={() => {
+            setLoginModalConnectBee(false);
+            setShowLoginModal(true);
+          }}
+          onLogout={handleLogout}
+          onPurgeData={handlePurgeData}
+          onOpenBeePairing={handleOpenBeePairing}
+          onDisconnectBee={handleDisconnectBee}
         />
 
-        {/* MAIN CONTENT AREA */}
-        <main className="max-w-[1600px] mx-auto px-gutter-desktop pl-16 sm:pl-20 2xl:pl-gutter-desktop pt-8 pb-16">
+        {/* MAIN CONTENT AREA - Symmetric, clean padding without dock offset */}
+        <main className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 xl:px-gutter-desktop pt-8 pb-16 transition-all duration-300">
           {activeTab === "overview" && (
             <OverviewHub
               statusData={statusData}

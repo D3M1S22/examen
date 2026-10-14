@@ -58,6 +58,24 @@ def temp_store():
         os.remove(db_path)
 
 
+@pytest.fixture
+def client():
+    """Provides a fresh TestClient with isolated SQLiteContextStore."""
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    temp_store = SQLiteContextStore(db_path=db_path)
+    import src.core.storage as storage_mod
+    old_instance = storage_mod._store_instance
+    storage_mod._store_instance = temp_store
+    app = create_app()
+    test_client = TestClient(app)
+    yield test_client
+    temp_store.close()
+    storage_mod._store_instance = old_instance
+    if os.path.exists(db_path):
+        os.remove(db_path)
+
+
 class TestActionServingTools:
     """Tests for domestic safety, action verifications, and routine tools."""
 
@@ -340,22 +358,6 @@ class TestTopicServingTools:
 
 class TestServerRestApiAndWebUi:
     """Tests for the Starlette app endpoints and static web UI."""
-
-    @pytest.fixture
-    def client(self):
-        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
-            db_path = f.name
-        temp_store = SQLiteContextStore(db_path=db_path)
-        import src.core.storage as storage_mod
-        old_instance = storage_mod._store_instance
-        storage_mod._store_instance = temp_store
-        app = create_app()
-        test_client = TestClient(app)
-        yield test_client
-        temp_store.close()
-        storage_mod._store_instance = old_instance
-        if os.path.exists(db_path):
-            os.remove(db_path)
 
     def test_api_status(self, client):
         res = client.get("/api/status")
@@ -805,6 +807,126 @@ class TestServerRestApiAndWebUi:
         assert res_unverified.status_code == 200
         data_unverified = res_unverified.json()
         assert data_unverified["status"] == "unverified"
+
+
+class TestAuthAndGdprEndpoints:
+    """Tests for GDPR-compliant user management and Bee pairing endpoints."""
+
+    def test_auth_session_unauthenticated(self, client):
+        res = client.get("/api/auth/session")
+        assert res.status_code == 200
+        data = res.json()
+        assert data["authenticated"] is False
+        assert data["user"] is None
+        assert "bee_device" in data
+        assert "gdpr_mode" in data
+
+    def test_auth_login_lifecycle(self, client):
+        # 1. Login with demo handle
+        payload = {"handle": "Alex • Demo Lead", "connect_bee": False}
+        res = client.post("/api/auth/login", json=payload)
+        assert res.status_code == 200
+        data = res.json()
+        assert data["success"] is True
+        user = data["user"]
+        assert user["handle"] == "Alex • Demo Lead"
+        assert user["user_id"].startswith("usr_")
+        assert user["gdpr_compliant"] is True
+
+        user_id = user["user_id"]
+
+        # 2. Check session with X-User-Id header
+        res_sess = client.get("/api/auth/session", headers={"x-user-id": user_id})
+        assert res_sess.status_code == 200
+        sess_data = res_sess.json()
+        assert sess_data["authenticated"] is True
+        assert sess_data["user"]["user_id"] == user_id
+
+        # 3. Bee link endpoint
+        res_link = client.get("/api/auth/bee-link", headers={"x-user-id": user_id})
+        assert res_link.status_code == 200
+        link_data = res_link.json()
+        assert link_data["success"] is True
+        assert "bee_pairing" in link_data
+
+        # 4. Disconnect Bee
+        res_disc = client.post("/api/auth/bee-disconnect", headers={"x-user-id": user_id})
+        assert res_disc.status_code == 200
+        assert res_disc.json()["success"] is True
+
+        # 5. Logout
+        res_logout = client.post("/api/auth/logout", json={"user_id": user_id, "disconnect_bee": False})
+        assert res_logout.status_code == 200
+        assert res_logout.json()["success"] is True
+
+        # 6. Session now unauthenticated
+        res_after = client.get("/api/auth/session", headers={"x-user-id": user_id})
+        assert res_after.json()["authenticated"] is False
+
+    def test_auth_login_sanitizes_pii(self, client):
+        # Email should be stripped of domain to avoid PII storage under GDPR Art. 5(1)(c)
+        res = client.post("/api/auth/login", json={"handle": "john.doe@example.com"})
+        assert res.status_code == 200
+        data = res.json()
+        assert "@" not in data["user"]["handle"]
+        assert data["user"]["handle"] == "john.doe"
+
+    def test_auth_gdpr_purge(self, client):
+        res = client.post("/api/auth/login", json={"handle": "EphemeralUser"})
+        user_id = res.json()["user"]["user_id"]
+
+        # Purge data
+        res_purge = client.delete(f"/api/auth/gdpr-purge?user_id={user_id}")
+        assert res_purge.status_code == 200
+        assert res_purge.json()["purged"] is True
+
+        # Session gone
+        res_check = client.get("/api/auth/session", headers={"x-user-id": user_id})
+        assert res_check.json()["authenticated"] is False
+
+    def test_auth_users_management(self, client):
+        # 1. Register two different demo users
+        res1 = client.post("/api/auth/login", json={"handle": "User One • Architect"})
+        assert res1.status_code == 200
+        uid1 = res1.json()["user"]["user_id"]
+
+        res2 = client.post("/api/auth/login", json={"handle": "User Two • Lead"})
+        assert res2.status_code == 200
+        uid2 = res2.json()["user"]["user_id"]
+        assert uid1 != uid2
+
+        # 2. Query users endpoint
+        res_users = client.get("/api/auth/users")
+        assert res_users.status_code == 200
+        data = res_users.json()
+        assert data["success"] is True
+        assert data["count"] >= 2
+        uids = [u["user_id"] for u in data["users"]]
+        assert uid1 in uids
+        assert uid2 in uids
+
+        # 3. Clean up
+        client.post("/api/auth/gdpr-purge", json={"user_id": uid1})
+        client.post("/api/auth/gdpr-purge", json={"user_id": uid2})
+
+    def test_auth_json_body_user_id(self, client):
+        res = client.post("/api/auth/login", json={"handle": "JsonBodyTester"})
+        uid = res.json()["user"]["user_id"]
+
+        # Test bee-link with user_id in JSON body
+        res_link = client.post("/api/auth/bee-link", json={"user_id": uid})
+        assert res_link.status_code == 200
+        assert res_link.json()["success"] is True
+
+        # Test bee-disconnect with user_id in JSON body
+        res_disc = client.post("/api/auth/bee-disconnect", json={"user_id": uid})
+        assert res_disc.status_code == 200
+        assert res_disc.json()["success"] is True
+
+        # Purge
+        client.post("/api/auth/gdpr-purge", json={"user_id": uid})
+
+
 
 
 

@@ -168,3 +168,28 @@ export interface ExamenState {
   topic_briefings: BriefingReport[];
   error?: string;
 }
+
+export interface BeePairingInfo {
+  status?: "already_connected" | "pairing_requested" | "disconnected" | string;
+  connected?: boolean;
+  account?: string | null;
+  pairing_url?: string | null;
+  request_id?: string | null;
+  message?: string;
+}
+
+export interface DemoUser {
+  user_id: string;
+  handle: string;
+  avatar_seed?: string;
+  created_at: string;
+  last_active?: string;
+  gdpr_compliant: boolean;
+  privacy_framework?: string;
+  data_retention?: string;
+  bee_connected: boolean;
+  bee_account?: string | null;
+  bee_pairing?: BeePairingInfo | null;
+}
+
+
