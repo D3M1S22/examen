@@ -1,8 +1,15 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import useSWR from "swr";
-import { PlannedTask, VerifiedAction, SocialEntity, BriefingReport, DemoUser } from "@/types/schemas";
+import {
+  PlannedTask,
+  VerifiedAction,
+  SocialEntity,
+  BriefingReport,
+  DemoUser,
+  EchoNotification,
+} from "@/types/schemas";
 
 import { SystemBar } from "@/components/SystemBar";
 import { StatusDock } from "@/components/ui/StatusDock";
@@ -22,6 +29,7 @@ const fetcher = (url: string) => fetch(`${getApiBaseUrl()}${url}`).then((res) =>
 
 export default function Dashboard() {
   const [activeTab, setActiveTab] = useState("overview");
+  const [echoModalInitialTab, setEchoModalInitialTab] = useState("overview");
   const [currentTime, setCurrentTime] = useState("");
   const [simText, setSimText] = useState("");
   const [simRunning, setSimRunning] = useState(false);
@@ -32,6 +40,14 @@ export default function Dashboard() {
   const [currentUser, setCurrentUser] = useState<DemoUser | null>(null);
   const [sseConnected, setSseConnected] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [updatedTabs, setUpdatedTabs] = useState<Record<string, number>>({});
+  const [echoNotification, setEchoNotification] = useState<EchoNotification | null>(null);
+  const echoNotifTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  const handleOpenEchoModal = useCallback((tab: string = "overview") => {
+    setEchoModalInitialTab(tab);
+    setShowGlobalEchoModal(true);
+  }, []);
 
   // Initialize local user session on mount
   useEffect(() => {
@@ -65,6 +81,41 @@ export default function Dashboard() {
     setTimeout(() => setToastMessage(null), 3500);
   }, []);
 
+  const markTabUpdated = useCallback((tabId: string) => {
+    setUpdatedTabs((prev) => ({
+      ...prev,
+      [tabId]: (prev[tabId] || 0) + 1,
+    }));
+  }, []);
+
+  const handleClearTabBadge = useCallback((tabId: string) => {
+    setUpdatedTabs((prev) => {
+      if (!prev[tabId]) return prev;
+      const next = { ...prev };
+      delete next[tabId];
+      return next;
+    });
+  }, []);
+
+  const notifyEcho = useCallback((notif: Omit<EchoNotification, "id" | "timestamp">) => {
+    const newNotif: EchoNotification = {
+      ...notif,
+      id: `notif-${Date.now()}`,
+      timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+    };
+    setEchoNotification(newNotif);
+
+    if (echoNotifTimerRef.current) clearTimeout(echoNotifTimerRef.current);
+    echoNotifTimerRef.current = setTimeout(() => {
+      setEchoNotification(null);
+    }, 10000);
+  }, []);
+
+  // Automatically clear active tab badge when viewed
+  useEffect(() => {
+    handleClearTabBadge(activeTab);
+  }, [activeTab, handleClearTabBadge]);
+
   // System Clock
   useEffect(() => {
     const updateTime = () => {
@@ -96,23 +147,95 @@ export default function Dashboard() {
         try {
           const data = JSON.parse(e.data);
           const eventType = (data.type || data.event || "").toLowerCase();
+          const eventPayload = data.data || {};
 
           // Revalidate status on any backend change
           mutateStatus();
 
-          // Intelligent routing of SSE cache invalidation
-          if (eventType.includes("action")) mutateActions();
-          if (eventType.includes("routine") || eventType.includes("task")) mutateRoutines();
-          if (eventType.includes("contact") || eventType.includes("commitment") || eventType.includes("social")) mutateSocial();
-          if (eventType.includes("topic") || eventType.includes("briefing")) mutateTopics();
+          // Intelligent routing of SSE cache invalidation and UI notification triggers
+          if (eventType.includes("action")) {
+            mutateActions();
+            markTabUpdated("peace");
+            markTabUpdated("overview");
+            showToast("⚡ Acoustic action verified and recorded into ledger");
+            notifyEcho({
+              title: "Acoustic Action Verified",
+              message:
+                eventPayload.raw_statement ||
+                eventPayload.action_type ||
+                "Acoustic corroboration successfully registered.",
+              category: "action",
+              targetTab: "peace",
+            });
+          }
+          if (eventType.includes("routine") || eventType.includes("task")) {
+            mutateRoutines();
+            markTabUpdated("routines");
+            markTabUpdated("overview");
+            showToast(`📋 Monitored routine updated: ${eventPayload.title || "Checklist modified"}`);
+            notifyEcho({
+              title: "Monitored Routine Updated",
+              message: eventPayload.title
+                ? `Routine '${eventPayload.title}' state altered.`
+                : "Planned routine checklist status changed.",
+              category: "routine",
+              targetTab: "routines",
+            });
+          }
+          if (eventType.includes("contact") || eventType.includes("commitment") || eventType.includes("social")) {
+            mutateSocial();
+            markTabUpdated("social");
+            markTabUpdated("overview");
+            showToast(
+              `👥 Social intelligence updated: ${
+                eventPayload.person_name || eventPayload.contact_name || "Profile indexed"
+              }`
+            );
+            notifyEcho({
+              title: "Social Intelligence Corroborated",
+              message:
+                eventPayload.person_name || eventPayload.contact_name
+                  ? `Contact record for ${eventPayload.person_name || eventPayload.contact_name} updated.`
+                  : "Bilateral commitment status updated.",
+              category: "social",
+              targetTab: "social",
+            });
+          }
+          if (eventType.includes("topic") || eventType.includes("briefing")) {
+            mutateTopics();
+            markTabUpdated("topics");
+            markTabUpdated("overview");
+            showToast(`📚 Topic dossier compiled: ${eventPayload.topic_title || "Research note"}`);
+            notifyEcho({
+              title: "Topic Dossier Compiled",
+              message: eventPayload.topic_title
+                ? `Autonomous briefing completed for '${eventPayload.topic_title}'.`
+                : "Technical briefing dossier synthesized with web citations.",
+              category: "topic",
+              targetTab: "topics",
+            });
+          }
           if (eventType.includes("pipeline") || eventType.includes("session")) {
             mutateActions();
             mutateRoutines();
             mutateSocial();
             mutateTopics();
             mutateStatus();
+            markTabUpdated("overview");
+            markTabUpdated("simulator");
+            showToast("⚡ Real-time ambient speech processed by Bedrock AgentCore");
+            notifyEcho({
+              title: "Ambient Ingestion Completed",
+              message: "Audio stream processed across all domain extractors.",
+              category: "system",
+              targetTab: "overview",
+            });
           }
-          if (eventType.includes("user_logged_in") || eventType.includes("user_logged_out") || eventType.includes("bee_disconnected")) {
+          if (
+            eventType.includes("user_logged_in") ||
+            eventType.includes("user_logged_out") ||
+            eventType.includes("bee_disconnected")
+          ) {
             mutateStatus();
           }
         } catch {
@@ -130,13 +253,19 @@ export default function Dashboard() {
     } catch (err) {
       console.warn("SSE connection error:", err);
     }
-  }, [mutateActions, mutateRoutines, mutateSocial, mutateTopics, mutateStatus]);
+  }, [mutateActions, mutateRoutines, mutateSocial, mutateTopics, mutateStatus, markTabUpdated, notifyEcho, showToast]);
 
   // Auth & GDPR Handlers
   const handleLoginSuccess = (user: DemoUser) => {
     setCurrentUser(user);
     showToast(`Welcome, ${user.handle}! Demo session initialized.`);
     mutateStatus();
+    notifyEcho({
+      title: "Authenticated User Session",
+      message: `Logged in as ${user.handle}. Privacy parameters calibrated.`,
+      category: "system",
+      targetTab: "overview",
+    });
   };
 
   const handleLogout = async () => {
@@ -144,6 +273,12 @@ export default function Dashboard() {
     setCurrentUser(null);
     showToast("Logged out successfully. Session credentials cleared.");
     mutateStatus();
+    notifyEcho({
+      title: "Session Terminated",
+      message: "User logged out. Device credentials purged.",
+      category: "system",
+      targetTab: "overview",
+    });
   };
 
   const handlePurgeData = async () => {
@@ -155,6 +290,12 @@ export default function Dashboard() {
     mutateRoutines();
     mutateSocial();
     mutateTopics();
+    notifyEcho({
+      title: "GDPR Right to be Forgotten",
+      message: "All personal session telemetry erased.",
+      category: "system",
+      targetTab: "overview",
+    });
   };
 
   const handleDisconnectBee = async () => {
@@ -167,6 +308,12 @@ export default function Dashboard() {
         bee_pairing: null,
       });
       showToast("Bee Wearable AI disconnected and credentials removed.");
+      notifyEcho({
+        title: "Bee Wearable Disconnected",
+        message: "Bee audio stream unlinked from this session.",
+        category: "system",
+        targetTab: "overview",
+      });
     }
     mutateStatus();
   };
@@ -196,7 +343,15 @@ export default function Dashboard() {
       mutateSocial();
       mutateTopics();
       mutateStatus();
+      markTabUpdated("simulator");
+      markTabUpdated("overview");
       showToast("Simulation pipeline executed successfully!");
+      notifyEcho({
+        title: "Simulation Pipeline Ingested",
+        message: "Spoken transcript parsed through Bedrock AgentCore runtime.",
+        category: "system",
+        targetTab: "overview",
+      });
     } catch (e: any) {
       console.error(e);
       showToast("Simulation failed: " + (e?.message || "network error"));
@@ -221,7 +376,15 @@ export default function Dashboard() {
       await fetch(`${baseUrl}/api/routines/${task.id}/toggle`, { method: "POST" });
       mutateRoutines();
       mutateStatus();
+      markTabUpdated("routines");
+      markTabUpdated("overview");
       showToast(`Routine marked ${newStatus.toUpperCase()}`);
+      notifyEcho({
+        title: "Routine Check Updated",
+        message: `Routine '${task.title}' marked ${newStatus.toUpperCase()}`,
+        category: "routine",
+        targetTab: "routines",
+      });
     } catch (err) {
       mutateRoutines({ tasks: prevTasks }, false);
       showToast("Failed to update routine status.");
@@ -245,7 +408,15 @@ export default function Dashboard() {
       if (!res.ok) throw new Error("Failed to create routine");
       await mutateRoutines();
       await mutateStatus();
+      markTabUpdated("routines");
+      markTabUpdated("overview");
       showToast("New monitored routine activated!");
+      notifyEcho({
+        title: "New Routine Activated",
+        message: `Monitored task '${title}' registered for ${scheduled_time}`,
+        category: "routine",
+        targetTab: "routines",
+      });
     } catch (err: any) {
       console.error(err);
       showToast("Error creating routine: " + err.message);
@@ -263,7 +434,15 @@ export default function Dashboard() {
       if (!res.ok) throw new Error("Failed to delete routine");
       await mutateRoutines();
       await mutateStatus();
+      markTabUpdated("routines");
+      markTabUpdated("overview");
       showToast("Routine deleted successfully.");
+      notifyEcho({
+        title: "Routine Deleted",
+        message: "Monitored routine removed from schedule.",
+        category: "routine",
+        targetTab: "routines",
+      });
     } catch (err: any) {
       console.error(err);
       showToast("Error deleting routine.");
@@ -283,7 +462,15 @@ export default function Dashboard() {
       await mutateActions();
       await mutateRoutines();
       await mutateStatus();
+      markTabUpdated("peace");
+      markTabUpdated("overview");
       showToast("Action verified & ingested into acoustic ledger!");
+      notifyEcho({
+        title: "Acoustic Action Corroborated",
+        message: statement,
+        category: "action",
+        targetTab: "peace",
+      });
     } catch (err: any) {
       console.error(err);
       showToast("Error recording action.");
@@ -301,7 +488,15 @@ export default function Dashboard() {
       if (!res.ok) throw new Error("Enrichment failed");
       await mutateSocial();
       await mutateStatus();
+      markTabUpdated("social");
+      markTabUpdated("overview");
       showToast("Executive AI web enrichment completed!");
+      notifyEcho({
+        title: "Executive Profile AI Enriched",
+        message: "Corroborated web profile compiled with source citations.",
+        category: "social",
+        targetTab: "social",
+      });
     } catch (err: any) {
       console.error(err);
       showToast("Enrichment error: " + err.message);
@@ -319,7 +514,15 @@ export default function Dashboard() {
       if (!res.ok) throw new Error(`Failed to ${action} commitment`);
       await mutateSocial();
       await mutateStatus();
+      markTabUpdated("social");
+      markTabUpdated("overview");
       showToast(`Commitment marked ${action === "fulfill" ? "FULFILLED" : "CANCELLED"}!`);
+      notifyEcho({
+        title: "Commitment State Changed",
+        message: `Commitment marked ${action === "fulfill" ? "FULFILLED" : "CANCELLED"}`,
+        category: "social",
+        targetTab: "social",
+      });
     } catch (err: any) {
       console.error(err);
       showToast(`Error updating commitment: ${err.message}`);
@@ -336,10 +539,38 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Global Echo Show Multimodal Modal */}
+      {/* Global Echo Show Multimodal Modal with Specular Tabs and Login */}
       <EchoShowModal
         isOpen={showGlobalEchoModal}
         onClose={() => setShowGlobalEchoModal(false)}
+        initialTab={echoModalInitialTab}
+        statusData={statusData}
+        routinesData={routinesData}
+        actionsData={actionsData}
+        socialData={socialData}
+        topicsData={topicsData}
+        currentUser={currentUser}
+        onOpenLoginModal={() => {
+          setLoginModalConnectBee(false);
+          setShowLoginModal(true);
+        }}
+        onLogout={handleLogout}
+        onDisconnectBee={handleDisconnectBee}
+        onToggleRoutine={handleToggleRoutine}
+        handleAddRoutine={handleAddRoutine}
+        handleDeleteRoutine={handleDeleteRoutine}
+        handleAddAction={handleAddAction}
+        handleEnrichContact={handleEnrichContact}
+        handleToggleCommitment={handleToggleCommitment}
+        simText={simText}
+        setSimText={setSimText}
+        simRunning={simRunning}
+        runSimulation={runSimulation}
+        simResult={simResult}
+        echoNotification={echoNotification}
+        onDismissNotification={() => setEchoNotification(null)}
+        updatedTabs={updatedTabs}
+        onClearTabBadge={handleClearTabBadge}
       />
 
       {/* GDPR-Compliant Login & Bee Pairing Modal */}
@@ -349,13 +580,14 @@ export default function Dashboard() {
         onLoginSuccess={handleLoginSuccess}
         currentUser={currentUser}
         initialConnectBee={loginModalConnectBee}
+        onLogout={handleLogout}
       />
 
       {/* Left-Side Auto-Hiding Floating Status Dock (MacBook Pro Style) */}
       <StatusDock
         sseConnected={sseConnected}
         statusData={statusData}
-        onOpenEchoModal={() => setShowGlobalEchoModal(true)}
+        onOpenEchoModal={() => handleOpenEchoModal("overview")}
       />
 
       <div>
@@ -363,7 +595,7 @@ export default function Dashboard() {
           activeTab={activeTab}
           setActiveTab={setActiveTab}
           currentTime={currentTime}
-          onOpenEchoModal={() => setShowGlobalEchoModal(true)}
+          onOpenEchoModal={() => handleOpenEchoModal(activeTab)}
           sseConnected={sseConnected}
           statusData={statusData}
           currentUser={currentUser}
@@ -375,6 +607,8 @@ export default function Dashboard() {
           onPurgeData={handlePurgeData}
           onOpenBeePairing={handleOpenBeePairing}
           onDisconnectBee={handleDisconnectBee}
+          updatedTabs={updatedTabs}
+          onClearTabBadge={handleClearTabBadge}
         />
 
         {/* MAIN CONTENT AREA - Symmetric, clean padding without dock offset */}
@@ -389,6 +623,7 @@ export default function Dashboard() {
               setActiveTab={setActiveTab}
               setSimText={setSimText}
               handleToggleRoutine={handleToggleRoutine}
+              onOpenEchoModal={handleOpenEchoModal}
             />
           )}
 

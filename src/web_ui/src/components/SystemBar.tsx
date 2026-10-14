@@ -17,6 +17,8 @@ interface SystemBarProps {
   onPurgeData?: () => void;
   onOpenBeePairing?: () => void;
   onDisconnectBee?: () => void;
+  updatedTabs?: Record<string, number | boolean>;
+  onClearTabBadge?: (tabId: string) => void;
 }
 
 export function SystemBar({
@@ -32,6 +34,8 @@ export function SystemBar({
   onPurgeData,
   onOpenBeePairing,
   onDisconnectBee,
+  updatedTabs,
+  onClearTabBadge,
 }: SystemBarProps) {
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
@@ -74,19 +78,42 @@ export function SystemBar({
         </div>
       </div>
 
-      {/* Tab Navigation */}
+      {/* Tab Navigation with Real-Time Update Badges */}
       <nav className="segmented-nav mx-auto overflow-x-auto hide-scrollbar">
-        {tabs.map((tab) => (
-          <button
-            key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
-            className={`segmented-tab ${
-              activeTab === tab.id ? "segmented-tab-active" : "segmented-tab-inactive"
-            }`}
-          >
-            {tab.label}
-          </button>
-        ))}
+        {tabs.map((tab) => {
+          const rawVal = updatedTabs?.[tab.id];
+          const count = typeof rawVal === "number" ? rawVal : rawVal ? 1 : 0;
+          const hasUpdate = count > 0 && activeTab !== tab.id;
+          return (
+            <button
+              key={tab.id}
+              onClick={() => {
+                setActiveTab(tab.id);
+                onClearTabBadge?.(tab.id);
+              }}
+              className={`segmented-tab relative inline-flex items-center gap-1.5 ${
+                activeTab === tab.id ? "segmented-tab-active" : "segmented-tab-inactive"
+              }`}
+            >
+              <span>{tab.label}</span>
+              {hasUpdate && (
+                count > 1 ? (
+                  <span
+                    className="relative inline-flex items-center justify-center px-1.5 py-0.2 min-w-[16px] h-4 text-[9px] font-mono font-bold leading-none text-black bg-cyan-400 rounded-full shadow-[0_0_8px_rgba(6,182,212,0.9)]"
+                    title={`${count} updates`}
+                  >
+                    {count}
+                  </span>
+                ) : (
+                  <span className="relative flex h-2 w-2 ml-0.5 shrink-0" title="New update received">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-cyan-400 shadow-[0_0_8px_rgba(6,182,212,0.9)]"></span>
+                  </span>
+                )
+              )}
+            </button>
+          );
+        })}
       </nav>
 
       {/* Right Controls */}

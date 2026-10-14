@@ -1,7 +1,6 @@
-import React, { useState } from "react";
+import React from "react";
 import { PlannedTask, VerifiedAction, SocialEntity, BriefingReport } from "@/types/schemas";
 import { StatusBadge, DomainBadge } from "../ui/StatusBadge";
-import { EchoShowModal } from "../ui/EchoShowModal";
 import { speakAlexaReassurance } from "@/utils/audioEffects";
 
 interface OverviewHubProps {
@@ -13,6 +12,7 @@ interface OverviewHubProps {
   setActiveTab: (tab: string) => void;
   setSimText: (text: string) => void;
   handleToggleRoutine: (task: PlannedTask) => void;
+  onOpenEchoModal?: (tab?: string) => void;
 }
 
 export function OverviewHub({
@@ -24,10 +24,8 @@ export function OverviewHub({
   setActiveTab,
   setSimText,
   handleToggleRoutine,
+  onOpenEchoModal,
 }: OverviewHubProps) {
-  const [showEchoModal, setShowEchoModal] = useState(false);
-  const [activeEchoTemplate, setActiveEchoTemplate] = useState("DEEP_BRIEFING_VIEWER");
-
   const tasks = routinesData?.tasks || [];
   const actions = actionsData?.actions || [];
   const contacts = socialData?.contacts || [];
@@ -39,25 +37,14 @@ export function OverviewHub({
   const totalContactsCount = statusData?.stats?.total_contacts ?? contacts.length;
   const totalTopicsCount = statusData?.stats?.total_topics ?? topics.length;
 
-  const handleOpenEchoModal = (template: string) => {
-    setActiveEchoTemplate(template);
-    setShowEchoModal(true);
-  };
-
   const handleAlexaVoiceQuery = () => {
     const text = `EXAMEN Ambient Status: Domestic posture is all clear. You have ${totalActionsCount} verified acoustic actions, ${completedTasks} of ${tasks.length} routines completed, and ${totalContactsCount} social contacts indexed.`;
     speakAlexaReassurance(text);
-    handleOpenEchoModal("ACTION_VERIFIED_BADGE");
+    onOpenEchoModal?.("peace");
   };
 
   return (
     <div className="space-y-space-xl animate-in fade-in max-w-[1400px] mx-auto">
-      {/* Echo Show 15 Multimodal Ext-App Modal */}
-      <EchoShowModal
-        isOpen={showEchoModal}
-        onClose={() => setShowEchoModal(false)}
-        initialTemplate={activeEchoTemplate}
-      />
 
       {/* Top Status Banner */}
       <div className="card-elevated p-space-xl flex flex-col md:flex-row md:items-center justify-between gap-space-lg bg-surface-container-low border-surface-container-highest rounded-2xl">

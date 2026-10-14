@@ -16,6 +16,7 @@ interface LoginModalProps {
   onLoginSuccess: (user: DemoUser) => void;
   currentUser?: DemoUser | null;
   initialConnectBee?: boolean;
+  onLogout?: () => void;
 }
 
 const PRESET_HANDLES = [
@@ -30,6 +31,7 @@ export function LoginModal({
   onLoginSuccess,
   currentUser,
   initialConnectBee = false,
+  onLogout,
 }: LoginModalProps) {
   const [handle, setHandle] = useState("Alex • Product Lead");
   const [connectBee, setConnectBee] = useState(initialConnectBee);
@@ -157,7 +159,7 @@ export function LoginModal({
       role="dialog"
       aria-modal="true"
       aria-labelledby="login-modal-title"
-      className="fixed inset-0 z-[1000] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200"
+      className="fixed inset-0 z-[10002] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200"
     >
       <div className="relative w-full max-w-lg max-h-[90vh] overflow-y-auto bg-[#0e1117] border border-white/15 rounded-2xl shadow-[0_25px_60px_rgba(0,0,0,0.95)] flex flex-col">
         {/* Modal Header */}
@@ -386,31 +388,49 @@ export function LoginModal({
             </div>
 
             {/* Actions */}
-            <div className="flex items-center justify-end gap-3 pt-3 border-t border-white/10">
-              <button
-                type="button"
-                onClick={onClose}
-                disabled={loading}
-                className="px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-zinc-300 font-mono text-xs transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                disabled={loading || !handle.trim()}
-                className="px-5 py-2.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-zinc-950 font-sans font-semibold text-xs transition-all shadow-[0_0_15px_rgba(34,211,238,0.4)] disabled:opacity-50 flex items-center gap-2"
-              >
-                {loading && <span className="animate-spin text-xs">↻</span>}
-                <span>
-                  {currentUser
-                    ? connectBee
-                      ? "Save & Connect Bee"
-                      : "Save Profile Changes"
-                    : connectBee
-                    ? "Connect & Enter Dashboard"
-                    : "Start Demo Session"}
-                </span>
-              </button>
+            <div className="flex items-center justify-between pt-3 border-t border-white/10">
+              {currentUser && onLogout ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onLogout();
+                    onClose();
+                  }}
+                  className="px-3.5 py-2 rounded-xl bg-red-950/40 hover:bg-red-900/60 border border-red-500/30 text-red-300 font-mono text-xs transition-colors flex items-center gap-1.5 cursor-pointer"
+                  title="Sign out and clear session credentials"
+                >
+                  <span>🚪</span>
+                  <span>Sign Out</span>
+                </button>
+              ) : (
+                <div />
+              )}
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={onClose}
+                  disabled={loading}
+                  className="px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-zinc-300 font-mono text-xs transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={loading || !handle.trim()}
+                  className="px-5 py-2.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-zinc-950 font-sans font-semibold text-xs transition-all shadow-[0_0_15px_rgba(34,211,238,0.4)] disabled:opacity-50 flex items-center gap-2 cursor-pointer"
+                >
+                  {loading && <span className="animate-spin text-xs">↻</span>}
+                  <span>
+                    {currentUser
+                      ? connectBee
+                        ? "Save & Connect Bee"
+                        : "Save Profile Changes"
+                      : connectBee
+                      ? "Connect & Enter Dashboard"
+                      : "Start Demo Session"}
+                  </span>
+                </button>
+              </div>
             </div>
           </form>
         </div>

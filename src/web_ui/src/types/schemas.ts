@@ -192,4 +192,13 @@ export interface DemoUser {
   bee_pairing?: BeePairingInfo | null;
 }
 
+export interface EchoNotification {
+  id: string;
+  title: string;
+  message: string;
+  category: "action" | "routine" | "social" | "topic" | "system";
+  targetTab?: string;
+  timestamp: string;
+}
+
 

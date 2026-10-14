@@ -1,14 +1,56 @@
-import React, { useState, useEffect, useCallback } from "react";
+"use client";
+
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { createPortal } from "react-dom";
 import useSWR from "swr";
-import { EchoShowCardResponse } from "@/types/schemas";
-import { speakAlexaReassurance } from "@/utils/audioEffects";
+import {
+  PlannedTask,
+  VerifiedAction,
+  SocialEntity,
+  BriefingReport,
+  DemoUser,
+  EchoNotification,
+} from "@/types/schemas";
+import { speakAlexaReassurance, playAcousticVerificationTone } from "@/utils/audioEffects";
 import { getApiBaseUrl } from "@/utils/api";
 
-interface EchoShowModalProps {
+export interface EchoShowModalProps {
   isOpen: boolean;
   onClose: () => void;
+  initialTab?: string;
   initialTemplate?: string;
+  statusData?: any;
+  routinesData?: { tasks: PlannedTask[] };
+  actionsData?: { actions: VerifiedAction[] };
+  socialData?: { contacts: SocialEntity[] };
+  topicsData?: { topics: BriefingReport[] };
+  currentUser?: DemoUser | null;
+  onOpenLoginModal?: () => void;
+  onLogout?: () => void;
+  onDisconnectBee?: () => void;
+  onToggleRoutine?: (task: PlannedTask) => void | Promise<void>;
+  handleAddRoutine?: (
+    title: string,
+    domain: string,
+    scheduled_time: string,
+    recurrence?: string
+  ) => Promise<void>;
+  handleDeleteRoutine?: (taskId: string) => Promise<void>;
+  handleAddAction?: (statement: string) => Promise<void>;
+  handleEnrichContact?: (contactId: string) => Promise<void>;
+  handleToggleCommitment?: (
+    commitmentId: string,
+    action: "fulfill" | "cancel"
+  ) => Promise<void>;
+  simText?: string;
+  setSimText?: (text: string) => void;
+  simRunning?: boolean;
+  runSimulation?: () => Promise<void> | void;
+  simResult?: any;
+  echoNotification?: EchoNotification | null;
+  onDismissNotification?: () => void;
+  updatedTabs?: Record<string, number | boolean>;
+  onClearTabBadge?: (tabId: string) => void;
 }
 
 const fetcher = (url: string) =>
@@ -22,43 +64,162 @@ const fetcher = (url: string) =>
       return null;
     });
 
+// Specular Echo Show Tabs matching the Web UI tabs
+export const ECHO_TABS = [
+  { id: "overview", label: "OVERVIEW HUB", icon: "🌐" },
+  { id: "peace", label: "PEACE OF MIND", icon: "🛡️" },
+  { id: "routines", label: "DAILY ROUTINES", icon: "📋" },
+  { id: "social", label: "SOCIAL ROLODEX", icon: "👥" },
+  { id: "topics", label: "TOPIC DOSSIERS", icon: "📚" },
+  { id: "simulator", label: "AMBIENT SIMULATOR", icon: "⚡" },
+];
+
 export function EchoShowModal({
   isOpen,
   onClose,
-  initialTemplate = "DEEP_BRIEFING_VIEWER",
+  initialTab,
+  initialTemplate,
+  statusData,
+  routinesData,
+  actionsData,
+  socialData,
+  topicsData,
+  currentUser,
+  onOpenLoginModal,
+  onLogout,
+  onDisconnectBee,
+  onToggleRoutine,
+  handleAddRoutine,
+  handleDeleteRoutine,
+  handleAddAction,
+  handleEnrichContact,
+  handleToggleCommitment,
+  simText = "",
+  setSimText,
+  simRunning = false,
+  runSimulation,
+  simResult,
+  echoNotification,
+  onDismissNotification,
+  updatedTabs,
+  onClearTabBadge,
 }: EchoShowModalProps) {
   const [mounted, setMounted] = useState(false);
-  const [template, setTemplate] = useState(initialTemplate);
-  const [activeQuery, setActiveQuery] = useState("");
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const profileMenuRef = React.useRef<HTMLDivElement>(null);
+  const lastSpokenNotifId = React.useRef<string | null>(null);
+
+  // Map legacy template names or initialTab to specular tabs
+  const resolveInitialTab = useCallback(() => {
+    if (initialTemplate) {
+      if (initialTemplate === "ACTION_VERIFIED_BADGE") return "peace";
+      if (["DAILY_ACTIONS_RECAP", "UPCOMING_TASKS_VIEWER"].includes(initialTemplate)) return "routines";
+      if (["SOCIAL_PROFILE_CARD", "SOCIAL_COMMITMENTS_CARD"].includes(initialTemplate)) return "social";
+      if (["DEEP_BRIEFING_VIEWER", "SESSION_DOSSIER_VIEWER"].includes(initialTemplate)) return "topics";
+    }
+    if (initialTab && ["overview", "peace", "routines", "social", "topics", "simulator"].includes(initialTab)) {
+      return initialTab;
+    }
+    return "overview";
+  }, [initialTab, initialTemplate]);
+
+  const [activeTab, setActiveTab] = useState(resolveInitialTab);
   const [echoTime, setEchoTime] = useState("");
   const [feedbackMsg, setFeedbackMsg] = useState<string | null>(null);
+
+  // Local fallback states for sub-views if not passed via props
+  const [localSimText, setLocalSimText] = useState(simText || "I just unplugged the clothes iron from the wall outlet.");
+  const [localSimRunning, setLocalSimRunning] = useState(false);
+  const [localSimResult, setLocalSimResult] = useState<any>(simResult || null);
+  const [selectedContactIndex, setSelectedContactIndex] = useState(0);
+  const [selectedTopicIndex, setSelectedTopicIndex] = useState(0);
+  const [quickRoutineTitle, setQuickRoutineTitle] = useState("");
+  const [routineFilter, setRoutineFilter] = useState<"ALL" | "PENDING" | "COMPLETED">("ALL");
 
   useEffect(() => {
     setMounted(true);
   }, []);
 
-  // Sync template if initialTemplate changes or modal reopens
+  // Update active tab when props change or modal opens
   useEffect(() => {
-    if (initialTemplate) {
-      setTemplate(initialTemplate);
-      setActiveQuery("");
+    if (isOpen) {
+      setActiveTab(resolveInitialTab());
     }
-  }, [initialTemplate, isOpen]);
+  }, [isOpen, resolveInitialTab]);
 
-  const swrKey = isOpen
-    ? `/api/cards/preview?template=${template}${activeQuery ? `&query=${encodeURIComponent(activeQuery)}` : ""}`
-    : null;
+  // Audio tone and voice announcement on new notification arrival
+  useEffect(() => {
+    if (isOpen && echoNotification && lastSpokenNotifId.current !== echoNotification.id) {
+      lastSpokenNotifId.current = echoNotification.id;
+      playAcousticVerificationTone();
+      speakAlexaReassurance(`Notification: ${echoNotification.title}. ${echoNotification.message}`);
+    }
+  }, [isOpen, echoNotification]);
 
-  const { data: cardData, isLoading, mutate } = useSWR<EchoShowCardResponse | null>(
-    swrKey,
+  // Auto-dismiss notification modal after 8 seconds
+  useEffect(() => {
+    if (!isOpen || !echoNotification) return;
+    const timer = setTimeout(() => {
+      onDismissNotification?.();
+    }, 8000);
+    return () => clearTimeout(timer);
+  }, [isOpen, echoNotification, onDismissNotification]);
+
+  // Close profile menu on outside click
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (profileMenuRef.current && !profileMenuRef.current.contains(event.target as Node)) {
+        setProfileMenuOpen(false);
+      }
+    }
+    if (profileMenuOpen) {
+      document.addEventListener("mousedown", handleClickOutside);
+      return () => document.removeEventListener("mousedown", handleClickOutside);
+    }
+  }, [profileMenuOpen]);
+
+  // SWR Fallbacks if data not passed as props
+  const { data: swrStatus, mutate: mutateStatus } = useSWR(
+    isOpen && !statusData ? "/api/status" : null,
     fetcher
   );
+  const { data: swrRoutines, mutate: mutateRoutines } = useSWR<{ tasks: PlannedTask[] }>(
+    isOpen && !routinesData ? "/api/routines" : null,
+    fetcher
+  );
+  const { data: swrActions, mutate: mutateActions } = useSWR<{ actions: VerifiedAction[] }>(
+    isOpen && !actionsData ? "/api/actions?limit=50" : null,
+    fetcher
+  );
+  const { data: swrSocial, mutate: mutateSocial } = useSWR<{ contacts: SocialEntity[] }>(
+    isOpen && !socialData ? "/api/contacts" : null,
+    fetcher
+  );
+  const { data: swrTopics, mutate: mutateTopics } = useSWR<{ topics: BriefingReport[] }>(
+    isOpen && !topicsData ? "/api/topics?limit=20" : null,
+    fetcher
+  );
+
+  const effStatus = statusData || swrStatus;
+  const effRoutines = routinesData || swrRoutines;
+  const effActions = actionsData || swrActions;
+  const effSocial = socialData || swrSocial;
+  const effTopics = topicsData || swrTopics;
+
+  const tasks = effRoutines?.tasks || [];
+  const actions = effActions?.actions || [];
+  const contacts = effSocial?.contacts || [];
+  const topics = effTopics?.topics || [];
+
+  const completedTasks = tasks.filter((t) => t.status === "completed").length;
+  const pendingTasks = tasks.filter((t) => t.status !== "completed").length;
 
   const showFeedback = useCallback((msg: string) => {
     setFeedbackMsg(msg);
     setTimeout(() => setFeedbackMsg(null), 3000);
   }, []);
 
+  // Echo System Clock and Keyboard Listener
   useEffect(() => {
     if (isOpen) {
       document.body.style.overflow = "hidden";
@@ -91,329 +252,164 @@ export function EchoShowModal({
 
   if (!isOpen || !mounted) return null;
 
-  // Safe object extraction
-  const rawData: any = cardData || {};
-  const payload: any = rawData?.card_payload || rawData || {};
+  const beeDevice = effStatus?.telemetry?.bee_device;
+  const isBeeConnected = !!currentUser?.bee_connected || !!beeDevice?.connected || beeDevice?.status === "STREAMING";
 
-  const cardTitle =
-    rawData?.title ||
-    payload?.title ||
-    rawData?.topic_title ||
-    payload?.topic_title ||
-    (template === "DEEP_BRIEFING_VIEWER"
-      ? "Autonomous Topic Research Dossier"
-      : template === "SOCIAL_PROFILE_CARD"
-      ? "Executive Social Rolodex Dossier"
-      : template === "SOCIAL_COMMITMENTS_CARD"
-      ? "Bilateral Social Commitments"
-      : template === "ACTION_VERIFIED_BADGE"
-      ? "Peace of Mind Acoustic Corroboration"
-      : template === "DAILY_ACTIONS_RECAP"
-      ? "Daily Verification Recap"
-      : template === "UPCOMING_TASKS_VIEWER"
-      ? "Upcoming Monitored Routines"
-      : template === "SESSION_DOSSIER_VIEWER"
-      ? "Macro Session Intelligence Dossier"
-      : "Multimodal Echo Show Card");
-
-  const badgeText =
-    rawData?.header_badge ||
-    rawData?.ui_card_type ||
-    rawData?.display_template ||
-    payload?.template ||
-    (typeof template === "string" ? template.replace(/_/g, " ") : "ECHO SHOW");
-
-  const spokenText =
-    rawData?.spoken_summary ||
-    payload?.spoken_summary ||
-    rawData?.voice_summary ||
-    payload?.voice_summary ||
-    `Displaying ${cardTitle}. All background telemetry is nominal.`;
-
-  const synthesis =
-    payload?.explanatory_synthesis ||
-    payload?.synthesis ||
-    rawData?.explanatory_synthesis ||
-    rawData?.display_data?.explanatory_synthesis ||
-    "";
-
-  const summaryText =
-    payload?.bio_summary ||
-    payload?.bio ||
-    payload?.summary ||
-    rawData?.display_data?.summary ||
-    rawData?.web_profile?.bio_summary ||
-    "";
-
-  // Safe bullet point list
-  const bullets: string[] = (() => {
-    const raw =
-      payload?.bullets ||
-      payload?.executive_summary ||
-      rawData?.executive_summary ||
-      rawData?.display_data?.facts ||
-      payload?.key_discussion_points ||
-      rawData?.key_discussion_points ||
-      [];
-    if (Array.isArray(raw)) {
-      return raw.map((item: any) =>
-        item && typeof item === "object"
-          ? item.headline || item.text || item.title || JSON.stringify(item)
-          : String(item)
-      );
-    }
-    if (typeof raw === "string" && raw.trim()) return [raw];
-    return [];
-  })();
-
-  // Safe web sources
-  const sources: string[] = (() => {
-    const raw =
-      payload?.sources ||
-      payload?.web_sources ||
-      rawData?.web_sources ||
-      rawData?.sources ||
-      [];
-    if (Array.isArray(raw)) {
-      return raw.map((item: any) =>
-        item && typeof item === "object"
-          ? item.url || item.title || JSON.stringify(item)
-          : String(item)
-      );
-    }
-    if (typeof raw === "string" && raw.trim()) return [raw];
-    return [];
-  })();
-
-  // Safe action items
-  const actionItems: string[] = (() => {
-    const raw = payload?.action_items || rawData?.action_items || [];
-    if (Array.isArray(raw)) {
-      return raw.map((item: any) =>
-        item && typeof item === "object"
-          ? item.title || item.description || JSON.stringify(item)
-          : String(item)
-      );
-    }
-    if (typeof raw === "string" && raw.trim()) return [raw];
-    return [];
-  })();
-
-  // Safe commitments
-  const commitmentsList: any[] = (() => {
-    let raw =
-      payload?.commitments ||
-      rawData?.commitments ||
-      rawData?.display_data?.commitments;
-
-    if (!raw || (Array.isArray(raw) && raw.length === 0)) {
-      const u = payload?.user_promises || rawData?.user_promises || [];
-      const c = payload?.contact_promises || rawData?.contact_promises || [];
-      const combined = [
-        ...(Array.isArray(u) ? u : []),
-        ...(Array.isArray(c) ? c : []),
-      ];
-      if (combined.length > 0) raw = combined;
-    }
-
-    if (Array.isArray(raw)) {
-      return raw.filter((item) => item !== null && item !== undefined);
-    }
-    return [];
-  })();
-
-  // Safe actions list
-  const actionsList: any[] = (() => {
-    const raw =
-      payload?.actions ||
-      rawData?.actions ||
-      rawData?.spontaneous_actions ||
-      payload?.spontaneous_actions ||
-      rawData?.recent_actions ||
-      rawData?.display_data?.items ||
-      [];
-    if (Array.isArray(raw)) {
-      return raw.filter((item) => item !== null && item !== undefined);
-    }
-    return [];
-  })();
-
-  // Safe tasks list
-  const tasksList: any[] = (() => {
-    const raw =
-      payload?.tasks ||
-      rawData?.tasks ||
-      rawData?.planned_routines ||
-      payload?.planned_routines ||
-      [];
-    if (Array.isArray(raw)) {
-      return raw.filter((item) => item !== null && item !== undefined);
-    }
-    return [];
-  })();
-
-  // Safe contact & web profile objects
-  const contactObj = rawData?.contact || payload?.contact || null;
-  const webProfileObj = rawData?.web_profile || payload?.web_profile || null;
-
-  // Safe expertise array
-  const expertiseList: string[] = (() => {
-    const raw =
-      webProfileObj?.areas_of_expertise ||
-      payload?.areas_of_expertise ||
-      rawData?.areas_of_expertise;
-    if (Array.isArray(raw)) return raw.map(String).filter(Boolean);
-    if (typeof raw === "string" && raw.trim()) {
-      return raw.split(",").map((s) => s.trim()).filter(Boolean);
-    }
-    return [];
-  })();
-
-  // Daily recap summary stats with calculated fallbacks
-  const recapSummary = rawData?.summary || payload?.summary || null;
-  const plannedTotalCount = recapSummary?.planned_total ?? tasksList.length;
-  const plannedCompletedCount =
-    recapSummary?.planned_completed ??
-    tasksList.filter((t: any) => t.status === "completed").length;
-  const plannedPendingCount =
-    recapSummary?.planned_pending ??
-    Math.max(0, plannedTotalCount - plannedCompletedCount);
-  const spontaneousTotalCount =
-    recapSummary?.spontaneous_actions ?? actionsList.length;
-
-  // Peace of mind single action details
-  const singleActionStatus = rawData?.status || payload?.status || "verified";
-  const singleActionType =
-    rawData?.action_type || payload?.action_type || "domestic_action";
-  const singleRawStatement =
-    rawData?.raw_statement || payload?.raw_statement || "";
-  const singleConfidence =
-    rawData?.confidence ?? payload?.confidence ?? 0.98;
-  const singleElapsed =
-    rawData?.elapsed_time_human || payload?.elapsed_time_human || "just now";
-
-  // Session dossier meta
-  const sessionId = rawData?.session_id || payload?.session_id || "";
-  const sessionStatus = rawData?.status || payload?.status || "active";
-  const sessionLocationName =
-    payload?.location_name ||
-    rawData?.location?.place_name ||
-    rawData?.location?.semantic_zone ||
-    "Office / Home Desk";
-  const linkedEvents: any[] = Array.isArray(rawData?.linked_micro_events)
-    ? rawData.linked_micro_events
-    : Array.isArray(payload?.linked_micro_events)
-    ? payload.linked_micro_events
-    : [];
-
-  // Interactive Backend Actions
-  const handleSpeakCard = () => {
-    speakAlexaReassurance(spokenText);
-  };
-
-  const handleToggleRoutine = async (taskId?: string, title?: string) => {
-    if (!taskId) return;
-    try {
-      const baseUrl = getApiBaseUrl();
-      const res = await fetch(`${baseUrl}/api/routines/${taskId}/toggle`, {
-        method: "POST",
-      });
-      if (!res.ok) throw new Error("Failed to toggle routine");
-      mutate();
-      speakAlexaReassurance(`Routine ${title || "check"} updated.`);
-      showFeedback(`Routine updated!`);
-    } catch {
-      showFeedback(`Failed to update routine.`);
+  // Handlers
+  const handleTabSelect = (tabId: string) => {
+    setActiveTab(tabId);
+    if (onClearTabBadge) {
+      onClearTabBadge(tabId);
     }
   };
 
-  const handleFulfillCommitment = async (commitmentId?: string, desc?: string) => {
-    if (!commitmentId) return;
+  const handleToggleRoutineClick = async (task: PlannedTask) => {
+    if (onToggleRoutine) {
+      await onToggleRoutine(task);
+    } else {
+      try {
+        const baseUrl = getApiBaseUrl();
+        await fetch(`${baseUrl}/api/routines/${task.id}/toggle`, { method: "POST" });
+        if (mutateRoutines) mutateRoutines();
+        if (mutateStatus) mutateStatus();
+      } catch (e) {
+        console.error(e);
+      }
+    }
+    const newStatus = task.status === "completed" ? "pending" : "completed";
+    speakAlexaReassurance(`Routine '${task.title}' marked ${newStatus}.`);
+    showFeedback(`Routine updated!`);
+  };
+
+  const handleCreateRoutineQuick = async (title: string, time: string = "09:00", domain: string = "routine") => {
+    if (!title.trim()) return;
     try {
-      const baseUrl = getApiBaseUrl();
-      const res = await fetch(
-        `${baseUrl}/api/commitments/${commitmentId}/fulfill`,
-        { method: "POST" }
-      );
-      if (!res.ok) throw new Error("Failed to fulfill commitment");
-      mutate();
-      speakAlexaReassurance(`Commitment marked fulfilled.`);
-      showFeedback(`Commitment marked fulfilled!`);
-    } catch {
-      showFeedback(`Failed to fulfill commitment.`);
+      if (handleAddRoutine) {
+        await handleAddRoutine(title.trim(), domain, time, "daily");
+      } else {
+        const baseUrl = getApiBaseUrl();
+        await fetch(`${baseUrl}/api/routines`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title: title.trim(), domain, scheduled_time: time, recurrence: "daily" }),
+        });
+        if (mutateRoutines) mutateRoutines();
+        if (mutateStatus) mutateStatus();
+      }
+      speakAlexaReassurance(`New routine '${title}' scheduled for ${time}.`);
+      showFeedback(`Routine added!`);
+      setQuickRoutineTitle("");
+    } catch (e) {
+      showFeedback("Failed to add routine.");
     }
   };
 
-  const handleEnrichContact = async (contactId?: string, name?: string) => {
-    if (!contactId) return;
+  const handleCorroborateActionQuick = async (statement: string) => {
     try {
-      const baseUrl = getApiBaseUrl();
+      if (handleAddAction) {
+        await handleAddAction(statement);
+      } else {
+        const baseUrl = getApiBaseUrl();
+        await fetch(`${baseUrl}/api/simulate`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ transcript_chunk: statement }),
+        });
+        if (mutateActions) mutateActions();
+        if (mutateRoutines) mutateRoutines();
+        if (mutateStatus) mutateStatus();
+      }
+      speakAlexaReassurance(`Action corroborated: "${statement}"`);
+      showFeedback("Action corroborated into acoustic ledger!");
+    } catch (e) {
+      showFeedback("Failed to corroborate action.");
+    }
+  };
+
+  const handleEnrichContactClick = async (contactId: string, name?: string) => {
+    try {
       showFeedback(`Enriching ${name || "contact"}...`);
-      const res = await fetch(`${baseUrl}/api/contacts/${encodeURIComponent(contactId)}/enrich`, {
-        method: "POST",
-      });
-      if (!res.ok) throw new Error("Enrichment failed");
-      mutate();
-      speakAlexaReassurance(
-        `AI web profile research refreshed for ${name || "contact"}.`
-      );
-      showFeedback(`Profile enriched successfully!`);
-    } catch {
-      showFeedback(`Enrichment failed.`);
+      if (handleEnrichContact) {
+        await handleEnrichContact(contactId);
+      } else {
+        const baseUrl = getApiBaseUrl();
+        await fetch(`${baseUrl}/api/contacts/${encodeURIComponent(contactId)}/enrich`, {
+          method: "POST",
+        });
+        if (mutateSocial) mutateSocial();
+        if (mutateStatus) mutateStatus();
+      }
+      speakAlexaReassurance(`Executive AI web profile refreshed for ${name || "contact"}.`);
+      showFeedback("Contact profile enriched!");
+    } catch (e) {
+      showFeedback("Enrichment failed.");
     }
   };
 
-  const handleConcludeSession = async (sId?: string) => {
-    if (!sId) return;
+  const handleToggleCommitmentClick = async (commitmentId: string, action: "fulfill" | "cancel") => {
     try {
-      const baseUrl = getApiBaseUrl();
-      const res = await fetch(`${baseUrl}/api/sessions/${encodeURIComponent(sId)}/conclude`, {
-        method: "POST",
-      });
-      if (!res.ok) throw new Error("Failed to conclude session");
-      mutate();
-      speakAlexaReassurance(`Session concluded. Intelligence dossier saved.`);
-      showFeedback(`Session concluded!`);
-    } catch {
-      showFeedback(`Failed to conclude session.`);
+      if (handleToggleCommitment) {
+        await handleToggleCommitment(commitmentId, action);
+      } else {
+        const baseUrl = getApiBaseUrl();
+        await fetch(`${baseUrl}/api/commitments/${encodeURIComponent(commitmentId)}/${action}`, {
+          method: "POST",
+        });
+        if (mutateSocial) mutateSocial();
+        if (mutateStatus) mutateStatus();
+      }
+      speakAlexaReassurance(`Commitment marked ${action === "fulfill" ? "fulfilled" : "cancelled"}.`);
+      showFeedback(`Commitment updated!`);
+    } catch (e) {
+      showFeedback("Failed to update commitment.");
     }
   };
 
-  const handleSelectTemplate = (tId: string) => {
-    setActiveQuery("");
-    setTemplate(tId);
+  const handleRunSimulationClick = async () => {
+    const textToSim = simText || localSimText;
+    if (!textToSim.trim()) return;
+
+    if (runSimulation) {
+      await runSimulation();
+    } else {
+      setLocalSimRunning(true);
+      try {
+        const baseUrl = getApiBaseUrl();
+        const res = await fetch(`${baseUrl}/api/simulate`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ transcript_chunk: textToSim }),
+        });
+        const data = await res.json();
+        setLocalSimResult(data);
+        if (mutateActions) mutateActions();
+        if (mutateRoutines) mutateRoutines();
+        if (mutateSocial) mutateSocial();
+        if (mutateTopics) mutateTopics();
+        if (mutateStatus) mutateStatus();
+        speakAlexaReassurance("Simulation pipeline executed successfully across ambient channels.");
+        showFeedback("Simulation completed!");
+      } catch (e) {
+        showFeedback("Simulation failed.");
+      } finally {
+        setLocalSimRunning(false);
+      }
+    }
   };
 
-  const handleVerifyQuery = (queryText: string) => {
-    setActiveQuery(queryText);
-    speakAlexaReassurance(`Alexa: Checking acoustic corroboration for ${queryText}.`);
-  };
-
-  const handleQuickPrompt = (promptText: string, targetTemplate: string, queryText?: string) => {
-    setActiveQuery(queryText || "");
-    setTemplate(targetTemplate);
-    speakAlexaReassurance(promptText);
-  };
-
-  const templates = [
-    { id: "DEEP_BRIEFING_VIEWER", label: "📚 Deep Briefing" },
-    { id: "SOCIAL_PROFILE_CARD", label: "👤 Social Profile" },
-    { id: "SOCIAL_COMMITMENTS_CARD", label: "🤝 Commitments" },
-    { id: "ACTION_VERIFIED_BADGE", label: "🛡️ Peace of Mind" },
-    { id: "DAILY_ACTIONS_RECAP", label: "📋 Daily Recap" },
-    { id: "UPCOMING_TASKS_VIEWER", label: "⏱️ Upcoming Tasks" },
-    { id: "SESSION_DOSSIER_VIEWER", label: "🏛️ Session Dossier" },
-  ];
+  const selectedContact = contacts[selectedContactIndex] || contacts[0] || null;
+  const selectedTopic = topics[selectedTopicIndex] || topics[0] || null;
+  const latestAction = actions[0] || null;
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[9999] overflow-y-auto bg-black/90 backdrop-blur-md flex items-center justify-center p-3 sm:p-6"
+      className="fixed inset-0 z-[9999] overflow-y-auto bg-black/90 backdrop-blur-md flex items-center justify-center p-2 sm:p-4 md:p-6"
       onClick={onClose}
       aria-modal="true"
       role="dialog"
     >
       <div
-        className="relative w-full max-w-4xl my-auto animate-in fade-in zoom-in-95 duration-150"
+        className="relative w-full max-w-5xl my-auto animate-in fade-in zoom-in-95 duration-150"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Device Frame Top Label */}
@@ -424,7 +420,7 @@ export function EchoShowModal({
           </div>
           <div className="flex items-center gap-2">
             {feedbackMsg && (
-              <span className="font-mono text-[10px] text-emerald-400 tracking-wider bg-emerald-950/80 border border-emerald-500/30 px-2 py-0.5 rounded">
+              <span className="font-mono text-[10px] text-emerald-400 tracking-wider bg-emerald-950/80 border border-emerald-500/30 px-2 py-0.5 rounded animate-in fade-in">
                 ⚡ {feedbackMsg}
               </span>
             )}
@@ -438,7 +434,7 @@ export function EchoShowModal({
         </div>
 
         {/* Physical Hardware Bezel */}
-        <div className="bg-[#101216] border-4 border-[#242833] rounded-3xl p-4 sm:p-6 shadow-[0_25px_60px_-15px_rgba(0,0,0,0.9)] relative">
+        <div className="bg-[#101216] border-4 border-[#242833] rounded-3xl p-3 sm:p-5 md:p-6 shadow-[0_25px_60px_-15px_rgba(0,0,0,0.95)] relative">
           {/* Echo Camera Notch */}
           <div className="absolute top-2 left-1/2 -translate-x-1/2 flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-[#0a0b0d] border border-white/10"></span>
@@ -446,645 +442,1129 @@ export function EchoShowModal({
           </div>
 
           {/* Glass Display Screen */}
-          <div className="bg-[#08090b] border border-white/5 rounded-2xl overflow-hidden min-h-[540px] flex flex-col relative text-zinc-100">
-            {/* Echo System Bar */}
-            <div className="bg-black/60 px-6 py-3 flex items-center justify-between border-b border-white/5">
-              <div className="font-mono text-base font-bold text-white tracking-wider">
-                {echoTime || "12:00"}
-              </div>
+          <div className="bg-[#08090b] border border-white/10 rounded-2xl overflow-hidden min-h-[580px] flex flex-col relative text-zinc-100">
+            {/* Multimodal Modal Notification on Echo Show */}
+            {echoNotification && (
+              <div className="absolute inset-4 z-40 rounded-2xl bg-[#0d121d]/95 backdrop-blur-2xl border-2 border-cyan-400/80 shadow-[0_0_60px_rgba(6,182,212,0.6)] p-6 flex flex-col justify-between animate-in zoom-in-95 duration-200">
+                <div className="flex items-center justify-between pb-3 border-b border-white/10">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-ping" />
+                    <span className="font-mono text-[10px] text-cyan-300 tracking-[0.2em] uppercase font-bold">
+                      ⚡ ALEXA+ AMBIENT INTELLIGENCE NOTIFICATION // {echoNotification.category.toUpperCase()}
+                    </span>
+                  </div>
+                  {onDismissNotification && (
+                    <button
+                      onClick={onDismissNotification}
+                      className="text-zinc-400 hover:text-white font-mono text-sm px-2 py-0.5 rounded hover:bg-white/10 cursor-pointer"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
 
-              <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-cyan-950/60 border border-cyan-500/40 text-cyan-300 font-mono text-[10px] tracking-widest uppercase">
-                <span className="w-2 h-2 rounded-full bg-cyan-400"></span>
-                <span>Alexa+ Ambient Ext-App</span>
-              </div>
-
-              <div className="flex items-center gap-3 text-zinc-400 text-xs font-mono">
-                <span>📶 5G MESH</span>
-                <span className="opacity-40">•</span>
-                <span>BEE LINKED</span>
-              </div>
-            </div>
-
-            {/* Template Switcher Bar */}
-            <div className="bg-[#121419] px-4 py-2 border-b border-white/5 flex items-center gap-2 overflow-x-auto hide-scrollbar">
-              {templates.map((t) => (
-                <button
-                  key={t.id}
-                  onClick={() => handleSelectTemplate(t.id)}
-                  className={`px-3 py-1.5 rounded-lg font-mono text-[10px] tracking-wider whitespace-nowrap transition-all uppercase ${
-                    template === t.id
-                      ? "bg-cyan-500 text-black font-bold shadow-md"
-                      : "text-zinc-400 hover:text-white hover:bg-white/5"
-                  }`}
-                >
-                  {t.label}
-                </button>
-              ))}
-            </div>
-
-            {/* Dynamic Echo Show Card Canvas */}
-            <div className="p-6 sm:p-8 flex-1 flex flex-col justify-between">
-              {isLoading ? (
-                <div className="flex-1 flex flex-col items-center justify-center gap-3 py-16">
-                  <div className="w-8 h-8 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin" />
-                  <div className="font-mono text-[10px] text-zinc-400 tracking-widest uppercase">
-                    Rendering Echo Show Multimodal Card...
+                <div className="my-auto py-4 space-y-3">
+                  <h3 className="font-serif text-2xl sm:text-3xl text-white font-bold">
+                    {echoNotification.title}
+                  </h3>
+                  <div className="p-4 rounded-xl bg-black/60 border border-cyan-500/30 text-zinc-200 font-sans text-sm sm:text-base leading-relaxed italic">
+                    "{echoNotification.message}"
+                  </div>
+                  <div className="flex items-center justify-between font-mono text-[10px] text-zinc-400">
+                    <span>TIME: {echoNotification.timestamp}</span>
+                    <span className="text-cyan-400">STATUS: PROCESSED BY BEDROCK AGENTCORE</span>
                   </div>
                 </div>
-              ) : rawData ? (
-                <div className="space-y-6 flex-1 flex flex-col justify-between">
-                  {/* Card Header */}
-                  <div>
-                    <div className="flex items-center justify-between mb-3">
-                      <div className="flex items-center gap-2">
-                        <span className="px-2.5 py-0.5 rounded bg-cyan-950/70 text-cyan-300 border border-cyan-500/30 font-mono text-[9px] tracking-widest uppercase font-bold">
-                          {badgeText}
-                        </span>
-                        <span className="font-mono text-[9px] text-zinc-500 tracking-widest uppercase">
-                          {typeof rawData?.timestamp === "string"
-                            ? rawData.timestamp.replace("T", " ").substring(0, 19)
-                            : "LIVE"}
+
+                <div className="flex items-center justify-end gap-3 pt-3 border-t border-white/10">
+                  {onDismissNotification && (
+                    <button
+                      onClick={onDismissNotification}
+                      className="px-4 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-mono text-xs uppercase tracking-wider transition-colors cursor-pointer"
+                    >
+                      Dismiss
+                    </button>
+                  )}
+                  {echoNotification.targetTab && (
+                    <button
+                      onClick={() => {
+                        const targetTabId = echoNotification.targetTab!;
+                        const targetTabObj = ECHO_TABS.find((t) => t.id === targetTabId);
+                        handleTabSelect(targetTabId);
+                        if (onDismissNotification) onDismissNotification();
+                        speakAlexaReassurance(`Switching to ${targetTabObj?.label || targetTabId}.`);
+                      }}
+                      className="px-5 py-2 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-black font-mono text-xs uppercase tracking-wider font-bold shadow-lg shadow-cyan-500/30 transition-all flex items-center gap-2 cursor-pointer"
+                    >
+                      <span>Inspect in Echo</span>
+                      <span>→</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Echo System Bar with Login & Profile Integration */}
+            <div className="bg-black/70 px-4 sm:px-6 py-2.5 flex items-center justify-between border-b border-white/10 gap-2">
+              <div className="flex items-center gap-3">
+                <div className="font-mono text-sm sm:text-base font-bold text-white tracking-wider">
+                  {echoTime || "12:00"}
+                </div>
+                <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-cyan-950/60 border border-cyan-500/40 text-cyan-300 font-mono text-[9px] tracking-widest uppercase">
+                  <span className="w-1.5 h-1.5 rounded-full bg-cyan-400"></span>
+                  <span>Alexa+ Ambient Ext-App</span>
+                </div>
+              </div>
+
+              {/* User Profile & Login on Echo Show */}
+              <div className="relative flex items-center gap-2 sm:gap-3" ref={profileMenuRef}>
+                {currentUser ? (
+                  <>
+                    <button
+                      onClick={() => setProfileMenuOpen((prev) => !prev)}
+                      className="flex items-center gap-2 px-2.5 py-1 rounded-xl bg-zinc-900/90 hover:bg-zinc-800 border border-cyan-500/40 text-white transition-all shadow-sm cursor-pointer"
+                      title="Manage Echo Show Profile & Bee Device"
+                    >
+                      <div className="w-5 h-5 rounded-full bg-cyan-500/20 border border-cyan-400 text-cyan-300 font-mono text-[9px] font-bold flex items-center justify-center">
+                        {currentUser.handle ? currentUser.handle.charAt(0).toUpperCase() : "U"}
+                      </div>
+                      <div className="text-left text-xs font-sans font-medium text-white max-w-[110px] truncate hidden xs:block">
+                        {currentUser.handle}
+                      </div>
+                      <div className="flex items-center gap-1 font-mono text-[8px] text-zinc-400">
+                        <span
+                          className={`w-1.5 h-1.5 rounded-full ${
+                            currentUser.bee_connected || isBeeConnected ? "bg-emerald-400" : "bg-zinc-500"
+                          }`}
+                        />
+                        <span className="hidden md:inline">
+                          {currentUser.bee_connected || isBeeConnected ? "BEE LINKED" : "DEMO USER"}
                         </span>
                       </div>
-                      <button
-                        onClick={handleSpeakCard}
-                        className="px-3.5 py-1.5 rounded-full bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-400/40 text-cyan-300 font-mono text-[10px] tracking-widest uppercase flex items-center gap-1.5 transition-colors font-bold shadow-sm"
-                      >
-                        <span>🔊</span>
-                        <span>Read Aloud</span>
-                      </button>
+                      <span className={`text-[10px] text-zinc-400 transition-transform ${profileMenuOpen ? "rotate-180" : ""}`}>
+                        ▾
+                      </span>
+                    </button>
+
+                    {/* Echo Touch Profile Menu Dropdown */}
+                    {profileMenuOpen && (
+                      <div className="absolute right-0 top-full mt-2 w-72 rounded-2xl bg-[#0d121d]/95 backdrop-blur-2xl border border-cyan-500/40 shadow-[0_20px_50px_rgba(0,0,0,0.95)] p-4 z-50 text-left space-y-3 animate-in fade-in zoom-in-95 duration-150">
+                        <div className="pb-2.5 border-b border-white/10">
+                          <div className="flex items-center justify-between">
+                            <span className="font-mono text-[9px] uppercase tracking-widest text-zinc-400 font-semibold">
+                              ECHO SHOW SESSION
+                            </span>
+                            <span className="font-mono text-[8px] px-1.5 py-0.5 rounded bg-cyan-950 text-cyan-300 border border-cyan-500/30 font-bold uppercase">
+                              GDPR ART. 25
+                            </span>
+                          </div>
+                          <div className="font-sans text-sm font-semibold text-white mt-1">
+                            {currentUser.handle}
+                          </div>
+                          <div className="font-mono text-[9px] text-zinc-400 flex items-center gap-1 mt-0.5">
+                            <span>ID:</span>
+                            <span className="text-cyan-300 truncate">{currentUser.user_id}</span>
+                          </div>
+                        </div>
+
+                        {/* Bee Wearable Status & Pairing */}
+                        <div className="p-2.5 rounded-xl bg-black/60 border border-white/10 space-y-2">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-sans text-white font-medium flex items-center gap-1.5">
+                              <span>🐝</span>
+                              <span>Bee Wearable AI</span>
+                            </span>
+                            <span
+                              className={`font-mono text-[8px] px-2 py-0.5 rounded-full uppercase font-bold ${
+                                isBeeConnected
+                                  ? "bg-emerald-950 text-emerald-300 border border-emerald-500/40"
+                                  : "bg-zinc-800 text-zinc-400"
+                              }`}
+                            >
+                              {isBeeConnected ? "LINKED" : "STANDBY"}
+                            </span>
+                          </div>
+                          {isBeeConnected && onDisconnectBee ? (
+                            <button
+                              onClick={() => {
+                                onDisconnectBee();
+                                setProfileMenuOpen(false);
+                              }}
+                              className="w-full py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white font-mono text-[10px] uppercase tracking-wider transition-colors border border-white/10 text-center cursor-pointer"
+                            >
+                              Disconnect Bee Device
+                            </button>
+                          ) : (
+                            onOpenLoginModal && (
+                              <button
+                                onClick={() => {
+                                  onOpenLoginModal();
+                                  setProfileMenuOpen(false);
+                                }}
+                                className="w-full py-1.5 rounded-lg bg-cyan-950/80 hover:bg-cyan-900 text-cyan-300 border border-cyan-500/40 font-mono text-[10px] uppercase tracking-wider transition-colors text-center cursor-pointer"
+                              >
+                                Connect Bee Device →
+                              </button>
+                            )
+                          )}
+                        </div>
+
+                        {/* Profile switch and Logout actions */}
+                        <div className="space-y-1.5 pt-1">
+                          {onOpenLoginModal && (
+                            <button
+                              onClick={() => {
+                                onOpenLoginModal();
+                                setProfileMenuOpen(false);
+                              }}
+                              className="w-full py-1.5 px-2.5 rounded-lg hover:bg-white/5 text-zinc-200 hover:text-white text-xs font-sans flex items-center justify-between transition-colors cursor-pointer"
+                            >
+                              <span>Switch / Manage Profile</span>
+                              <span className="text-zinc-500 font-mono text-xs">→</span>
+                            </button>
+                          )}
+                          {onLogout && (
+                            <button
+                              onClick={() => {
+                                onLogout();
+                                setProfileMenuOpen(false);
+                              }}
+                              className="w-full py-1.5 px-2.5 rounded-lg hover:bg-red-950/40 text-red-400 hover:text-red-300 text-xs font-sans flex items-center justify-between transition-colors border border-red-500/20 cursor-pointer"
+                            >
+                              <span>Sign Out</span>
+                              <span>🚪</span>
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <button
+                    onClick={onOpenLoginModal}
+                    className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-cyan-950/70 hover:bg-cyan-900 border border-cyan-500/40 text-cyan-300 font-mono text-[10px] tracking-wider transition-colors shadow-sm cursor-pointer"
+                    title="Sign In to Echo Show"
+                  >
+                    <span>👤</span>
+                    <span>Sign In</span>
+                  </button>
+                )}
+
+                <div className="flex items-center gap-2 text-zinc-400 text-[10px] sm:text-xs font-mono">
+                  <span className="hidden sm:inline">📶 5G MESH</span>
+                  <span className="hidden sm:inline opacity-40">•</span>
+                  <span className={isBeeConnected ? "text-emerald-400 font-semibold" : "text-zinc-500"}>
+                    {isBeeConnected ? "🐝 BEE LINKED" : "BEE STANDBY"}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Specular Tabs Bar matching Web UI sections */}
+            <div className="bg-[#121419] px-3 sm:px-4 py-2 border-b border-white/5 flex items-center gap-1.5 sm:gap-2 overflow-x-auto hide-scrollbar">
+              {ECHO_TABS.map((tab) => {
+                const isSelected = activeTab === tab.id;
+                const rawVal = updatedTabs?.[tab.id];
+                const count = typeof rawVal === "number" ? rawVal : rawVal ? 1 : 0;
+                const hasUpdate = count > 0 && !isSelected;
+                return (
+                  <button
+                    key={tab.id}
+                    onClick={() => handleTabSelect(tab.id)}
+                    className={`relative px-3 py-1.5 rounded-lg font-mono text-[10px] sm:text-[11px] tracking-wider whitespace-nowrap transition-all uppercase flex items-center gap-1.5 cursor-pointer ${
+                      isSelected
+                        ? "bg-cyan-500 text-black font-bold shadow-md shadow-cyan-500/20"
+                        : "text-zinc-400 hover:text-white hover:bg-white/5"
+                    }`}
+                  >
+                    <span>{tab.icon}</span>
+                    <span>{tab.label}</span>
+                    {hasUpdate && (
+                      count > 1 ? (
+                        <span
+                          className="relative inline-flex items-center justify-center px-1.5 py-0.2 min-w-[16px] h-4 text-[9px] font-mono font-bold leading-none text-black bg-cyan-400 rounded-full shadow-[0_0_8px_rgba(6,182,212,0.9)]"
+                          title={`${count} updates`}
+                        >
+                          {count}
+                        </span>
+                      ) : (
+                        <span className="relative flex h-2 w-2 ml-0.5 shrink-0" title="New update received">
+                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75"></span>
+                          <span className="relative inline-flex rounded-full h-2 w-2 bg-cyan-400 shadow-[0_0_8px_rgba(6,182,212,0.9)]"></span>
+                        </span>
+                      )
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Main Specular Touch Canvas */}
+            <div className="p-4 sm:p-6 md:p-8 flex-1 flex flex-col justify-between overflow-y-auto">
+              {/* TAB 1: OVERVIEW HUB */}
+              {activeTab === "overview" && (
+                <div className="space-y-6 flex-1 flex flex-col justify-between animate-in fade-in duration-150">
+                  <div>
+                    {/* Top Status Banner */}
+                    <div className="bg-gradient-to-r from-emerald-950/40 via-black/40 to-cyan-950/30 border border-emerald-500/30 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                      <div className="flex items-center gap-3.5">
+                        <div className="w-10 h-10 rounded-full border-4 border-emerald-400 flex items-center justify-center shrink-0 shadow-lg shadow-emerald-950/60">
+                          <div className="w-3 h-3 rounded-full bg-emerald-400 animate-ping"></div>
+                        </div>
+                        <div>
+                          <div className="font-mono text-[9px] text-emerald-400 tracking-[0.2em] uppercase font-bold">
+                            DOMESTIC POSTURE // ALL CLEAR
+                          </div>
+                          <div className="font-serif text-xl sm:text-2xl text-white font-bold leading-tight">
+                            All Anchors Calibrated & Synchronized
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap gap-2 text-[10px] font-mono uppercase">
+                        <button
+                          onClick={() => handleTabSelect("peace")}
+                          className="px-2.5 py-1 rounded-lg bg-emerald-950/60 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-900 transition-colors"
+                        >
+                          🛡️ {actions.length} Verified Anchors
+                        </button>
+                        <button
+                          onClick={() => handleTabSelect("routines")}
+                          className="px-2.5 py-1 rounded-lg bg-amber-950/60 border border-amber-500/30 text-amber-300 hover:bg-amber-900 transition-colors"
+                        >
+                          📋 {pendingTasks} Pending Checks
+                        </button>
+                        <button
+                          onClick={() => handleTabSelect("social")}
+                          className="px-2.5 py-1 rounded-lg bg-cyan-950/60 border border-cyan-500/30 text-cyan-300 hover:bg-cyan-900 transition-colors"
+                        >
+                          👥 {contacts.length} Social Contacts
+                        </button>
+                        <button
+                          onClick={() => handleTabSelect("topics")}
+                          className="px-2.5 py-1 rounded-lg bg-purple-950/60 border border-purple-500/30 text-purple-300 hover:bg-purple-900 transition-colors"
+                        >
+                          📚 {topics.length} Dossiers
+                        </button>
+                      </div>
                     </div>
 
-                    <h1 className="font-serif text-[30px] sm:text-[36px] text-white leading-tight mb-4">
-                      {cardTitle}
-                    </h1>
-
-                    {/* Card Body Data */}
-                    <div className="bg-[#12141a] border border-white/5 rounded-xl p-5 space-y-4">
-                      {/* TAB 1: DEEP BRIEFING VIEWER */}
-                      {template === "DEEP_BRIEFING_VIEWER" && (
-                        <div className="space-y-4">
-                          {synthesis && (
-                            <div className="bg-amber-950/30 border border-amber-500/30 rounded-lg p-3 text-amber-200/90 font-sans text-body-sm leading-relaxed">
-                              ⚡ <strong className="uppercase font-mono text-[10px] tracking-wider text-amber-300 mr-1">Thesis:</strong> {synthesis}
-                            </div>
-                          )}
-
-                          {bullets.length > 0 && (
-                            <div className="space-y-2">
-                              <div className="font-mono text-[9px] text-zinc-400 tracking-widest uppercase">Key Insights & Takeaways:</div>
-                              <ul className="space-y-2">
-                                {bullets.map((b: string, i: number) => (
-                                  <li key={i} className="flex items-start gap-2.5 text-zinc-200 text-body-sm font-sans">
-                                    <span className="text-cyan-400 font-bold">•</span>
-                                    <span>{b}</span>
-                                  </li>
-                                ))}
-                              </ul>
-                            </div>
-                          )}
-
-                          {actionItems.length > 0 && (
-                            <div className="space-y-2 pt-2 border-t border-white/5">
-                              <div className="font-mono text-[9px] text-zinc-400 tracking-widest uppercase">Action Items & Next Steps:</div>
-                              <div className="space-y-1.5">
-                                {actionItems.map((act: string, i: number) => (
-                                  <div key={i} className="flex items-center gap-2 text-xs text-zinc-300 bg-black/40 p-2 rounded border border-white/5">
-                                    <span className="text-cyan-400 font-mono">[{i + 1}]</span>
-                                    <span>{act}</span>
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-
-                          {sources.length > 0 && (
-                            <div className="pt-2 border-t border-white/5">
-                              <div className="font-mono text-[9px] text-zinc-400 tracking-widest uppercase mb-1.5">Corroborating Web Sources:</div>
-                              <div className="flex flex-wrap gap-2">
-                                {sources.slice(0, 4).map((src: string, i: number) => (
-                                  <span key={i} className="text-amber-300 font-mono text-[10px] truncate max-w-xs">
-                                    🔗 {src}
-                                  </span>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-
-                          {!synthesis && bullets.length === 0 && actionItems.length === 0 && sources.length === 0 && (
-                            <div className="text-center py-8 text-zinc-500 font-mono text-sm">
-                              No briefing notes recorded yet.
-                            </div>
-                          )}
+                    {/* 4 Multimodal Echo Touch Cards Grid */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+                      {/* Peace of Mind Card */}
+                      <div className="p-4 rounded-xl bg-[#12141a] border border-white/10 hover:border-emerald-500/40 transition-colors space-y-2.5">
+                        <div className="flex items-center justify-between">
+                          <span className="font-mono text-[9px] text-emerald-400 tracking-wider uppercase font-bold flex items-center gap-1.5">
+                            <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                            PEACE OF MIND ANCHOR
+                          </span>
+                          <span className="font-mono text-[9px] text-zinc-500">
+                            {latestAction?.elapsed_time_human || "RECENT"}
+                          </span>
                         </div>
-                      )}
-
-                      {/* TAB 2: SOCIAL PROFILE CARD */}
-                      {template === "SOCIAL_PROFILE_CARD" && (
-                        <div className="space-y-4">
-                          <div className="p-4 rounded-xl bg-black/40 border border-white/5 space-y-3">
-                            <div className="flex items-start justify-between gap-3">
-                              <div>
-                                <h2 className="text-cyan-300 font-serif text-xl sm:text-2xl">
-                                  {contactObj?.name || payload?.name || webProfileObj?.current_role || "Executive Contact"}
-                                </h2>
-                                {(webProfileObj?.headline || contactObj?.company_or_role || payload?.company_or_role) && (
-                                  <div className="text-xs text-zinc-400 font-mono uppercase tracking-wider mt-0.5">
-                                    {webProfileObj?.headline || contactObj?.company_or_role || payload?.company_or_role}
-                                  </div>
-                                )}
-                              </div>
-
-                              {(contactObj?.id || contactObj?.name || payload?.name) && (
-                                <button
-                                  onClick={() =>
-                                    handleEnrichContact(
-                                      contactObj?.id || contactObj?.name || payload?.name,
-                                      contactObj?.name || payload?.name
-                                    )
-                                  }
-                                  className="px-3 py-1 rounded-lg bg-cyan-950/70 hover:bg-cyan-900 border border-cyan-500/40 text-cyan-300 font-mono text-[9px] tracking-wider uppercase shrink-0 transition-colors"
-                                >
-                                  🔍 Enrich Profile
-                                </button>
-                              )}
-                            </div>
-
-                            {summaryText && (
-                              <div className="text-zinc-300 font-sans text-body-sm leading-relaxed border-t border-white/5 pt-2">
-                                {summaryText}
-                              </div>
-                            )}
-
-                            {expertiseList.length > 0 && (
-                              <div className="flex flex-wrap gap-1.5 pt-1">
-                                {expertiseList.map((exp: string, i: number) => (
-                                  <span key={i} className="px-2 py-0.5 rounded bg-cyan-950/60 border border-cyan-500/20 text-cyan-300 font-mono text-[8px] uppercase">
-                                    #{exp}
-                                  </span>
-                                ))}
-                              </div>
-                            )}
-
-                            {/* Verified Links */}
-                            {(webProfileObj?.linkedin_url || webProfileObj?.github_url || webProfileObj?.website_url) && (
-                              <div className="flex flex-wrap gap-3 pt-2 border-t border-white/5 text-[11px] font-mono">
-                                {webProfileObj.linkedin_url && (
-                                  <a href={webProfileObj.linkedin_url} target="_blank" rel="noreferrer" className="text-cyan-400 hover:underline">
-                                    LinkedIn ↗
-                                  </a>
-                                )}
-                                {webProfileObj.github_url && (
-                                  <a href={webProfileObj.github_url} target="_blank" rel="noreferrer" className="text-zinc-300 hover:underline">
-                                    GitHub ↗
-                                  </a>
-                                )}
-                                {webProfileObj.website_url && (
-                                  <a href={webProfileObj.website_url} target="_blank" rel="noreferrer" className="text-amber-400 hover:underline">
-                                    Website ↗
-                                  </a>
-                                )}
-                              </div>
-                            )}
-                          </div>
-
-                          {/* Associated Commitments */}
-                          {commitmentsList.length > 0 && (
-                            <div className="space-y-2">
-                              <div className="font-mono text-[9px] text-zinc-400 tracking-widest uppercase">Associated Commitments:</div>
-                              {commitmentsList.map((cmt: any, i: number) => {
-                                const desc = cmt && typeof cmt === "object" ? cmt.description || cmt.title || "Commitment" : String(cmt);
-                                const debtor = cmt && typeof cmt === "object" ? cmt.debtor : "user";
-                                const status = cmt && typeof cmt === "object" ? cmt.status : "open";
-                                const cmtId = cmt && typeof cmt === "object" ? cmt.id : null;
-                                return (
-                                  <div key={i} className="p-2.5 rounded bg-black/40 text-sm font-sans text-zinc-200 flex items-center justify-between gap-2.5 border border-white/5">
-                                    <div className="flex items-center gap-2">
-                                      <span>{debtor === "user" ? "📤" : "📥"}</span>
-                                      <span>{desc}</span>
-                                    </div>
-                                    <div className="flex items-center gap-2 shrink-0">
-                                      <span className="font-mono text-[9px] text-cyan-400 uppercase">
-                                        {debtor === "user" ? "You Promised" : "Contact"}
-                                      </span>
-                                      {cmtId && status === "open" && (
-                                        <button
-                                          onClick={() => handleFulfillCommitment(cmtId, desc)}
-                                          className="px-2 py-0.5 rounded bg-emerald-950/70 hover:bg-emerald-900 border border-emerald-500/40 text-emerald-300 font-mono text-[9px] uppercase transition-colors"
-                                          title="Mark commitment fulfilled"
-                                        >
-                                          ✓ Fulfill
-                                        </button>
-                                      )}
-                                    </div>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          )}
+                        <h4 className="font-serif text-lg text-white font-medium truncate">
+                          {latestAction?.action_type?.replace(/_/g, " ").toUpperCase() || "UNPLUG CLOTHES IRON"}
+                        </h4>
+                        <p className="text-xs text-zinc-300 font-sans italic line-clamp-2 bg-black/40 p-2 rounded border border-white/5">
+                          "{latestAction?.raw_statement || "Ho appena staccato il ferro da stiro prima di uscire."}"
+                        </p>
+                        <div className="flex items-center justify-between pt-1">
+                          <span className="font-mono text-[9px] text-emerald-400">
+                            {Math.round((latestAction?.confidence || 0.98) * 100)}% CONFIDENCE
+                          </span>
+                          <button
+                            onClick={() => handleTabSelect("peace")}
+                            className="text-xs font-mono text-cyan-400 hover:underline flex items-center gap-1"
+                          >
+                            <span>Inspect Peace Ledger</span>
+                            <span>→</span>
+                          </button>
                         </div>
-                      )}
+                      </div>
 
-                      {/* TAB 3: SOCIAL COMMITMENTS CARD */}
-                      {template === "SOCIAL_COMMITMENTS_CARD" && (
-                        <div className="space-y-4">
-                          <div className="flex items-center justify-between text-xs font-mono text-zinc-400 pb-2 border-b border-white/5">
-                            <span>TOTAL COMMITMENTS: {commitmentsList.length}</span>
-                            <span className="text-cyan-300">BILATERAL PROMISES</span>
-                          </div>
-
-                          {commitmentsList.length > 0 ? (
-                            <div className="space-y-2 max-h-[300px] overflow-y-auto pr-1">
-                              {commitmentsList.map((cmt: any, i: number) => {
-                                const desc = cmt && typeof cmt === "object" ? cmt.description || cmt.title || "Commitment" : String(cmt);
-                                const debtor = cmt && typeof cmt === "object" ? cmt.debtor : "user";
-                                const contactName = cmt && typeof cmt === "object" ? cmt.contact_name : "Contact";
-                                const status = cmt && typeof cmt === "object" ? cmt.status : "open";
-                                const cmtId = cmt && typeof cmt === "object" ? cmt.id : null;
-
-                                return (
-                                  <div key={i} className="p-3 rounded-lg bg-black/40 border border-white/5 flex items-center justify-between gap-3">
-                                    <div className="flex items-center gap-2.5 flex-1 min-w-0">
-                                      <span className="text-base shrink-0">{debtor === "user" ? "📤" : "📥"}</span>
-                                      <div className="min-w-0 flex-1">
-                                        <div className="text-sm font-sans text-zinc-100 truncate">{desc}</div>
-                                        <div className="text-[10px] font-mono text-zinc-400 mt-0.5">
-                                          {debtor === "user" ? `You promised to ${contactName || "contact"}` : `${contactName || "Contact"} promised you`}
-                                        </div>
-                                      </div>
-                                    </div>
-
-                                    <div className="flex items-center gap-2 shrink-0">
-                                      <span className={`font-mono text-[9px] uppercase font-bold px-2 py-0.5 rounded ${
-                                        status === "fulfilled"
-                                          ? "bg-emerald-950/80 text-emerald-300 border border-emerald-500/30"
-                                          : "bg-amber-950/80 text-amber-300 border border-amber-500/30"
-                                      }`}>
-                                        {status}
-                                      </span>
-
-                                      {cmtId && status === "open" && (
-                                        <button
-                                          onClick={() => handleFulfillCommitment(cmtId, desc)}
-                                          className="px-2.5 py-1 rounded bg-emerald-950/70 hover:bg-emerald-900 border border-emerald-500/40 text-emerald-300 font-mono text-[9px] tracking-wider uppercase transition-colors"
-                                          title="Mark commitment fulfilled"
-                                        >
-                                          ✓ Fulfill
-                                        </button>
-                                      )}
-                                    </div>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          ) : (
-                            <div className="text-center py-8 text-zinc-500 font-mono text-sm">
-                              No active bilateral commitments on record.
-                            </div>
-                          )}
+                      {/* Daily Routines Card */}
+                      <div className="p-4 rounded-xl bg-[#12141a] border border-white/10 hover:border-amber-500/40 transition-colors space-y-2.5">
+                        <div className="flex items-center justify-between">
+                          <span className="font-mono text-[9px] text-amber-400 tracking-wider uppercase font-bold flex items-center gap-1.5">
+                            <span className="w-2 h-2 rounded-full bg-amber-400" />
+                            DAILY ROUTINES CHECKLIST
+                          </span>
+                          <span className="font-mono text-[9px] text-zinc-400">
+                            {completedTasks} / {tasks.length} DONE
+                          </span>
                         </div>
-                      )}
-
-                      {/* TAB 4: ACTION VERIFIED BADGE (Peace of Mind) */}
-                      {template === "ACTION_VERIFIED_BADGE" && (
-                        <div className="space-y-4">
-                          <div className={`p-5 rounded-xl border space-y-3 ${
-                            singleActionStatus === "verified"
-                              ? "bg-gradient-to-r from-emerald-950/30 to-black/60 border-emerald-500/40"
-                              : "bg-gradient-to-r from-amber-950/30 to-black/60 border-amber-500/40"
-                          }`}>
-                            <div className="flex items-center justify-between">
-                              <span className={`flex items-center gap-2 font-mono text-xs font-bold tracking-wider uppercase ${
-                                singleActionStatus === "verified" ? "text-emerald-400" : "text-amber-400"
-                              }`}>
-                                <span className={`w-2.5 h-2.5 rounded-full animate-pulse ${
-                                  singleActionStatus === "verified" ? "bg-emerald-400" : "bg-amber-400"
-                                }`} />
-                                {singleActionStatus === "verified" ? "ACOUSTICALLY VERIFIED ANCHOR" : "PENDING REASSURANCE // UNVERIFIED"}
-                              </span>
-                              <span className="font-mono text-xs text-zinc-400">
-                                {singleElapsed}
-                              </span>
-                            </div>
-
-                            <div className="font-serif text-2xl text-white">
-                              {singleActionType.replace(/_/g, " ").toUpperCase()}
-                            </div>
-
-                            {singleRawStatement ? (
-                              <div className="p-3 rounded-lg bg-black/60 border border-white/5 font-sans italic text-sm text-zinc-200">
-                                "{singleRawStatement}"
-                              </div>
-                            ) : (
-                              <div className="p-3 rounded-lg bg-black/60 border border-white/5 font-sans italic text-sm text-zinc-400">
-                                No raw spoken utterance on record for this action query yet.
-                              </div>
-                            )}
-
-                            <div className="flex items-center justify-between pt-2 border-t border-white/5 text-xs font-mono">
-                              <span className="text-zinc-400">ACOUSTIC CERTAINTY:</span>
-                              <span className={`font-bold ${
-                                singleActionStatus === "verified" ? "text-emerald-400" : "text-amber-400"
-                              }`}>
-                                {Math.round(singleConfidence * 100)}% CONFIDENCE
-                              </span>
-                            </div>
-                          </div>
-
-                          {/* Quick domestic checks */}
-                          <div className="space-y-2 pt-2 border-t border-white/5">
-                            <div className="font-mono text-[9px] text-zinc-400 tracking-widest uppercase">
-                              Ask Alexa Reassurance Query:
-                            </div>
-                            <div className="flex flex-wrap gap-2">
-                              {[
-                                { q: "unplug_clothes_iron", label: "Unplug Clothes Iron" },
-                                { q: "turn_off_kitchen_stove", label: "Turn off Kitchen Stove" },
-                                { q: "lock_front_door", label: "Lock Front Door" },
-                                { q: "take_evening_medication", label: "Evening Medication" },
-                              ].map((item, i) => (
-                                <button
-                                  key={i}
-                                  onClick={() => handleVerifyQuery(item.q)}
-                                  className="px-3 py-1.5 rounded-lg bg-black/40 hover:bg-white/5 border border-white/10 text-zinc-300 font-mono text-[10px] tracking-wider transition-colors"
-                                >
-                                  🛡️ {item.label}
-                                </button>
-                              ))}
-                            </div>
-                          </div>
-                        </div>
-                      )}
-
-                      {/* TAB 5: DAILY ACTIONS RECAP */}
-                      {template === "DAILY_ACTIONS_RECAP" && (
-                        <div className="space-y-4">
-                          {/* Metrics summary */}
-                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center">
-                            <div className="p-2.5 rounded-lg bg-black/40 border border-white/5">
-                              <div className="font-mono text-lg font-bold text-white">{plannedTotalCount}</div>
-                              <div className="font-mono text-[8px] text-zinc-400 uppercase tracking-wider">PLANNED TOTAL</div>
-                            </div>
-                            <div className="p-2.5 rounded-lg bg-black/40 border border-white/5">
-                              <div className="font-mono text-lg font-bold text-emerald-400">{plannedCompletedCount}</div>
-                              <div className="font-mono text-[8px] text-zinc-400 uppercase tracking-wider">COMPLETED</div>
-                            </div>
-                            <div className="p-2.5 rounded-lg bg-black/40 border border-white/5">
-                              <div className="font-mono text-lg font-bold text-amber-400">{plannedPendingCount}</div>
-                              <div className="font-mono text-[8px] text-zinc-400 uppercase tracking-wider">PENDING</div>
-                            </div>
-                            <div className="p-2.5 rounded-lg bg-black/40 border border-white/5">
-                              <div className="font-mono text-lg font-bold text-cyan-400">{spontaneousTotalCount}</div>
-                              <div className="font-mono text-[8px] text-zinc-400 uppercase tracking-wider">SPONTANEOUS</div>
-                            </div>
-                          </div>
-
-                          {/* Planned routines checklist */}
-                          {tasksList.length > 0 && (
-                            <div className="space-y-2">
-                              <div className="font-mono text-[9px] text-zinc-400 tracking-widest uppercase">Planned Routines Checklist:</div>
-                              <div className="space-y-1.5 max-h-[160px] overflow-y-auto pr-1">
-                                {tasksList.map((task: any, i: number) => {
-                                  const isComp = task.status === "completed";
-                                  return (
-                                    <div key={i} className="p-2.5 rounded bg-black/40 border border-white/5 flex items-center justify-between gap-2">
-                                      <div className="flex items-center gap-2 truncate">
-                                        <button
-                                          onClick={() => handleToggleRoutine(task.id, task.title)}
-                                          className={`w-4 h-4 rounded flex items-center justify-center font-mono text-[10px] border transition-colors ${
-                                            isComp ? "bg-emerald-500 border-emerald-400 text-black font-bold" : "border-white/30 hover:border-white"
-                                          }`}
-                                        >
-                                          {isComp ? "✓" : ""}
-                                        </button>
-                                        <span className={`text-body-sm font-sans truncate ${isComp ? "line-through text-zinc-500" : "text-zinc-200"}`}>
-                                          {task.title || task.headline}
-                                        </span>
-                                      </div>
-                                      <span className="font-mono text-[9px] text-zinc-400 shrink-0">
-                                        {task.scheduled_time || task.status || "PENDING"}
-                                      </span>
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            </div>
-                          )}
-
-                          {/* Spontaneous actions ledger */}
-                          {actionsList.length > 0 && (
-                            <div className="space-y-2 pt-2 border-t border-white/5">
-                              <div className="font-mono text-[9px] text-zinc-400 tracking-widest uppercase">Chronological Ambient Timeline:</div>
-                              <div className="space-y-1.5 max-h-[140px] overflow-y-auto pr-1">
-                                {actionsList.map((act: any, i: number) => (
-                                  <div key={i} className="p-2 rounded bg-black/40 border border-white/5 flex items-center justify-between text-xs font-sans text-zinc-300">
-                                    <span className="truncate pr-2">
-                                      {act.action || act.raw_statement || act.title || (typeof act.action_type === "string" ? act.action_type.replace(/_/g, " ") : "Action")}
-                                    </span>
-                                    <span className="font-mono text-[9px] text-emerald-400 shrink-0">
-                                      {act.time || "VERIFIED"}
-                                    </span>
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      )}
-
-                      {/* TAB 6: UPCOMING TASKS VIEWER */}
-                      {template === "UPCOMING_TASKS_VIEWER" && (
-                        <div className="space-y-4">
-                          <div className="flex items-center justify-between text-xs font-mono text-zinc-400 pb-2 border-b border-white/5">
-                            <span>MONITORED ROUTINES ({tasksList.length})</span>
-                            <span className="text-amber-300">INTERACTIVE CHECKS</span>
-                          </div>
-
-                          {tasksList.length > 0 ? (
-                            <div className="space-y-2 max-h-[300px] overflow-y-auto pr-1">
-                              {tasksList.map((task: any, i: number) => {
-                                const isComp = task.status === "completed";
-                                return (
-                                  <div key={i} className="p-3 rounded-lg bg-black/40 border border-white/5 flex items-center justify-between gap-3">
-                                    <div className="flex items-center gap-3 truncate flex-1">
-                                      <button
-                                        onClick={() => handleToggleRoutine(task.id, task.title)}
-                                        className={`w-5 h-5 rounded flex items-center justify-center font-mono text-xs border transition-colors ${
-                                          isComp ? "bg-emerald-500 border-emerald-400 text-black font-bold" : "border-white/30 hover:border-emerald-400"
-                                        }`}
-                                      >
-                                        {isComp ? "✓" : ""}
-                                      </button>
-                                      <div className="truncate min-w-0">
-                                        <div className={`text-sm font-sans truncate ${isComp ? "line-through text-zinc-500" : "text-zinc-100"}`}>
-                                          {task.title || task.headline}
-                                        </div>
-                                        <div className="text-[10px] font-mono text-zinc-400">
-                                          Domain: {task.domain || "routine"} • Recurrence: {task.recurrence || "daily"}
-                                        </div>
-                                      </div>
-                                    </div>
-
-                                    <span className="font-mono text-[10px] text-amber-400 uppercase font-bold shrink-0">
-                                      {task.scheduled_time || task.status || "PENDING"}
-                                    </span>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          ) : (
-                            <div className="text-center py-8 text-zinc-500 font-mono text-sm">
-                              No upcoming routine tasks scheduled.
-                            </div>
-                          )}
-                        </div>
-                      )}
-
-                      {/* TAB 7: SESSION DOSSIER VIEWER */}
-                      {template === "SESSION_DOSSIER_VIEWER" && (
-                        <div className="space-y-4">
-                          <div className="p-4 rounded-xl bg-black/40 border border-white/5 space-y-2">
-                            <div className="flex items-center justify-between">
-                              <span className="text-xs font-mono text-cyan-300 uppercase tracking-widest font-bold">
-                                📍 {sessionLocationName}
-                              </span>
-                              <div className="flex items-center gap-2">
-                                <span className={`font-mono text-[9px] px-2 py-0.5 rounded uppercase font-bold ${
-                                  sessionStatus === "active" ? "bg-emerald-950/80 text-emerald-300 border border-emerald-500/30" : "bg-zinc-800 text-zinc-400"
-                                }`}>
-                                  {sessionStatus}
-                                </span>
-                                {sessionStatus === "active" && sessionId && (
+                        {tasks.length > 0 ? (
+                          <div className="space-y-1.5">
+                            {tasks.slice(0, 2).map((task) => (
+                              <div
+                                key={task.id}
+                                className="flex items-center justify-between p-2 rounded bg-black/40 border border-white/5 text-xs"
+                              >
+                                <div className="flex items-center gap-2 truncate">
                                   <button
-                                    onClick={() => handleConcludeSession(sessionId)}
-                                    className="px-2.5 py-0.5 rounded bg-amber-950/70 hover:bg-amber-900 border border-amber-500/40 text-amber-300 font-mono text-[9px] uppercase tracking-wider transition-colors"
+                                    onClick={() => handleToggleRoutineClick(task)}
+                                    className={`w-4 h-4 rounded flex items-center justify-center font-mono text-[10px] border transition-colors ${
+                                      task.status === "completed"
+                                        ? "bg-emerald-500 border-emerald-400 text-black font-bold"
+                                        : "border-white/30 hover:border-white"
+                                    }`}
                                   >
-                                    🏁 Conclude
+                                    {task.status === "completed" ? "✓" : ""}
                                   </button>
-                                )}
+                                  <span className={`truncate ${task.status === "completed" ? "line-through text-zinc-500" : "text-zinc-200"}`}>
+                                    {task.title}
+                                  </span>
+                                </div>
+                                <span className="font-mono text-[9px] text-amber-400 shrink-0">
+                                  {task.scheduled_time || "SCHEDULED"}
+                                </span>
                               </div>
-                            </div>
-
-                            {synthesis && (
-                              <div className="text-xs font-sans text-zinc-300 leading-relaxed pt-1">
-                                {synthesis}
-                              </div>
-                            )}
+                            ))}
                           </div>
+                        ) : (
+                          <div className="text-zinc-500 font-mono text-xs py-3 text-center">
+                            No monitored routines active.
+                          </div>
+                        )}
+                        <div className="flex items-center justify-end pt-1">
+                          <button
+                            onClick={() => handleTabSelect("routines")}
+                            className="text-xs font-mono text-amber-400 hover:underline flex items-center gap-1"
+                          >
+                            <span>View All Routines</span>
+                            <span>→</span>
+                          </button>
+                        </div>
+                      </div>
 
-                          {/* Key discussion points */}
-                          {bullets.length > 0 && (
-                            <div className="space-y-1.5">
-                              <div className="font-mono text-[9px] text-zinc-400 tracking-widest uppercase">Discussion Points:</div>
-                              <ul className="space-y-1">
-                                {bullets.map((pt: string, i: number) => (
-                                  <li key={i} className="text-xs font-sans text-zinc-300 flex items-start gap-2">
-                                    <span className="text-cyan-400">•</span>
-                                    <span>{pt}</span>
-                                  </li>
-                                ))}
-                              </ul>
-                            </div>
-                          )}
-
-                          {/* Linked micro-events */}
-                          {linkedEvents.length > 0 && (
-                            <div className="space-y-2 pt-2 border-t border-white/5">
-                              <div className="font-mono text-[9px] text-zinc-400 tracking-widest uppercase">Linked Micro-Events:</div>
-                              <div className="space-y-1.5 max-h-[140px] overflow-y-auto pr-1">
-                                {linkedEvents.map((evt: any, i: number) => (
-                                  <div key={i} className="p-2 rounded bg-black/40 border border-white/5 flex items-center justify-between text-xs">
-                                    <span className="text-zinc-200 truncate pr-2">
-                                      {evt.headline || evt.record_id}
-                                    </span>
-                                    <span className="font-mono text-[8px] text-cyan-400 uppercase shrink-0">
-                                      {evt.event_type}
-                                    </span>
-                                  </div>
-                                ))}
+                      {/* Social Rolodex Card */}
+                      <div className="p-4 rounded-xl bg-[#12141a] border border-white/10 hover:border-cyan-500/40 transition-colors space-y-2.5">
+                        <div className="flex items-center justify-between">
+                          <span className="font-mono text-[9px] text-cyan-400 tracking-wider uppercase font-bold flex items-center gap-1.5">
+                            <span className="w-2 h-2 rounded-full bg-cyan-400" />
+                            SOCIAL ROLODEX PROFILE
+                          </span>
+                          <span className="font-mono text-[9px] text-zinc-500">
+                            {contacts.length} CONTACTS
+                          </span>
+                        </div>
+                        {selectedContact ? (
+                          <div className="space-y-1.5">
+                            <div className="flex items-center gap-2">
+                              <div className="w-7 h-7 rounded-full bg-cyan-500/20 border border-cyan-400 text-cyan-300 font-mono text-xs font-bold flex items-center justify-center">
+                                {selectedContact.name ? selectedContact.name.charAt(0).toUpperCase() : "C"}
+                              </div>
+                              <div>
+                                <h4 className="font-serif text-base text-white font-medium leading-tight">
+                                  {selectedContact.name}
+                                </h4>
+                                <div className="text-[10px] font-mono text-zinc-400 truncate">
+                                  {selectedContact.company_or_role || selectedContact.web_profile?.headline || "Executive Contact"}
+                                </div>
                               </div>
                             </div>
-                          )}
-                          {!synthesis && bullets.length === 0 && linkedEvents.length === 0 && (
-                            <div className="text-center py-8 text-zinc-500 font-mono text-sm">
-                              No macro session intelligence recorded yet.
+                            <div className="text-xs text-zinc-300 font-sans line-clamp-1">
+                              {selectedContact.web_profile?.bio_summary || "Autonomous web profile indexed."}
                             </div>
-                          )}
+                          </div>
+                        ) : (
+                          <div className="text-zinc-500 font-mono text-xs py-3 text-center">
+                            No contacts indexed yet.
+                          </div>
+                        )}
+                        <div className="flex items-center justify-end pt-1">
+                          <button
+                            onClick={() => handleTabSelect("social")}
+                            className="text-xs font-mono text-cyan-400 hover:underline flex items-center gap-1"
+                          >
+                            <span>Open Social Rolodex</span>
+                            <span>→</span>
+                          </button>
                         </div>
-                      )}
+                      </div>
+
+                      {/* Topic Dossiers Card */}
+                      <div className="p-4 rounded-xl bg-[#12141a] border border-white/10 hover:border-purple-500/40 transition-colors space-y-2.5">
+                        <div className="flex items-center justify-between">
+                          <span className="font-mono text-[9px] text-purple-400 tracking-wider uppercase font-bold flex items-center gap-1.5">
+                            <span className="w-2 h-2 rounded-full bg-purple-400" />
+                            SYNTHESIZED TOPIC DOSSIER
+                          </span>
+                          <span className="font-mono text-[9px] text-zinc-500">
+                            {topics.length} COMPILED
+                          </span>
+                        </div>
+                        {selectedTopic ? (
+                          <div className="space-y-1.5">
+                            <h4 className="font-serif text-base text-white font-medium truncate">
+                              {selectedTopic.topic_title}
+                            </h4>
+                            <p className="text-xs text-zinc-300 font-sans line-clamp-2 bg-black/40 p-2 rounded border border-white/5">
+                              {selectedTopic.explanatory_synthesis || selectedTopic.executive_summary?.[0] || "Synthesized analysis recorded."}
+                            </p>
+                          </div>
+                        ) : (
+                          <div className="text-zinc-500 font-mono text-xs py-3 text-center">
+                            No technical briefings recorded yet.
+                          </div>
+                        )}
+                        <div className="flex items-center justify-end pt-1">
+                          <button
+                            onClick={() => handleTabSelect("topics")}
+                            className="text-xs font-mono text-purple-400 hover:underline flex items-center gap-1"
+                          >
+                            <span>Read Deep Briefing</span>
+                            <span>→</span>
+                          </button>
+                        </div>
+                      </div>
                     </div>
                   </div>
 
                   {/* Alexa Voice Speech Output Footer */}
-                  <div className="mt-6 pt-4 border-t border-white/5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-                    <div className="flex items-center gap-3">
-                      <div className="w-9 h-9 rounded-full bg-cyan-500/20 border border-cyan-400/40 flex items-center justify-center text-cyan-300 shrink-0">
+                  <div className="mt-4 pt-3 border-t border-white/10 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-8 h-8 rounded-full bg-cyan-500/20 border border-cyan-400/40 flex items-center justify-center text-cyan-300 shrink-0">
                         💬
                       </div>
                       <div>
                         <div className="font-mono text-[8px] text-zinc-400 tracking-widest uppercase">
                           Alexa Voice Output
                         </div>
-                        <div className="font-sans text-xs text-zinc-200 italic max-w-lg">
-                          "{spokenText}"
+                        <div className="font-sans text-xs text-zinc-200 italic max-w-xl truncate">
+                          "EXAMEN Status: Domestic posture is all clear. {actions.length} verified actions, {completedTasks}/{tasks.length} routines completed."
                         </div>
                       </div>
                     </div>
 
-                    {/* Quick Alexa Prompts */}
-                    <div className="flex flex-wrap gap-2">
+                    <div className="flex flex-wrap gap-1.5">
                       <button
-                        onClick={() =>
-                          handleQuickPrompt(
-                            "Alexa says: Yes, your clothes iron is verified unplugged and cold.",
-                            "ACTION_VERIFIED_BADGE",
-                            "unplug_clothes_iron"
-                          )
-                        }
-                        className="px-3 py-1 rounded-full bg-zinc-800/80 hover:bg-zinc-700 text-zinc-300 font-mono text-[9px] tracking-wider transition-colors"
+                        onClick={() => {
+                          speakAlexaReassurance("Yes, your clothes iron is confirmed unplugged and cold.");
+                          handleTabSelect("peace");
+                        }}
+                        className="px-2.5 py-1 rounded-full bg-zinc-800/80 hover:bg-zinc-700 text-zinc-300 font-mono text-[9px] tracking-wider transition-colors"
                       >
                         "Did I unplug iron?"
                       </button>
                       <button
-                        onClick={() =>
-                          handleQuickPrompt(
-                            "Alexa says: Here is the briefing for AWS Bedrock AgentCore Runtime.",
-                            "DEEP_BRIEFING_VIEWER",
-                            "AgentCore"
-                          )
-                        }
-                        className="px-3 py-1 rounded-full bg-zinc-800/80 hover:bg-zinc-700 text-zinc-300 font-mono text-[9px] tracking-wider transition-colors"
+                        onClick={() => {
+                          speakAlexaReassurance(`You have ${pendingTasks} pending routines remaining today.`);
+                          handleTabSelect("routines");
+                        }}
+                        className="px-2.5 py-1 rounded-full bg-zinc-800/80 hover:bg-zinc-700 text-zinc-300 font-mono text-[9px] tracking-wider transition-colors"
                       >
-                        "What is AgentCore?"
+                        "Routine Check"
                       </button>
                       <button
-                        onClick={() =>
-                          handleQuickPrompt(
-                            "Alexa says: Here is your daily activity and routine recap.",
-                            "DAILY_ACTIONS_RECAP"
-                          )
-                        }
-                        className="px-3 py-1 rounded-full bg-zinc-800/80 hover:bg-zinc-700 text-zinc-300 font-mono text-[9px] tracking-wider transition-colors"
+                        onClick={() => {
+                          speakAlexaReassurance("Opening speech simulator on Echo Show.");
+                          handleTabSelect("simulator");
+                        }}
+                        className="px-2.5 py-1 rounded-full bg-cyan-950/80 border border-cyan-500/40 text-cyan-300 font-mono text-[9px] tracking-wider transition-colors"
                       >
-                        "Daily Recap"
-                      </button>
-                      <button
-                        onClick={() =>
-                          handleQuickPrompt(
-                            "Alexa says: Displaying active bilateral social commitments.",
-                            "SOCIAL_COMMITMENTS_CARD"
-                          )
-                        }
-                        className="px-3 py-1 rounded-full bg-zinc-800/80 hover:bg-zinc-700 text-zinc-300 font-mono text-[9px] tracking-wider transition-colors"
-                      >
-                        "Commitments"
+                        "Run Simulator"
                       </button>
                     </div>
                   </div>
                 </div>
-              ) : (
-                <div className="text-center py-16 text-zinc-500 font-mono text-sm">
-                  No preview card data available for this template.
+              )}
+
+              {/* TAB 2: PEACE OF MIND */}
+              {activeTab === "peace" && (
+                <div className="space-y-4 flex-1 flex flex-col justify-between animate-in fade-in duration-150">
+                  <div className="space-y-4">
+                    {/* Primary Highlighted Verified Action Card */}
+                    <div className="p-5 rounded-2xl bg-gradient-to-r from-emerald-950/40 via-black/60 to-black/80 border-2 border-emerald-500/50 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <span className="flex items-center gap-2 font-mono text-xs font-bold tracking-wider text-emerald-400 uppercase">
+                          <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping" />
+                          ACOUSTICALLY VERIFIED ANCHOR // DOMESTIC SAFETY
+                        </span>
+                        <span className="font-mono text-xs text-zinc-400">
+                          {latestAction?.elapsed_time_human || "just now"}
+                        </span>
+                      </div>
+
+                      <div className="font-serif text-2xl sm:text-3xl text-white font-bold">
+                        {latestAction?.action_type?.replace(/_/g, " ").toUpperCase() || "UNPLUG CLOTHES IRON"}
+                      </div>
+
+                      <div className="p-3.5 rounded-xl bg-black/60 border border-emerald-500/20 font-sans italic text-sm text-zinc-200">
+                        "{latestAction?.raw_statement || "Ho appena staccato il ferro da stiro prima di uscire."}"
+                      </div>
+
+                      <div className="flex items-center justify-between pt-2 border-t border-white/10 text-xs font-mono">
+                        <span className="text-zinc-400">ACOUSTIC CERTAINTY:</span>
+                        <span className="text-emerald-400 font-bold">
+                          {Math.round((latestAction?.confidence || 0.98) * 100)}% CONFIDENCE // GROUNDED
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Quick Domestic Reassurance Check Buttons */}
+                    <div className="space-y-2">
+                      <div className="font-mono text-[9px] text-zinc-400 tracking-widest uppercase">
+                        Ask Alexa Peace Reassurance:
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {[
+                          { q: "Clothes Iron", statement: "I just unplugged the clothes iron from the wall outlet." },
+                          { q: "Kitchen Stove", statement: "The gas stovetop burners are completely off and cold." },
+                          { q: "Front Door Lock", statement: "I double locked the front deadbolt lock." },
+                          { q: "Evening Medication", statement: "I just took my evening medication pills." },
+                        ].map((item, i) => (
+                          <button
+                            key={i}
+                            onClick={() => handleCorroborateActionQuick(item.statement)}
+                            className="px-3.5 py-2 rounded-xl bg-black/50 hover:bg-emerald-950/60 border border-white/10 hover:border-emerald-500/40 text-zinc-200 font-mono text-xs tracking-wider transition-all flex items-center gap-2 cursor-pointer"
+                          >
+                            <span>🛡️</span>
+                            <span>{item.q} Check</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Recent Acoustic Ledger List */}
+                    <div className="space-y-2 pt-2 border-t border-white/10">
+                      <div className="font-mono text-[9px] text-zinc-400 tracking-widest uppercase">
+                        Recent Verified Ledger Entries ({actions.length}):
+                      </div>
+                      <div className="space-y-1.5 max-h-[160px] overflow-y-auto pr-1">
+                        {actions.map((act) => (
+                          <div
+                            key={act.id}
+                            className="p-2.5 rounded-lg bg-black/40 border border-white/5 flex items-center justify-between text-xs font-sans gap-2"
+                          >
+                            <div className="truncate flex-1">
+                              <span className="font-semibold text-white mr-2">
+                                {act.action_type.replace(/_/g, " ").toUpperCase()}:
+                              </span>
+                              <span className="text-zinc-300 italic">"{act.raw_statement}"</span>
+                            </div>
+                            <span className="font-mono text-[9px] text-emerald-400 shrink-0">
+                              {act.elapsed_time_human || "VERIFIED"}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="pt-3 border-t border-white/10 flex items-center justify-between">
+                    <span className="text-xs font-mono text-zinc-400">
+                      Acoustic Sensor Mesh: <strong className="text-emerald-400">ONLINE</strong>
+                    </span>
+                    <button
+                      onClick={() =>
+                        speakAlexaReassurance(
+                          `Alexa reassurance: ${latestAction?.action_type || "Clothes iron"} is verified completed with ${Math.round((latestAction?.confidence || 0.98) * 100)} percent certainty.`
+                        )
+                      }
+                      className="px-4 py-1.5 rounded-full bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/40 text-emerald-300 font-mono text-xs uppercase tracking-wider font-bold transition-colors"
+                    >
+                      🔊 Speak Acoustic Confirmation
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* TAB 3: DAILY ROUTINES */}
+              {activeTab === "routines" && (
+                <div className="space-y-4 flex-1 flex flex-col justify-between animate-in fade-in duration-150">
+                  <div className="space-y-4">
+                    {/* 4 Summary Stats */}
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center">
+                      <div className="p-2.5 rounded-xl bg-black/40 border border-white/10">
+                        <div className="font-mono text-xl font-bold text-white">{tasks.length}</div>
+                        <div className="font-mono text-[8px] text-zinc-400 uppercase tracking-wider">PLANNED TOTAL</div>
+                      </div>
+                      <div className="p-2.5 rounded-xl bg-black/40 border border-white/10">
+                        <div className="font-mono text-xl font-bold text-emerald-400">{completedTasks}</div>
+                        <div className="font-mono text-[8px] text-zinc-400 uppercase tracking-wider">COMPLETED</div>
+                      </div>
+                      <div className="p-2.5 rounded-xl bg-black/40 border border-white/10">
+                        <div className="font-mono text-xl font-bold text-amber-400">{pendingTasks}</div>
+                        <div className="font-mono text-[8px] text-zinc-400 uppercase tracking-wider">PENDING</div>
+                      </div>
+                      <div className="p-2.5 rounded-xl bg-black/40 border border-white/10">
+                        <div className="font-mono text-xl font-bold text-cyan-400">{actions.length}</div>
+                        <div className="font-mono text-[8px] text-zinc-400 uppercase tracking-wider">SPONTANEOUS</div>
+                      </div>
+                    </div>
+
+                    {/* Filter Pills */}
+                    <div className="flex items-center gap-2 pb-1 border-b border-white/5">
+                      {(["ALL", "PENDING", "COMPLETED"] as const).map((f) => (
+                        <button
+                          key={f}
+                          onClick={() => setRoutineFilter(f)}
+                          className={`px-3 py-1 rounded-lg font-mono text-[10px] uppercase tracking-wider transition-colors ${
+                            routineFilter === f
+                              ? "bg-amber-400 text-black font-bold"
+                              : "bg-black/40 text-zinc-400 hover:text-white"
+                          }`}
+                        >
+                          {f} ({f === "ALL" ? tasks.length : f === "PENDING" ? pendingTasks : completedTasks})
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Monitored Routines Checklist */}
+                    <div className="space-y-2 max-h-[220px] overflow-y-auto pr-1">
+                      {tasks
+                        .filter((t) => {
+                          if (routineFilter === "PENDING") return t.status !== "completed";
+                          if (routineFilter === "COMPLETED") return t.status === "completed";
+                          return true;
+                        })
+                        .map((task) => {
+                          const isComp = task.status === "completed";
+                          return (
+                            <div
+                              key={task.id}
+                              className="p-3 rounded-xl bg-black/40 border border-white/10 flex items-center justify-between gap-3 hover:border-white/20 transition-colors"
+                            >
+                              <div className="flex items-center gap-3 truncate flex-1">
+                                <button
+                                  onClick={() => handleToggleRoutineClick(task)}
+                                  className={`w-6 h-6 rounded-lg flex items-center justify-center font-mono text-xs border transition-colors shrink-0 ${
+                                    isComp
+                                      ? "bg-emerald-500 border-emerald-400 text-black font-bold"
+                                      : "border-white/30 hover:border-emerald-400 text-transparent"
+                                  }`}
+                                  title="Toggle routine completion"
+                                >
+                                  ✓
+                                </button>
+                                <div className="truncate min-w-0">
+                                  <div className={`text-sm font-sans truncate font-medium ${isComp ? "line-through text-zinc-500" : "text-zinc-100"}`}>
+                                    {task.title}
+                                  </div>
+                                  <div className="text-[10px] font-mono text-zinc-400 flex items-center gap-2">
+                                    <span className="uppercase text-cyan-400">{task.domain}</span>
+                                    <span>•</span>
+                                    <span>{task.scheduled_time || "DAILY"}</span>
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div className="flex items-center gap-2 shrink-0">
+                                <span
+                                  className={`font-mono text-[9px] uppercase font-bold px-2 py-0.5 rounded ${
+                                    isComp
+                                      ? "bg-emerald-950 text-emerald-300 border border-emerald-500/30"
+                                      : "bg-amber-950 text-amber-300 border border-amber-500/30"
+                                  }`}
+                                >
+                                  {task.status}
+                                </span>
+                              </div>
+                            </div>
+                          );
+                        })}
+                    </div>
+
+                    {/* Quick Add Routine Presets */}
+                    <div className="pt-2 border-t border-white/10 flex flex-wrap items-center gap-2">
+                      <span className="font-mono text-[9px] text-zinc-400 tracking-widest uppercase">Quick Add:</span>
+                      {[
+                        { title: "Turn off garden irrigation", time: "18:00" },
+                        { title: "Evening vitamins & water", time: "21:00" },
+                        { title: "Lock patio & garage doors", time: "22:30" },
+                      ].map((preset, i) => (
+                        <button
+                          key={i}
+                          onClick={() => handleCreateRoutineQuick(preset.title, preset.time)}
+                          className="px-2.5 py-1 rounded-lg bg-zinc-800/80 hover:bg-zinc-700 text-zinc-300 font-mono text-[10px] transition-colors"
+                        >
+                          + {preset.title}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="pt-3 border-t border-white/10 flex items-center justify-between">
+                    <span className="text-xs font-mono text-zinc-400">
+                      Echo Show Monitored Cadence: <strong className="text-amber-400">ACTIVE</strong>
+                    </span>
+                    <button
+                      onClick={() =>
+                        speakAlexaReassurance(
+                          `Alexa routines update: You have completed ${completedTasks} of ${tasks.length} daily routines.`
+                        )
+                      }
+                      className="px-4 py-1.5 rounded-full bg-amber-500/20 hover:bg-amber-500/30 border border-amber-400/40 text-amber-300 font-mono text-xs uppercase tracking-wider font-bold transition-colors"
+                    >
+                      🔊 Speak Daily Recap
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* TAB 4: SOCIAL ROLODEX */}
+              {activeTab === "social" && (
+                <div className="space-y-4 flex-1 flex flex-col justify-between animate-in fade-in duration-150">
+                  <div className="space-y-4">
+                    {/* Contact Carousel Selector */}
+                    {contacts.length > 0 && (
+                      <div className="flex items-center gap-2 overflow-x-auto hide-scrollbar pb-1">
+                        {contacts.map((c, idx) => (
+                          <button
+                            key={c.id || idx}
+                            onClick={() => setSelectedContactIndex(idx)}
+                            className={`px-3 py-1.5 rounded-xl font-mono text-xs whitespace-nowrap transition-all flex items-center gap-2 ${
+                              selectedContactIndex === idx
+                                ? "bg-cyan-500 text-black font-bold shadow-md"
+                                : "bg-black/40 text-zinc-400 hover:text-white border border-white/10"
+                            }`}
+                          >
+                            <span className="w-4 h-4 rounded-full bg-white/20 flex items-center justify-center text-[9px]">
+                              {c.name ? c.name.charAt(0) : "C"}
+                            </span>
+                            <span>{c.name}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+
+                    {selectedContact ? (
+                      <div className="p-5 rounded-2xl bg-[#12141a] border border-white/10 space-y-4">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex items-center gap-3">
+                            <div className="w-12 h-12 rounded-2xl bg-cyan-500/20 border-2 border-cyan-400 text-cyan-300 font-serif text-xl font-bold flex items-center justify-center shrink-0">
+                              {selectedContact.name ? selectedContact.name.charAt(0).toUpperCase() : "C"}
+                            </div>
+                            <div>
+                              <h3 className="font-serif text-2xl text-white font-bold leading-tight">
+                                {selectedContact.name}
+                              </h3>
+                              <div className="text-xs font-mono text-zinc-400 uppercase tracking-wider">
+                                {selectedContact.company_or_role || selectedContact.web_profile?.headline || "Executive Contact"}
+                              </div>
+                            </div>
+                          </div>
+
+                          <button
+                            onClick={() => handleEnrichContactClick(selectedContact.id || selectedContact.name, selectedContact.name)}
+                            className="px-3 py-1.5 rounded-xl bg-cyan-950/80 hover:bg-cyan-900 border border-cyan-500/40 text-cyan-300 font-mono text-[10px] uppercase tracking-wider shrink-0 transition-colors"
+                          >
+                            🔍 Enrich Profile
+                          </button>
+                        </div>
+
+                        {/* Bio summary */}
+                        <div className="text-sm font-sans text-zinc-200 leading-relaxed bg-black/40 p-3 rounded-xl border border-white/5">
+                          {selectedContact.web_profile?.bio_summary ||
+                            "Autonomous executive intelligence profile corroborated via live web search."}
+                        </div>
+
+                        {/* Expertise tags */}
+                        {selectedContact.web_profile?.areas_of_expertise && selectedContact.web_profile.areas_of_expertise.length > 0 && (
+                          <div className="flex flex-wrap gap-1.5">
+                            {selectedContact.web_profile.areas_of_expertise.map((tag, i) => (
+                              <span
+                                key={i}
+                                className="px-2 py-0.5 rounded bg-cyan-950/60 border border-cyan-500/20 text-cyan-300 font-mono text-[9px] uppercase"
+                              >
+                                #{tag}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+
+                        {/* Bilateral Commitments for this contact */}
+                        {selectedContact.commitments && selectedContact.commitments.length > 0 && (
+                          <div className="space-y-2 pt-2 border-t border-white/10">
+                            <div className="font-mono text-[9px] text-zinc-400 tracking-widest uppercase">
+                              Bilateral Commitments ({selectedContact.commitments.length}):
+                            </div>
+                            <div className="space-y-1.5">
+                              {selectedContact.commitments.map((cmt, i) => {
+                                const isObj = typeof cmt === "object" && cmt !== null;
+                                const desc = isObj ? cmt.description : String(cmt);
+                                const debtor = isObj ? cmt.debtor : "user";
+                                const status = isObj ? cmt.status : "open";
+                                const cmtId = isObj ? cmt.id : `cmt-${i}`;
+                                return (
+                                  <div
+                                    key={cmtId || i}
+                                    className="p-2.5 rounded-lg bg-black/60 border border-white/5 flex items-center justify-between text-xs font-sans gap-2"
+                                  >
+                                    <div className="flex items-center gap-2 truncate">
+                                      <span>{debtor === "user" ? "📤" : "📥"}</span>
+                                      <span className="text-zinc-200 truncate">{desc}</span>
+                                    </div>
+                                    <div className="flex items-center gap-2 shrink-0">
+                                      <span className="font-mono text-[9px] text-cyan-400 uppercase">
+                                        {debtor === "user" ? "You Promised" : "They Promised"}
+                                      </span>
+                                      {isObj && status === "open" && (
+                                        <button
+                                          onClick={() => handleToggleCommitmentClick(cmt.id, "fulfill")}
+                                          className="px-2 py-0.5 rounded bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-500/40 text-emerald-300 font-mono text-[9px] uppercase transition-colors"
+                                        >
+                                          ✓ Fulfill
+                                        </button>
+                                      )}
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="text-center py-12 text-zinc-500 font-mono text-sm">
+                        No contacts recorded in social rolodex.
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="pt-3 border-t border-white/10 flex items-center justify-between">
+                    <span className="text-xs font-mono text-zinc-400">
+                      CRM Ledger: <strong className="text-cyan-400">SYNCHRONIZED</strong>
+                    </span>
+                    {selectedContact && (
+                      <button
+                        onClick={() =>
+                          speakAlexaReassurance(
+                            `Executive profile for ${selectedContact.name}: ${selectedContact.web_profile?.bio_summary || "profile indexed."}`
+                          )
+                        }
+                        className="px-4 py-1.5 rounded-full bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-400/40 text-cyan-300 font-mono text-xs uppercase tracking-wider font-bold transition-colors"
+                      >
+                        🔊 Read Profile Aloud
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* TAB 5: TOPIC DOSSIERS */}
+              {activeTab === "topics" && (
+                <div className="space-y-4 flex-1 flex flex-col justify-between animate-in fade-in duration-150">
+                  <div className="space-y-4">
+                    {/* Topics Pill Selector */}
+                    {topics.length > 0 && (
+                      <div className="flex items-center gap-2 overflow-x-auto hide-scrollbar pb-1">
+                        {topics.map((t, idx) => (
+                          <button
+                            key={t.id || idx}
+                            onClick={() => setSelectedTopicIndex(idx)}
+                            className={`px-3 py-1.5 rounded-xl font-mono text-xs whitespace-nowrap transition-all ${
+                              selectedTopicIndex === idx
+                                ? "bg-purple-500 text-white font-bold shadow-md shadow-purple-500/30"
+                                : "bg-black/40 text-zinc-400 hover:text-white border border-white/10"
+                            }`}
+                          >
+                            {t.topic_title}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+
+                    {selectedTopic ? (
+                      <div className="p-5 rounded-2xl bg-[#12141a] border border-white/10 space-y-4">
+                        <div className="flex items-center justify-between">
+                          <span className="px-2.5 py-0.5 rounded bg-purple-950/80 border border-purple-500/30 text-purple-300 font-mono text-[9px] uppercase font-bold tracking-wider">
+                            {selectedTopic.context_type || "TECH STACK"}
+                          </span>
+                          <span className="font-mono text-[9px] text-zinc-500">
+                            {selectedTopic.created_at?.substring(0, 10) || "LIVE"}
+                          </span>
+                        </div>
+
+                        <h3 className="font-serif text-2xl text-white font-bold">
+                          {selectedTopic.topic_title}
+                        </h3>
+
+                        {/* Synthesis */}
+                        {selectedTopic.explanatory_synthesis && (
+                          <div className="p-3.5 rounded-xl bg-amber-950/20 border border-amber-500/30 text-amber-200 font-sans text-sm leading-relaxed">
+                            ⚡ <strong className="font-mono text-[10px] tracking-wider uppercase text-amber-300 mr-1">Thesis:</strong>
+                            {selectedTopic.explanatory_synthesis}
+                          </div>
+                        )}
+
+                        {/* Bullets */}
+                        {selectedTopic.executive_summary && selectedTopic.executive_summary.length > 0 && (
+                          <div className="space-y-1.5">
+                            <div className="font-mono text-[9px] text-zinc-400 tracking-widest uppercase">Key Insights:</div>
+                            <ul className="space-y-1 text-xs text-zinc-200 font-sans">
+                              {selectedTopic.executive_summary.map((b, i) => (
+                                <li key={i} className="flex items-start gap-2">
+                                  <span className="text-cyan-400 font-bold">•</span>
+                                  <span>{b}</span>
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+
+                        {/* Web Sources */}
+                        {selectedTopic.web_sources && selectedTopic.web_sources.length > 0 && (
+                          <div className="pt-2 border-t border-white/10 flex flex-wrap gap-2">
+                            <span className="font-mono text-[9px] text-zinc-400 uppercase tracking-wider">Sources:</span>
+                            {selectedTopic.web_sources.slice(0, 3).map((src, i) => (
+                              <a
+                                key={i}
+                                href={src}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-[10px] font-mono text-purple-300 hover:underline truncate max-w-xs"
+                              >
+                                🔗 {src}
+                              </a>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="text-center py-12 text-zinc-500 font-mono text-sm">
+                        No technical research dossiers compiled yet.
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="pt-3 border-t border-white/10 flex items-center justify-between">
+                    <span className="text-xs font-mono text-zinc-400">
+                      Research Engine: <strong className="text-purple-400">AWS BEDROCK + DUCKDUCKGO</strong>
+                    </span>
+                    {selectedTopic && (
+                      <button
+                        onClick={() =>
+                          speakAlexaReassurance(
+                            `Briefing for ${selectedTopic.topic_title}: ${selectedTopic.explanatory_synthesis || selectedTopic.executive_summary?.[0] || "Analysis complete."}`
+                          )
+                        }
+                        className="px-4 py-1.5 rounded-full bg-purple-500/20 hover:bg-purple-500/30 border border-purple-400/40 text-purple-300 font-mono text-xs uppercase tracking-wider font-bold transition-colors"
+                      >
+                        🔊 Read Dossier Aloud
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* TAB 6: AMBIENT SIMULATOR */}
+              {activeTab === "simulator" && (
+                <div className="space-y-4 flex-1 flex flex-col justify-between animate-in fade-in duration-150">
+                  <div className="space-y-4">
+                    {/* Presets Bar */}
+                    <div className="space-y-2">
+                      <div className="font-mono text-[9px] text-zinc-400 tracking-widest uppercase">
+                        Select Demo Scenario Preset:
+                      </div>
+                      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2">
+                        {[
+                          {
+                            label: "Iron & Gas Safety",
+                            icon: "🛡️",
+                            text: "I just unplugged the clothes iron from the wall outlet and styled my hair — all good. Gas stovetop is cold and switched off.",
+                          },
+                          {
+                            label: "Task Scheduler",
+                            icon: "⏱️",
+                            text: "Remind me to turn off the garden irrigation valve in an hour before leaving for dinner.",
+                          },
+                          {
+                            label: "Bilateral Promises",
+                            icon: "🤝",
+                            text: "Nice to meet you Giulia Verdi, Senior Director at CloudOps. I will send you our architecture pitch deck tomorrow at 10 AM.",
+                          },
+                          {
+                            label: "Executive CRM",
+                            icon: "👤",
+                            text: "Pleased to meet you, I'm Dr. Elena Rostova, VP of AI Research at CloudScale. Let's discuss distributed consensus algorithms.",
+                          },
+                          {
+                            label: "Topic Synthesis",
+                            icon: "📚",
+                            text: "In today's meeting we evaluated AWS Bedrock AgentCore Runtime microVM execution and sub-second state persistence.",
+                          },
+                        ].map((preset, i) => (
+                          <button
+                            key={i}
+                            onClick={() => {
+                              if (setSimText) setSimText(preset.text);
+                              setLocalSimText(preset.text);
+                            }}
+                            className="p-2.5 rounded-xl bg-black/40 hover:bg-cyan-950/40 border border-white/10 hover:border-cyan-500/40 text-left transition-colors cursor-pointer"
+                          >
+                            <div className="text-base mb-1">{preset.icon}</div>
+                            <div className="text-[11px] font-mono font-bold text-white leading-tight">
+                              {preset.label}
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Speech Transcript Input Box */}
+                    <div className="space-y-1.5">
+                      <div className="font-mono text-[9px] text-zinc-400 tracking-widest uppercase">
+                        Ambient Utterance Transcript Stream:
+                      </div>
+                      <textarea
+                        value={simText || localSimText}
+                        onChange={(e) => {
+                          if (setSimText) setSimText(e.target.value);
+                          setLocalSimText(e.target.value);
+                        }}
+                        rows={3}
+                        className="w-full p-3 rounded-xl bg-black/60 border border-white/15 text-zinc-100 font-sans text-xs focus:outline-none focus:border-cyan-400 resize-none"
+                        placeholder="Enter simulated spoken transcript..."
+                      />
+                    </div>
+
+                    {/* Simulation Execution Trigger */}
+                    <div className="flex items-center justify-between">
+                      <div className="text-[10px] font-mono text-zinc-400">
+                        TARGET: <span className="text-cyan-400 font-semibold">AWS Bedrock AgentCore Runtime</span>
+                      </div>
+                      <button
+                        onClick={handleRunSimulationClick}
+                        disabled={simRunning || localSimRunning}
+                        className="px-5 py-2.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-black font-mono text-xs uppercase tracking-wider font-bold shadow-lg shadow-cyan-500/30 transition-all flex items-center gap-2 cursor-pointer disabled:opacity-50"
+                      >
+                        <span>{simRunning || localSimRunning ? "⚡ Processing..." : "⚡ Run Pipeline Ingestion"}</span>
+                      </button>
+                    </div>
+
+                    {/* Simulation Output Card */}
+                    {(simResult || localSimResult) && (
+                      <div className="p-4 rounded-xl bg-black/60 border border-cyan-500/30 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="font-mono text-[9px] text-emerald-400 uppercase font-bold">
+                            ✓ Ingestion Successful
+                          </span>
+                          <span className="font-mono text-[9px] text-zinc-500">
+                            AgentCore Latency: ~1.2s
+                          </span>
+                        </div>
+                        <pre className="font-mono text-[10px] text-zinc-300 max-h-32 overflow-y-auto hide-scrollbar bg-black/80 p-2.5 rounded">
+                          {JSON.stringify(simResult || localSimResult, null, 2)}
+                        </pre>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="pt-3 border-t border-white/10 flex items-center justify-between">
+                    <span className="text-xs font-mono text-zinc-400">
+                      Echo Simulator: <strong className="text-cyan-400">REAL-TIME BRIDGE</strong>
+                    </span>
+                    <button
+                      onClick={() =>
+                        speakAlexaReassurance("Simulation complete. All domain ledgers updated on Echo Show.")
+                      }
+                      className="px-4 py-1.5 rounded-full bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-400/40 text-cyan-300 font-mono text-xs uppercase tracking-wider font-bold transition-colors"
+                    >
+                      🔊 Test Echo Audio
+                    </button>
+                  </div>
                 </div>
               )}
             </div>
