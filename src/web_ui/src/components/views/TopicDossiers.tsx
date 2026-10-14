@@ -68,8 +68,8 @@ export function TopicDossiers({ topicsData, statusData, sessionsData, engineStat
     return (
       (ev.title || "").toLowerCase().includes(q) ||
       (ev.final_title || "").toLowerCase().includes(q) ||
-      ev.top_terms.some((t) => t.includes(q)) ||
-      ev.segments.some((s) => (s.title || "").toLowerCase().includes(q))
+      (ev.top_terms || []).some((t) => (t || "").toLowerCase().includes(q)) ||
+      (ev.segments || []).some((s) => (s.title || "").toLowerCase().includes(q))
     );
   });
 

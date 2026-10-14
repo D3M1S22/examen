@@ -650,6 +650,8 @@ export default function Dashboard() {
         actionsData={actionsData}
         socialData={socialData}
         topicsData={topicsData}
+        sessionsData={sessionsData}
+        engineStatus={engineStatus}
         currentUser={currentUser}
         onOpenLoginModal={() => {
           setLoginModalConnectBee(false);
