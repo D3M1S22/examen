@@ -13,6 +13,12 @@ import { EventAction, EventCard } from "../ui/EventCard";
 import { DossierBreadcrumbs } from "../ui/DossierBreadcrumbs";
 import { DossierFolderCard } from "../ui/DossierFolderCard";
 import { speakAlexaReassurance } from "@/utils/audioEffects";
+import { MarkdownRenderer } from "../ui/MarkdownRenderer";
+import {
+  generateTopicMarkdown,
+  downloadTextFile,
+  sanitizeFilename,
+} from "@/utils/dossierExport";
 
 interface SubfolderItem {
   id: string;
@@ -544,12 +550,17 @@ export function TopicDossiers({
   };
 
   const handleCopyDossier = (topic: BriefingReport) => {
-    const text = `# ${topic.topic_title}\n\n${topic.explanatory_synthesis || ""}\n\n## Executive Summary\n${(
-      topic.executive_summary || []
-    )
-      .map((s) => `- ${s}`)
-      .join("\n")}\n\n## Action Items\n${(topic.action_items || []).map((a) => `- ${a}`).join("\n")}`;
-    navigator.clipboard.writeText(text);
+    const text = generateTopicMarkdown(topic);
+    if (!text) return;
+    if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).catch(() => {});
+    }
+  };
+
+  const handleDownloadDossier = (topic: BriefingReport) => {
+    const text = generateTopicMarkdown(topic);
+    const fname = sanitizeFilename(topic.topic_title || "topic_dossier", ".md");
+    downloadTextFile(text, fname);
   };
 
   // Helper to find folder containing a given topic
@@ -1072,15 +1083,23 @@ export function TopicDossiers({
                         )}
                         <button
                           onClick={() => handleCopyDossier(focusedTopic)}
-                          className="px-4 py-2 rounded-xl border border-surface-container-highest bg-[#181a20] hover:bg-surface-container text-zinc-300 hover:text-white font-mono text-[9px] font-bold tracking-wider flex items-center gap-1.5"
+                          className="px-4 py-2 rounded-xl border border-surface-container-highest bg-[#181a20] hover:bg-surface-container text-zinc-300 hover:text-white font-mono text-[9px] font-bold tracking-wider flex items-center gap-1.5 cursor-pointer"
                           title="Copy markdown dossier"
                         >
                           <span>📋</span>
                           <span>COPY</span>
                         </button>
                         <button
+                          onClick={() => handleDownloadDossier(focusedTopic)}
+                          className="px-4 py-2 rounded-xl border border-cyan-500/50 bg-cyan-950/40 hover:bg-cyan-900/60 text-cyan-300 font-mono text-[9px] font-bold tracking-wider flex items-center gap-1.5 transition-colors cursor-pointer"
+                          title="Download full research dossier as .md"
+                        >
+                          <span>💾</span>
+                          <span>DOWNLOAD</span>
+                        </button>
+                        <button
                           onClick={() => handleBroadcast(focusedTopic)}
-                          className="px-4 py-2 rounded-xl border border-amber-500/50 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 font-mono text-[9px] font-bold tracking-wider flex items-center gap-1.5"
+                          className="px-4 py-2 rounded-xl border border-amber-500/50 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 font-mono text-[9px] font-bold tracking-wider flex items-center gap-1.5 cursor-pointer"
                           title="Broadcast to Alexa"
                         >
                           <span>🔊</span>
@@ -1088,7 +1107,7 @@ export function TopicDossiers({
                         </button>
                         <button
                           onClick={() => setModalTopic(focusedTopic)}
-                          className="px-4 py-2 rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 text-white font-mono text-[9px] font-bold tracking-wider flex items-center gap-1.5"
+                          className="px-4 py-2 rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 text-white font-mono text-[9px] font-bold tracking-wider flex items-center gap-1.5 cursor-pointer"
                           title="Open Fullscreen Pop-up Modal"
                         >
                           <span>⛶</span>
@@ -1184,14 +1203,17 @@ export function TopicDossiers({
 
                     {/* Deep-Dive Technical Markdown Section */}
                     {focusedTopic.deep_dive_markdown && (
-                      <div className="bg-[#0e1014] border border-white/10 rounded-xl p-6 space-y-3">
-                        <div className="font-mono text-[10px] text-cyan-300 tracking-[0.2em] uppercase font-bold flex items-center gap-2">
-                          <span>🔬</span>
-                          <span>DEEP RESEARCH & TECHNICAL SPECIFICATION</span>
-                        </div>
-                        <div className="font-mono text-xs text-zinc-300 whitespace-pre-wrap leading-relaxed max-h-[380px] overflow-y-auto pr-2">
-                          {focusedTopic.deep_dive_markdown}
-                        </div>
+                      <div className="space-y-2">
+                        <MarkdownRenderer
+                          content={focusedTopic.deep_dive_markdown}
+                          allowRawToggle={true}
+                          defaultMode="rendered"
+                          title="Deep Research & Technical Specification"
+                          filename={sanitizeFilename(focusedTopic.topic_title, ".md")}
+                          accentColor="cyan"
+                          showDownloadButton={true}
+                          showCopyButton={true}
+                        />
                       </div>
                     )}
 
@@ -1419,7 +1441,7 @@ export function TopicDossiers({
                               <div className="flex items-center gap-2 shrink-0 self-end md:self-center flex-wrap">
                                 <button
                                   onClick={() => handleCopyDossier(topic)}
-                                  className="px-4 py-2.5 rounded-lg border border-surface-container-highest bg-transparent hover:bg-surface-container text-secondary hover:text-primary font-mono text-[9px] tracking-[0.2em] flex items-center gap-1.5 transition-colors uppercase font-bold"
+                                  className="px-4 py-2.5 rounded-lg border border-surface-container-highest bg-transparent hover:bg-surface-container text-secondary hover:text-primary font-mono text-[9px] tracking-[0.2em] flex items-center gap-1.5 transition-colors uppercase font-bold cursor-pointer"
                                   title="Copy markdown dossier to clipboard"
                                 >
                                   <span>📋</span>
@@ -1427,8 +1449,26 @@ export function TopicDossiers({
                                 </button>
 
                                 <button
+                                  onClick={() => handleDownloadDossier(topic)}
+                                  className="px-4 py-2.5 rounded-lg border border-cyan-500/40 bg-cyan-950/40 hover:bg-cyan-900/60 text-cyan-300 font-mono text-[9px] tracking-[0.2em] flex items-center gap-1.5 transition-colors uppercase font-bold cursor-pointer"
+                                  title="Download full research dossier as .md"
+                                >
+                                  <span>💾</span>
+                                  <span>DOWNLOAD</span>
+                                </button>
+
+                                <button
+                                  onClick={() => setModalTopic(topic)}
+                                  className="px-4 py-2.5 rounded-lg border border-white/10 bg-white/5 hover:bg-white/10 text-white font-mono text-[9px] tracking-[0.2em] flex items-center gap-1.5 transition-colors uppercase font-bold cursor-pointer"
+                                  title="Open Fullscreen Pop-up Modal"
+                                >
+                                  <span>⛶</span>
+                                  <span>POPUP</span>
+                                </button>
+
+                                <button
                                   onClick={() => handleSelectTopic(topic)}
-                                  className="px-5 py-2.5 rounded-lg border border-surface-container-highest bg-transparent hover:bg-surface-container text-secondary hover:text-primary font-mono text-[9px] tracking-[0.2em] flex items-center gap-2 transition-colors uppercase font-bold"
+                                  className="px-5 py-2.5 rounded-lg border border-surface-container-highest bg-transparent hover:bg-surface-container text-secondary hover:text-primary font-mono text-[9px] tracking-[0.2em] flex items-center gap-2 transition-colors uppercase font-bold cursor-pointer"
                                   title="Open full research report"
                                 >
                                   <span>📖</span>
@@ -1437,7 +1477,7 @@ export function TopicDossiers({
 
                                 <button
                                   onClick={() => handleBroadcast(topic)}
-                                  className="px-5 py-2.5 rounded-lg border border-amber-500/50 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 font-mono text-[9px] tracking-[0.2em] font-bold flex items-center gap-2 transition-colors uppercase shadow-sm"
+                                  className="px-5 py-2.5 rounded-lg border border-amber-500/50 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 font-mono text-[9px] tracking-[0.2em] font-bold flex items-center gap-2 transition-colors uppercase shadow-sm cursor-pointer"
                                   title="Broadcast topic to Alexa Echo Show"
                                 >
                                   <span>🔊</span>
@@ -1653,7 +1693,7 @@ export function TopicDossiers({
                       <div className="flex items-center gap-2 shrink-0 self-end md:self-center flex-wrap">
                         <button
                           onClick={() => handleCopyDossier(topic)}
-                          className="px-4 py-2.5 rounded-lg border border-surface-container-highest bg-transparent hover:bg-surface-container text-secondary hover:text-primary font-mono text-[9px] tracking-[0.2em] flex items-center gap-1.5 transition-colors uppercase font-bold"
+                          className="px-4 py-2.5 rounded-lg border border-surface-container-highest bg-transparent hover:bg-surface-container text-secondary hover:text-primary font-mono text-[9px] tracking-[0.2em] flex items-center gap-1.5 transition-colors uppercase font-bold cursor-pointer"
                           title="Copy markdown dossier to clipboard"
                         >
                           <span>📋</span>
@@ -1661,8 +1701,26 @@ export function TopicDossiers({
                         </button>
 
                         <button
+                          onClick={() => handleDownloadDossier(topic)}
+                          className="px-4 py-2.5 rounded-lg border border-cyan-500/40 bg-cyan-950/40 hover:bg-cyan-900/60 text-cyan-300 font-mono text-[9px] tracking-[0.2em] flex items-center gap-1.5 transition-colors uppercase font-bold cursor-pointer"
+                          title="Download full research dossier as .md"
+                        >
+                          <span>💾</span>
+                          <span>DOWNLOAD</span>
+                        </button>
+
+                        <button
+                          onClick={() => setModalTopic(topic)}
+                          className="px-4 py-2.5 rounded-lg border border-white/10 bg-white/5 hover:bg-white/10 text-white font-mono text-[9px] tracking-[0.2em] flex items-center gap-1.5 transition-colors uppercase font-bold cursor-pointer"
+                          title="Open Fullscreen Pop-up Modal"
+                        >
+                          <span>⛶</span>
+                          <span>POPUP</span>
+                        </button>
+
+                        <button
                           onClick={() => handleSelectTopic(topic)}
-                          className="px-5 py-2.5 rounded-lg border border-surface-container-highest bg-transparent hover:bg-surface-container text-secondary hover:text-primary font-mono text-[9px] tracking-[0.2em] flex items-center gap-2 transition-colors uppercase font-bold"
+                          className="px-5 py-2.5 rounded-lg border border-surface-container-highest bg-transparent hover:bg-surface-container text-secondary hover:text-primary font-mono text-[9px] tracking-[0.2em] flex items-center gap-2 transition-colors uppercase font-bold cursor-pointer"
                           title="Open full research report"
                         >
                           <span>📖</span>
@@ -1671,7 +1729,7 @@ export function TopicDossiers({
 
                         <button
                           onClick={() => handleBroadcast(topic)}
-                          className="px-5 py-2.5 rounded-lg border border-amber-500/50 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 font-mono text-[9px] tracking-[0.2em] font-bold flex items-center gap-2 transition-colors uppercase shadow-sm"
+                          className="px-5 py-2.5 rounded-lg border border-amber-500/50 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 font-mono text-[9px] tracking-[0.2em] font-bold flex items-center gap-2 transition-colors uppercase shadow-sm cursor-pointer"
                           title="Broadcast topic to Alexa Echo Show"
                         >
                           <span>🔊</span>

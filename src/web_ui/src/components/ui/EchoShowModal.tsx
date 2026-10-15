@@ -15,6 +15,12 @@ import {
 } from "@/types/schemas";
 import { speakAlexaReassurance, playAcousticVerificationTone } from "@/utils/audioEffects";
 import { getApiBaseUrl } from "@/utils/api";
+import { MarkdownRenderer } from "./MarkdownRenderer";
+import {
+  generateTopicMarkdown,
+  downloadTextFile,
+  sanitizeFilename,
+} from "@/utils/dossierExport";
 
 export interface EchoShowModalProps {
   isOpen: boolean;
@@ -55,6 +61,49 @@ export interface EchoShowModalProps {
   onDismissNotification?: () => void;
   updatedTabs?: Record<string, number | boolean>;
   onClearTabBadge?: (tabId: string) => void;
+}
+
+class EchoShowErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { hasError: boolean; error: Error | null }
+> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+    console.warn("EchoShowModal recovered from render error:", error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="p-8 text-center space-y-4 my-auto flex-1 flex flex-col items-center justify-center">
+          <div className="text-amber-400 text-3xl">⚠️</div>
+          <h3 className="font-serif text-xl text-white font-bold">
+            Echo Show View Display Recovered
+          </h3>
+          <p className="font-mono text-xs text-zinc-400 max-w-md">
+            The active tab encountered an unexpected format and safely reset to stable telemetry.
+          </p>
+          <div className="pt-2">
+            <button
+              onClick={() => this.setState({ hasError: false, error: null })}
+              className="px-4 py-2 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-black font-mono text-xs uppercase font-bold tracking-wider cursor-pointer"
+            >
+              Resume Echo Display
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
 }
 
 const fetcher = (url: string) =>
@@ -170,7 +219,7 @@ export function EchoShowModal({
     if (isOpen && echoNotification && lastSpokenNotifId.current !== echoNotification.id) {
       lastSpokenNotifId.current = echoNotification.id;
       playAcousticVerificationTone();
-      speakAlexaReassurance(`Notification: ${echoNotification.title}. ${echoNotification.message}`);
+      speakAlexaReassurance(`Notification: ${echoNotification.title || "Alert"}. ${echoNotification.message || ""}`);
     }
   }, [isOpen, echoNotification]);
 
@@ -234,15 +283,56 @@ export function EchoShowModal({
   const effSessions = sessionsData || swrSessions;
   const effEngine = engineStatus || swrEngine;
 
-  const tasks = effRoutines?.tasks || [];
-  const actions = effActions?.actions || [];
-  const contacts = effSocial?.contacts || [];
-  const topics = effTopics?.topics || [];
-  const events = effSessions?.sessions || [];
+  // Defensive array extractions guaranteeing no undefined crashes
+  const tasks: PlannedTask[] = useMemo(() => {
+    const raw = Array.isArray(effRoutines)
+      ? effRoutines
+      : Array.isArray(effRoutines?.tasks)
+      ? effRoutines.tasks
+      : [];
+    return raw.filter((t): t is PlannedTask => Boolean(t && typeof t === "object"));
+  }, [effRoutines]);
+
+  const actions: VerifiedAction[] = useMemo(() => {
+    const raw = Array.isArray(effActions)
+      ? effActions
+      : Array.isArray(effActions?.actions)
+      ? effActions.actions
+      : [];
+    return raw.filter((a): a is VerifiedAction => Boolean(a && typeof a === "object"));
+  }, [effActions]);
+
+  const contacts: SocialEntity[] = useMemo(() => {
+    const raw = Array.isArray(effSocial)
+      ? effSocial
+      : Array.isArray(effSocial?.contacts)
+      ? effSocial.contacts
+      : [];
+    return raw.filter((c): c is SocialEntity => Boolean(c && typeof c === "object"));
+  }, [effSocial]);
+
+  const topics: BriefingReport[] = useMemo(() => {
+    const raw = Array.isArray(effTopics)
+      ? effTopics
+      : Array.isArray(effTopics?.topics)
+      ? effTopics.topics
+      : [];
+    return raw.filter((t): t is BriefingReport => Boolean(t && typeof t === "object"));
+  }, [effTopics]);
+
+  const events: EventSummary[] = useMemo(() => {
+    const raw = Array.isArray(effSessions)
+      ? effSessions
+      : Array.isArray(effSessions?.sessions)
+      ? effSessions.sessions
+      : [];
+    return raw.filter((e): e is EventSummary => Boolean(e && typeof e === "object"));
+  }, [effSessions]);
+
   const liveEvent = effEngine?.active_event || null;
 
-  const completedTasks = tasks.filter((t) => t.status === "completed").length;
-  const pendingTasks = tasks.filter((t) => t.status !== "completed").length;
+  const completedTasks = tasks.filter((t) => t?.status === "completed").length;
+  const pendingTasks = tasks.filter((t) => t?.status !== "completed").length;
 
   const showFeedback = useCallback((msg: string) => {
     setFeedbackMsg(msg);
@@ -280,6 +370,51 @@ export function EchoShowModal({
     }
   }, [isOpen, onClose]);
 
+  // Topic Categories Filter Options (defensive against undefined/null objects)
+  const topicCategories = useMemo(() => {
+    if (!Array.isArray(topics)) return ["ALL"];
+    const cats = new Set<string>();
+    topics.forEach((t) => {
+      if (t && typeof t.context_type === "string" && t.context_type.trim()) {
+        cats.add(t.context_type.trim());
+      }
+    });
+    return ["ALL", ...Array.from(cats)];
+  }, [topics]);
+
+  // Filtered topics array with guaranteed array typing
+  const echoFilteredTopics = useMemo(() => {
+    if (!Array.isArray(topics)) return [];
+    const valid = topics.filter((t): t is BriefingReport => Boolean(t && typeof t === "object"));
+    if (echoTopicCategory === "ALL") return valid;
+    return valid.filter((t) => t.context_type === echoTopicCategory);
+  }, [topics, echoTopicCategory]);
+
+  // Defensive active selections
+  const selectedContact = (contacts && contacts[selectedContactIndex]) || (contacts && contacts[0]) || null;
+  const selectedTopic = (echoFilteredTopics && echoFilteredTopics[selectedTopicIndex]) || (echoFilteredTopics && echoFilteredTopics[0]) || null;
+  const selectedEvent = (events && events[selectedEventIndex]) || (events && events[0]) || null;
+  const latestAction = (actions && actions[0]) || null;
+
+  // Clamp selection indices if list length shrinks
+  useEffect(() => {
+    if (selectedTopicIndex >= echoFilteredTopics.length && echoFilteredTopics.length > 0) {
+      setSelectedTopicIndex(0);
+    }
+  }, [echoFilteredTopics.length, selectedTopicIndex]);
+
+  useEffect(() => {
+    if (selectedContactIndex >= contacts.length && contacts.length > 0) {
+      setSelectedContactIndex(0);
+    }
+  }, [contacts.length, selectedContactIndex]);
+
+  useEffect(() => {
+    if (selectedEventIndex >= events.length && events.length > 0) {
+      setSelectedEventIndex(0);
+    }
+  }, [events.length, selectedEventIndex]);
+
   if (!isOpen || !mounted) return null;
 
   const beeDevice = effStatus?.telemetry?.bee_device;
@@ -294,12 +429,13 @@ export function EchoShowModal({
   };
 
   const handleToggleRoutineClick = async (task: PlannedTask) => {
+    if (!task || !task.id) return;
     if (onToggleRoutine) {
       await onToggleRoutine(task);
     } else {
       try {
         const baseUrl = getApiBaseUrl();
-        await fetch(`${baseUrl}/api/routines/${task.id}/toggle`, { method: "POST" });
+        await fetch(`${baseUrl}/api/routines/${encodeURIComponent(task.id)}/toggle`, { method: "POST" });
         if (mutateRoutines) mutateRoutines();
         if (mutateStatus) mutateStatus();
       } catch (e) {
@@ -307,7 +443,7 @@ export function EchoShowModal({
       }
     }
     const newStatus = task.status === "completed" ? "pending" : "completed";
-    speakAlexaReassurance(`Routine '${task.title}' marked ${newStatus}.`);
+    speakAlexaReassurance(`Routine '${task.title || "Routine"}' marked ${newStatus}.`);
     showFeedback(`Routine updated!`);
   };
 
@@ -427,14 +563,18 @@ export function EchoShowModal({
     }
   };
 
-  const selectedContact = contacts[selectedContactIndex] || contacts[0] || null;
-  const echoFilteredTopics = useMemo(() => {
-    if (echoTopicCategory === "ALL") return topics;
-    return topics.filter((t) => t.context_type === echoTopicCategory);
-  }, [topics, echoTopicCategory]);
-  const selectedTopic = echoFilteredTopics[selectedTopicIndex] || echoFilteredTopics[0] || null;
-  const selectedEvent = events[selectedEventIndex] || events[0] || null;
-  const latestAction = actions[0] || null;
+  const handleDownloadEchoTopic = (t: BriefingReport) => {
+    const md = generateTopicMarkdown(t);
+    const fname = sanitizeFilename(t.topic_title || "topic_briefing", ".md");
+    downloadTextFile(md, fname);
+    showFeedback("Dossier downloaded as .md");
+  };
+
+  const liveSegmentsCount = Array.isArray(liveEvent?.segments)
+    ? liveEvent.segments.length
+    : typeof liveEvent?.segments === "number"
+    ? liveEvent.segments
+    : 0;
 
   return createPortal(
     <div
@@ -461,7 +601,7 @@ export function EchoShowModal({
             )}
             <button
               onClick={onClose}
-              className="text-zinc-400 hover:text-white font-mono text-[11px] tracking-wider uppercase px-2.5 py-1 rounded bg-zinc-800/80 hover:bg-zinc-700 transition-colors"
+              className="text-zinc-400 hover:text-white font-mono text-[11px] tracking-wider uppercase px-2.5 py-1 rounded bg-zinc-800/80 hover:bg-zinc-700 transition-colors cursor-pointer"
             >
               ✕ Exit Echo View
             </button>
@@ -485,7 +625,7 @@ export function EchoShowModal({
                   <div className="flex items-center gap-2">
                     <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-ping" />
                     <span className="font-mono text-[10px] text-cyan-300 tracking-[0.2em] uppercase font-bold">
-                      ⚡ ALEXA+ AMBIENT INTELLIGENCE NOTIFICATION // {echoNotification.category.toUpperCase()}
+                      ⚡ ALEXA+ AMBIENT INTELLIGENCE NOTIFICATION // {(echoNotification.category || "UPDATE").toUpperCase()}
                     </span>
                   </div>
                   {onDismissNotification && (
@@ -500,13 +640,13 @@ export function EchoShowModal({
 
                 <div className="my-auto py-4 space-y-3">
                   <h3 className="font-serif text-2xl sm:text-3xl text-white font-bold">
-                    {echoNotification.title}
+                    {echoNotification.title || "Ambient Notification"}
                   </h3>
                   <div className="p-4 rounded-xl bg-black/60 border border-cyan-500/30 text-zinc-200 font-sans text-sm sm:text-base leading-relaxed italic">
-                    "{echoNotification.message}"
+                    "{echoNotification.message || ""}"
                   </div>
                   <div className="flex items-center justify-between font-mono text-[10px] text-zinc-400">
-                    <span>TIME: {echoNotification.timestamp}</span>
+                    <span>TIME: {echoNotification.timestamp || "RECENT"}</span>
                     <span className="text-cyan-400">STATUS: PROCESSED BY BEDROCK AGENTCORE</span>
                   </div>
                 </div>
@@ -561,7 +701,7 @@ export function EchoShowModal({
                       title="Manage Echo Show Profile & Bee Device"
                     >
                       <div className="w-5 h-5 rounded-full bg-cyan-500/20 border border-cyan-400 text-cyan-300 font-mono text-[9px] font-bold flex items-center justify-center">
-                        {currentUser.handle ? currentUser.handle.charAt(0).toUpperCase() : "U"}
+                        {typeof currentUser.handle === "string" && currentUser.handle ? currentUser.handle.charAt(0).toUpperCase() : "U"}
                       </div>
                       <div className="text-left text-xs font-sans font-medium text-white max-w-[110px] truncate hidden xs:block">
                         {currentUser.handle}
@@ -594,11 +734,11 @@ export function EchoShowModal({
                             </span>
                           </div>
                           <div className="font-sans text-sm font-semibold text-white mt-1">
-                            {currentUser.handle}
+                            {currentUser.handle || "User"}
                           </div>
                           <div className="font-mono text-[9px] text-zinc-400 flex items-center gap-1 mt-0.5">
                             <span>ID:</span>
-                            <span className="text-cyan-300 truncate">{currentUser.user_id}</span>
+                            <span className="text-cyan-300 truncate">{currentUser.user_id || "demo-user"}</span>
                           </div>
                         </div>
 
@@ -734,1113 +874,1160 @@ export function EchoShowModal({
               })}
             </div>
 
-            {/* Main Specular Touch Canvas */}
+            {/* Main Specular Touch Canvas Protected by Error Boundary */}
             <div className="p-4 sm:p-6 md:p-8 flex-1 flex flex-col justify-between overflow-y-auto">
-              {/* TAB 1: OVERVIEW HUB */}
-              {activeTab === "overview" && (
-                <div className="space-y-6 flex-1 flex flex-col justify-between animate-in fade-in duration-150">
-                  <div>
-                    {/* Top Status Banner */}
-                    <div className="bg-gradient-to-r from-emerald-950/40 via-black/40 to-cyan-950/30 border border-emerald-500/30 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-                      <div className="flex items-center gap-3.5">
-                        <div className="w-10 h-10 rounded-full border-4 border-emerald-400 flex items-center justify-center shrink-0 shadow-lg shadow-emerald-950/60">
-                          <div className="w-3 h-3 rounded-full bg-emerald-400 animate-ping"></div>
+              <EchoShowErrorBoundary key={activeTab}>
+                {/* TAB 1: OVERVIEW HUB */}
+                {activeTab === "overview" && (
+                  <div className="space-y-6 flex-1 flex flex-col justify-between animate-in fade-in duration-150">
+                    <div>
+                      {/* Top Status Banner */}
+                      <div className="bg-gradient-to-r from-emerald-950/40 via-black/40 to-cyan-950/30 border border-emerald-500/30 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                        <div className="flex items-center gap-3.5">
+                          <div className="w-10 h-10 rounded-full border-4 border-emerald-400 flex items-center justify-center shrink-0 shadow-lg shadow-emerald-950/60">
+                            <div className="w-3 h-3 rounded-full bg-emerald-400 animate-ping"></div>
+                          </div>
+                          <div>
+                            <div className="font-mono text-[9px] text-emerald-400 tracking-[0.2em] uppercase font-bold">
+                              DOMESTIC POSTURE // ALL CLEAR
+                            </div>
+                            <div className="font-serif text-xl sm:text-2xl text-white font-bold leading-tight">
+                              All Anchors Calibrated & Synchronized
+                            </div>
+                          </div>
                         </div>
-                        <div>
-                          <div className="font-mono text-[9px] text-emerald-400 tracking-[0.2em] uppercase font-bold">
-                            DOMESTIC POSTURE // ALL CLEAR
-                          </div>
-                          <div className="font-serif text-xl sm:text-2xl text-white font-bold leading-tight">
-                            All Anchors Calibrated & Synchronized
-                          </div>
+
+                        <div className="flex flex-wrap gap-2 text-[10px] font-mono uppercase">
+                          <button
+                            onClick={() => handleTabSelect("peace")}
+                            className="px-2.5 py-1 rounded-lg bg-emerald-950/60 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-900 transition-colors cursor-pointer"
+                          >
+                            🛡️ {actions.length} Verified Anchors
+                          </button>
+                          <button
+                            onClick={() => handleTabSelect("routines")}
+                            className="px-2.5 py-1 rounded-lg bg-amber-950/60 border border-amber-500/30 text-amber-300 hover:bg-amber-900 transition-colors cursor-pointer"
+                          >
+                            📋 {pendingTasks} Pending Checks
+                          </button>
+                          <button
+                            onClick={() => handleTabSelect("social")}
+                            className="px-2.5 py-1 rounded-lg bg-cyan-950/60 border border-cyan-500/30 text-cyan-300 hover:bg-cyan-900 transition-colors cursor-pointer"
+                          >
+                            👥 {contacts.length} Social Contacts
+                          </button>
+                          <button
+                            onClick={() => handleTabSelect("topics")}
+                            className="px-2.5 py-1 rounded-lg bg-purple-950/60 border border-purple-500/30 text-purple-300 hover:bg-purple-900 transition-colors cursor-pointer"
+                          >
+                            📚 {topics.length} Dossiers
+                          </button>
+                          {events.length > 0 && (
+                            <button
+                              onClick={() => {
+                                setTopicSubView("events");
+                                handleTabSelect("topics");
+                              }}
+                              className="px-2.5 py-1 rounded-lg bg-cyan-950/60 border border-cyan-500/30 text-cyan-300 hover:bg-cyan-900 transition-colors cursor-pointer"
+                            >
+                              🏛️ {events.length} Events
+                            </button>
+                          )}
                         </div>
                       </div>
 
-                      <div className="flex flex-wrap gap-2 text-[10px] font-mono uppercase">
-                        <button
-                          onClick={() => handleTabSelect("peace")}
-                          className="px-2.5 py-1 rounded-lg bg-emerald-950/60 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-900 transition-colors"
+                      {/* Live lecture / meeting banner (Deep Topic Event Engine) */}
+                      {liveEvent && (
+                        <div
+                          onClick={() => {
+                            setTopicSubView("events");
+                            handleTabSelect("topics");
+                          }}
+                          className={`rounded-xl p-3.5 mt-3 border cursor-pointer flex items-center justify-between gap-3 transition-colors ${
+                            liveEvent.status === "active"
+                              ? "bg-emerald-950/40 border-emerald-500/40 hover:border-emerald-400"
+                              : "bg-amber-950/40 border-amber-500/40 hover:border-amber-400"
+                          }`}
                         >
-                          🛡️ {actions.length} Verified Anchors
-                        </button>
-                        <button
-                          onClick={() => handleTabSelect("routines")}
-                          className="px-2.5 py-1 rounded-lg bg-amber-950/60 border border-amber-500/30 text-amber-300 hover:bg-amber-900 transition-colors"
-                        >
-                          📋 {pendingTasks} Pending Checks
-                        </button>
-                        <button
-                          onClick={() => handleTabSelect("social")}
-                          className="px-2.5 py-1 rounded-lg bg-cyan-950/60 border border-cyan-500/30 text-cyan-300 hover:bg-cyan-900 transition-colors"
-                        >
-                          👥 {contacts.length} Social Contacts
-                        </button>
-                        <button
-                          onClick={() => handleTabSelect("topics")}
-                          className="px-2.5 py-1 rounded-lg bg-purple-950/60 border border-purple-500/30 text-purple-300 hover:bg-purple-900 transition-colors"
-                        >
-                          📚 {topics.length} Dossiers
-                        </button>
-                        {events.length > 0 && (
-                          <button
-                            onClick={() => {
-                              setTopicSubView("events");
-                              handleTabSelect("topics");
-                            }}
-                            className="px-2.5 py-1 rounded-lg bg-cyan-950/60 border border-cyan-500/30 text-cyan-300 hover:bg-cyan-900 transition-colors"
-                          >
-                            🏛️ {events.length} Events
-                          </button>
-                        )}
+                          <div className="flex items-center gap-3 min-w-0">
+                            <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${liveEvent.status === "active" ? "bg-emerald-400 animate-pulse" : "bg-amber-400"}`} />
+                            <div className="min-w-0">
+                              <div className={`font-mono text-[8px] tracking-[0.2em] uppercase font-bold ${liveEvent.status === "active" ? "text-emerald-300" : "text-amber-300"}`}>
+                                {liveEvent.status === "active" ? "LIVE EVENT // RECORDING" : "LIVE EVENT // PAUSED"}
+                              </div>
+                              <div className="font-serif text-sm sm:text-base text-white font-bold truncate">
+                                {typeof liveEvent.title === "string" && liveEvent.title.startsWith("Ongoing session") ? "Lecture / meeting in progress" : (liveEvent.title || "Live Lecture")}
+                              </div>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-3 font-mono text-[9px] text-zinc-400 tracking-widest uppercase shrink-0">
+                            <span>{liveSegmentsCount} PART(S)</span>
+                            <span className="text-cyan-400 font-bold">OPEN TIMELINE →</span>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* 4 Multimodal Echo Touch Cards Grid */}
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+                        {/* Peace of Mind Card */}
+                        <div className="p-4 rounded-xl bg-[#12141a] border border-white/10 hover:border-emerald-500/40 transition-colors space-y-2.5">
+                          <div className="flex items-center justify-between">
+                            <span className="font-mono text-[9px] text-emerald-400 tracking-wider uppercase font-bold flex items-center gap-1.5">
+                              <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                              PEACE OF MIND ANCHOR
+                            </span>
+                            <span className="font-mono text-[9px] text-zinc-500">
+                              {latestAction?.elapsed_time_human || "RECENT"}
+                            </span>
+                          </div>
+                          <h4 className="font-serif text-lg text-white font-medium truncate">
+                            {latestAction?.action_type ? latestAction.action_type.replace(/_/g, " ").toUpperCase() : "UNPLUG CLOTHES IRON"}
+                          </h4>
+                          <p className="text-xs text-zinc-300 font-sans italic line-clamp-2 bg-black/40 p-2 rounded border border-white/5">
+                            "{latestAction?.raw_statement || "Ho appena staccato il ferro da stiro prima di uscire."}"
+                          </p>
+                          <div className="flex items-center justify-between pt-1">
+                            <span className="font-mono text-[9px] text-emerald-400">
+                              {Math.round((latestAction?.confidence ?? 0.98) * 100)}% CONFIDENCE
+                            </span>
+                            <button
+                              onClick={() => handleTabSelect("peace")}
+                              className="text-xs font-mono text-cyan-400 hover:underline flex items-center gap-1 cursor-pointer"
+                            >
+                              <span>Inspect Peace Ledger</span>
+                              <span>→</span>
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Daily Routines Card */}
+                        <div className="p-4 rounded-xl bg-[#12141a] border border-white/10 hover:border-amber-500/40 transition-colors space-y-2.5">
+                          <div className="flex items-center justify-between">
+                            <span className="font-mono text-[9px] text-amber-400 tracking-wider uppercase font-bold flex items-center gap-1.5">
+                              <span className="w-2 h-2 rounded-full bg-amber-400" />
+                              DAILY ROUTINES CHECKLIST
+                            </span>
+                            <span className="font-mono text-[9px] text-zinc-400">
+                              {completedTasks} / {tasks.length} DONE
+                            </span>
+                          </div>
+                          {tasks.length > 0 ? (
+                            <div className="space-y-1.5">
+                              {tasks.slice(0, 2).map((task, i) => (
+                                <div
+                                  key={task.id || i}
+                                  className="flex items-center justify-between p-2 rounded bg-black/40 border border-white/5 text-xs"
+                                >
+                                  <div className="flex items-center gap-2 truncate">
+                                    <button
+                                      onClick={() => handleToggleRoutineClick(task)}
+                                      className={`w-4 h-4 rounded flex items-center justify-center font-mono text-[10px] border transition-colors cursor-pointer ${
+                                        task.status === "completed"
+                                          ? "bg-emerald-500 border-emerald-400 text-black font-bold"
+                                          : "border-white/30 hover:border-white"
+                                      }`}
+                                    >
+                                      {task.status === "completed" ? "✓" : ""}
+                                    </button>
+                                    <span className={`truncate ${task.status === "completed" ? "line-through text-zinc-500" : "text-zinc-200"}`}>
+                                      {task.title || "Routine"}
+                                    </span>
+                                  </div>
+                                  <span className="font-mono text-[9px] text-amber-400 shrink-0">
+                                    {task.scheduled_time || "SCHEDULED"}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <div className="text-zinc-500 font-mono text-xs py-3 text-center">
+                              No monitored routines active.
+                            </div>
+                          )}
+                          <div className="flex items-center justify-end pt-1">
+                            <button
+                              onClick={() => handleTabSelect("routines")}
+                              className="text-xs font-mono text-amber-400 hover:underline flex items-center gap-1 cursor-pointer"
+                            >
+                              <span>View All Routines</span>
+                              <span>→</span>
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Social Rolodex Card */}
+                        <div className="p-4 rounded-xl bg-[#12141a] border border-white/10 hover:border-cyan-500/40 transition-colors space-y-2.5">
+                          <div className="flex items-center justify-between">
+                            <span className="font-mono text-[9px] text-cyan-400 tracking-wider uppercase font-bold flex items-center gap-1.5">
+                              <span className="w-2 h-2 rounded-full bg-cyan-400" />
+                              SOCIAL ROLODEX PROFILE
+                            </span>
+                            <span className="font-mono text-[9px] text-zinc-500">
+                              {contacts.length} CONTACTS
+                            </span>
+                          </div>
+                          {selectedContact ? (
+                            <div className="space-y-1.5">
+                              <div className="flex items-center gap-2">
+                                <div className="w-7 h-7 rounded-full bg-cyan-500/20 border border-cyan-400 text-cyan-300 font-mono text-xs font-bold flex items-center justify-center">
+                                  {typeof selectedContact.name === "string" && selectedContact.name ? selectedContact.name.charAt(0).toUpperCase() : "C"}
+                                </div>
+                                <div>
+                                  <h4 className="font-serif text-base text-white font-medium leading-tight">
+                                    {selectedContact.name || "Executive Contact"}
+                                  </h4>
+                                  <div className="text-[10px] font-mono text-zinc-400 truncate">
+                                    {selectedContact.company_or_role || selectedContact.web_profile?.headline || "Executive Contact"}
+                                  </div>
+                                </div>
+                              </div>
+                              <div className="text-xs text-zinc-300 font-sans line-clamp-1">
+                                {selectedContact.web_profile?.bio_summary || "Autonomous web profile indexed."}
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="text-zinc-500 font-mono text-xs py-3 text-center">
+                              No contacts indexed yet.
+                            </div>
+                          )}
+                          <div className="flex items-center justify-end pt-1">
+                            <button
+                              onClick={() => handleTabSelect("social")}
+                              className="text-xs font-mono text-cyan-400 hover:underline flex items-center gap-1 cursor-pointer"
+                            >
+                              <span>Open Social Rolodex</span>
+                              <span>→</span>
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Topic Dossiers Card */}
+                        <div className="p-4 rounded-xl bg-[#12141a] border border-white/10 hover:border-purple-500/40 transition-colors space-y-2.5">
+                          <div className="flex items-center justify-between">
+                            <span className="font-mono text-[9px] text-purple-400 tracking-wider uppercase font-bold flex items-center gap-1.5">
+                              <span className="w-2 h-2 rounded-full bg-purple-400" />
+                              SYNTHESIZED TOPIC DOSSIER
+                            </span>
+                            <span className="font-mono text-[9px] text-zinc-500">
+                              {topics.length} COMPILED
+                            </span>
+                          </div>
+                          {selectedTopic ? (
+                            <div className="space-y-1.5">
+                              <h4 className="font-serif text-base text-white font-medium truncate">
+                                {selectedTopic.topic_title}
+                              </h4>
+                              <p className="text-xs text-zinc-300 font-sans line-clamp-2 bg-black/40 p-2 rounded border border-white/5">
+                                {selectedTopic.explanatory_synthesis || (Array.isArray(selectedTopic.executive_summary) ? selectedTopic.executive_summary[0] : null) || "Synthesized analysis recorded."}
+                              </p>
+                            </div>
+                          ) : (
+                            <div className="text-zinc-500 font-mono text-xs py-3 text-center">
+                              No technical briefings recorded yet.
+                            </div>
+                          )}
+                          <div className="flex items-center justify-end pt-1">
+                            <button
+                              onClick={() => handleTabSelect("topics")}
+                              className="text-xs font-mono text-purple-400 hover:underline flex items-center gap-1 cursor-pointer"
+                            >
+                              <span>Read Deep Briefing</span>
+                              <span>→</span>
+                            </button>
+                          </div>
+                        </div>
                       </div>
                     </div>
 
-                    {/* Live lecture / meeting banner (Deep Topic Event Engine) */}
-                    {liveEvent && (
-                      <div
-                        onClick={() => {
-                          setTopicSubView("events");
-                          handleTabSelect("topics");
-                        }}
-                        className={`rounded-xl p-3.5 mt-3 border cursor-pointer flex items-center justify-between gap-3 transition-colors ${
-                          liveEvent.status === "active"
-                            ? "bg-emerald-950/40 border-emerald-500/40 hover:border-emerald-400"
-                            : "bg-amber-950/40 border-amber-500/40 hover:border-amber-400"
-                        }`}
-                      >
-                        <div className="flex items-center gap-3 min-w-0">
-                          <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${liveEvent.status === "active" ? "bg-emerald-400 animate-pulse" : "bg-amber-400"}`} />
-                          <div className="min-w-0">
-                            <div className={`font-mono text-[8px] tracking-[0.2em] uppercase font-bold ${liveEvent.status === "active" ? "text-emerald-300" : "text-amber-300"}`}>
-                              {liveEvent.status === "active" ? "LIVE EVENT // RECORDING" : "LIVE EVENT // PAUSED"}
-                            </div>
-                            <div className="font-serif text-sm sm:text-base text-white font-bold truncate">
-                              {liveEvent.title?.startsWith("Ongoing session") ? "Lecture / meeting in progress" : liveEvent.title}
-                            </div>
+                    {/* Alexa Voice Speech Output Footer */}
+                    <div className="mt-4 pt-3 border-t border-white/10 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-8 h-8 rounded-full bg-cyan-500/20 border border-cyan-400/40 flex items-center justify-center text-cyan-300 shrink-0">
+                          💬
+                        </div>
+                        <div>
+                          <div className="font-mono text-[8px] text-zinc-400 tracking-widest uppercase">
+                            Alexa Voice Output
+                          </div>
+                          <div className="font-sans text-xs text-zinc-200 italic max-w-xl truncate">
+                            "EXAMEN Status: Domestic posture is all clear. {actions.length} verified actions, {completedTasks}/{tasks.length} routines completed."
                           </div>
                         </div>
-                        <div className="flex items-center gap-3 font-mono text-[9px] text-zinc-400 tracking-widest uppercase shrink-0">
-                          <span>{liveEvent.segments} PART(S)</span>
-                          <span className="text-cyan-400 font-bold">OPEN TIMELINE →</span>
-                        </div>
                       </div>
-                    )}
 
-                    {/* 4 Multimodal Echo Touch Cards Grid */}
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
-                      {/* Peace of Mind Card */}
-                      <div className="p-4 rounded-xl bg-[#12141a] border border-white/10 hover:border-emerald-500/40 transition-colors space-y-2.5">
+                      <div className="flex flex-wrap gap-1.5">
+                        <button
+                          onClick={() => {
+                            speakAlexaReassurance("Yes, your clothes iron is confirmed unplugged and cold.");
+                            handleTabSelect("peace");
+                          }}
+                          className="px-2.5 py-1 rounded-full bg-zinc-800/80 hover:bg-zinc-700 text-zinc-300 font-mono text-[9px] tracking-wider transition-colors cursor-pointer"
+                        >
+                          "Did I unplug iron?"
+                        </button>
+                        <button
+                          onClick={() => {
+                            speakAlexaReassurance(`You have ${pendingTasks} pending routines remaining today.`);
+                            handleTabSelect("routines");
+                          }}
+                          className="px-2.5 py-1 rounded-full bg-zinc-800/80 hover:bg-zinc-700 text-zinc-300 font-mono text-[9px] tracking-wider transition-colors cursor-pointer"
+                        >
+                          "Routine Check"
+                        </button>
+                        <button
+                          onClick={() => {
+                            speakAlexaReassurance("Opening speech simulator on Echo Show.");
+                            handleTabSelect("simulator");
+                          }}
+                          className="px-2.5 py-1 rounded-full bg-cyan-950/80 border border-cyan-500/40 text-cyan-300 font-mono text-[9px] tracking-wider transition-colors cursor-pointer"
+                        >
+                          "Run Simulator"
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* TAB 2: PEACE OF MIND */}
+                {activeTab === "peace" && (
+                  <div className="space-y-4 flex-1 flex flex-col justify-between animate-in fade-in duration-150">
+                    <div className="space-y-4">
+                      {/* Primary Highlighted Verified Action Card */}
+                      <div className="p-5 rounded-2xl bg-gradient-to-r from-emerald-950/40 via-black/60 to-black/80 border-2 border-emerald-500/50 space-y-3">
                         <div className="flex items-center justify-between">
-                          <span className="font-mono text-[9px] text-emerald-400 tracking-wider uppercase font-bold flex items-center gap-1.5">
-                            <span className="w-2 h-2 rounded-full bg-emerald-400" />
-                            PEACE OF MIND ANCHOR
+                          <span className="flex items-center gap-2 font-mono text-xs font-bold tracking-wider text-emerald-400 uppercase">
+                            <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping" />
+                            ACOUSTICALLY VERIFIED ANCHOR // DOMESTIC SAFETY
                           </span>
-                          <span className="font-mono text-[9px] text-zinc-500">
-                            {latestAction?.elapsed_time_human || "RECENT"}
+                          <span className="font-mono text-xs text-zinc-400">
+                            {latestAction?.elapsed_time_human || "just now"}
                           </span>
                         </div>
-                        <h4 className="font-serif text-lg text-white font-medium truncate">
-                          {latestAction?.action_type?.replace(/_/g, " ").toUpperCase() || "UNPLUG CLOTHES IRON"}
-                        </h4>
-                        <p className="text-xs text-zinc-300 font-sans italic line-clamp-2 bg-black/40 p-2 rounded border border-white/5">
+
+                        <div className="font-serif text-2xl sm:text-3xl text-white font-bold">
+                          {latestAction?.action_type ? latestAction.action_type.replace(/_/g, " ").toUpperCase() : "UNPLUG CLOTHES IRON"}
+                        </div>
+
+                        <div className="p-3.5 rounded-xl bg-black/60 border border-emerald-500/20 font-sans italic text-sm text-zinc-200">
                           "{latestAction?.raw_statement || "Ho appena staccato il ferro da stiro prima di uscire."}"
-                        </p>
-                        <div className="flex items-center justify-between pt-1">
-                          <span className="font-mono text-[9px] text-emerald-400">
-                            {Math.round((latestAction?.confidence || 0.98) * 100)}% CONFIDENCE
+                        </div>
+
+                        <div className="flex items-center justify-between pt-2 border-t border-white/10 text-xs font-mono">
+                          <span className="text-zinc-400">ACOUSTIC CERTAINTY:</span>
+                          <span className="text-emerald-400 font-bold">
+                            {Math.round((latestAction?.confidence ?? 0.98) * 100)}% CONFIDENCE // GROUNDED
                           </span>
-                          <button
-                            onClick={() => handleTabSelect("peace")}
-                            className="text-xs font-mono text-cyan-400 hover:underline flex items-center gap-1"
-                          >
-                            <span>Inspect Peace Ledger</span>
-                            <span>→</span>
-                          </button>
                         </div>
                       </div>
 
-                      {/* Daily Routines Card */}
-                      <div className="p-4 rounded-xl bg-[#12141a] border border-white/10 hover:border-amber-500/40 transition-colors space-y-2.5">
-                        <div className="flex items-center justify-between">
-                          <span className="font-mono text-[9px] text-amber-400 tracking-wider uppercase font-bold flex items-center gap-1.5">
-                            <span className="w-2 h-2 rounded-full bg-amber-400" />
-                            DAILY ROUTINES CHECKLIST
-                          </span>
-                          <span className="font-mono text-[9px] text-zinc-400">
-                            {completedTasks} / {tasks.length} DONE
-                          </span>
+                      {/* Quick Domestic Reassurance Check Buttons */}
+                      <div className="space-y-2">
+                        <div className="font-mono text-[9px] text-zinc-400 tracking-widest uppercase">
+                          Ask Alexa Peace Reassurance:
                         </div>
-                        {tasks.length > 0 ? (
-                          <div className="space-y-1.5">
-                            {tasks.slice(0, 2).map((task) => (
+                        <div className="flex flex-wrap gap-2">
+                          {[
+                            { q: "Clothes Iron", statement: "I just unplugged the clothes iron from the wall outlet." },
+                            { q: "Kitchen Stove", statement: "The gas stovetop burners are completely off and cold." },
+                            { q: "Front Door Lock", statement: "I double locked the front deadbolt lock." },
+                            { q: "Evening Medication", statement: "I just took my evening medication pills." },
+                          ].map((item, i) => (
+                            <button
+                              key={i}
+                              onClick={() => handleCorroborateActionQuick(item.statement)}
+                              className="px-3.5 py-2 rounded-xl bg-black/50 hover:bg-emerald-950/60 border border-white/10 hover:border-emerald-500/40 text-zinc-200 font-mono text-xs tracking-wider transition-all flex items-center gap-2 cursor-pointer"
+                            >
+                              <span>🛡️</span>
+                              <span>{item.q} Check</span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Recent Acoustic Ledger List */}
+                      <div className="space-y-2 pt-2 border-t border-white/10">
+                        <div className="font-mono text-[9px] text-zinc-400 tracking-widest uppercase">
+                          Recent Verified Ledger Entries ({actions.length}):
+                        </div>
+                        <div className="space-y-1.5 max-h-[160px] overflow-y-auto pr-1">
+                          {actions.map((act, idx) => (
+                            <div
+                              key={act.id || idx}
+                              className="p-2.5 rounded-lg bg-black/40 border border-white/5 flex items-center justify-between text-xs font-sans gap-2"
+                            >
+                              <div className="truncate flex-1">
+                                <span className="font-semibold text-white mr-2">
+                                  {act.action_type ? act.action_type.replace(/_/g, " ").toUpperCase() : "ACTION"}:
+                                </span>
+                                <span className="text-zinc-300 italic">"{act.raw_statement || ""}"</span>
+                              </div>
+                              <span className="font-mono text-[9px] text-emerald-400 shrink-0">
+                                {act.elapsed_time_human || "VERIFIED"}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="pt-3 border-t border-white/10 flex items-center justify-between">
+                      <span className="text-xs font-mono text-zinc-400">
+                        Acoustic Sensor Mesh: <strong className="text-emerald-400">ONLINE</strong>
+                      </span>
+                      <button
+                        onClick={() =>
+                          speakAlexaReassurance(
+                            `Alexa reassurance: ${latestAction?.action_type || "Clothes iron"} is verified completed with ${Math.round((latestAction?.confidence ?? 0.98) * 100)} percent certainty.`
+                          )
+                        }
+                        className="px-4 py-1.5 rounded-full bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/40 text-emerald-300 font-mono text-xs uppercase tracking-wider font-bold transition-colors cursor-pointer"
+                      >
+                        🔊 Speak Acoustic Confirmation
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* TAB 3: DAILY ROUTINES */}
+                {activeTab === "routines" && (
+                  <div className="space-y-4 flex-1 flex flex-col justify-between animate-in fade-in duration-150">
+                    <div className="space-y-4">
+                      {/* 4 Summary Stats */}
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center">
+                        <div className="p-2.5 rounded-xl bg-black/40 border border-white/10">
+                          <div className="font-mono text-xl font-bold text-white">{tasks.length}</div>
+                          <div className="font-mono text-[8px] text-zinc-400 uppercase tracking-wider">PLANNED TOTAL</div>
+                        </div>
+                        <div className="p-2.5 rounded-xl bg-black/40 border border-white/10">
+                          <div className="font-mono text-xl font-bold text-emerald-400">{completedTasks}</div>
+                          <div className="font-mono text-[8px] text-zinc-400 uppercase tracking-wider">COMPLETED</div>
+                        </div>
+                        <div className="p-2.5 rounded-xl bg-black/40 border border-white/10">
+                          <div className="font-mono text-xl font-bold text-amber-400">{pendingTasks}</div>
+                          <div className="font-mono text-[8px] text-zinc-400 uppercase tracking-wider">PENDING</div>
+                        </div>
+                        <div className="p-2.5 rounded-xl bg-black/40 border border-white/10">
+                          <div className="font-mono text-xl font-bold text-cyan-400">{actions.length}</div>
+                          <div className="font-mono text-[8px] text-zinc-400 uppercase tracking-wider">SPONTANEOUS</div>
+                        </div>
+                      </div>
+
+                      {/* Filter Pills */}
+                      <div className="flex items-center gap-2 pb-1 border-b border-white/5">
+                        {(["ALL", "PENDING", "COMPLETED"] as const).map((f) => (
+                          <button
+                            key={f}
+                            onClick={() => setRoutineFilter(f)}
+                            className={`px-3 py-1 rounded-lg font-mono text-[10px] uppercase tracking-wider transition-colors cursor-pointer ${
+                              routineFilter === f
+                                ? "bg-amber-400 text-black font-bold"
+                                : "bg-black/40 text-zinc-400 hover:text-white"
+                            }`}
+                          >
+                            {f} ({f === "ALL" ? tasks.length : f === "PENDING" ? pendingTasks : completedTasks})
+                          </button>
+                        ))}
+                      </div>
+
+                      {/* Monitored Routines Checklist */}
+                      <div className="space-y-2 max-h-[220px] overflow-y-auto pr-1">
+                        {tasks
+                          .filter((t) => {
+                            if (!t) return false;
+                            if (routineFilter === "PENDING") return t.status !== "completed";
+                            if (routineFilter === "COMPLETED") return t.status === "completed";
+                            return true;
+                          })
+                          .map((task, idx) => {
+                            const isComp = task.status === "completed";
+                            return (
                               <div
-                                key={task.id}
-                                className="flex items-center justify-between p-2 rounded bg-black/40 border border-white/5 text-xs"
+                                key={task.id || idx}
+                                className="p-3 rounded-xl bg-black/40 border border-white/10 flex items-center justify-between gap-3 hover:border-white/20 transition-colors"
                               >
-                                <div className="flex items-center gap-2 truncate">
+                                <div className="flex items-center gap-3 truncate flex-1">
                                   <button
                                     onClick={() => handleToggleRoutineClick(task)}
-                                    className={`w-4 h-4 rounded flex items-center justify-center font-mono text-[10px] border transition-colors ${
-                                      task.status === "completed"
+                                    className={`w-6 h-6 rounded-lg flex items-center justify-center font-mono text-xs border transition-colors shrink-0 cursor-pointer ${
+                                      isComp
                                         ? "bg-emerald-500 border-emerald-400 text-black font-bold"
-                                        : "border-white/30 hover:border-white"
+                                        : "border-white/30 hover:border-emerald-400 text-transparent"
+                                    }`}
+                                    title="Toggle routine completion"
+                                  >
+                                    ✓
+                                  </button>
+                                  <div className="truncate min-w-0">
+                                    <div className={`text-sm font-sans truncate font-medium ${isComp ? "line-through text-zinc-500" : "text-zinc-100"}`}>
+                                      {task.title || "Routine"}
+                                    </div>
+                                    <div className="text-[10px] font-mono text-zinc-400 flex items-center gap-2">
+                                      <span className="uppercase text-cyan-400">{task.domain || "routine"}</span>
+                                      <span>•</span>
+                                      <span>{task.scheduled_time || "DAILY"}</span>
+                                    </div>
+                                  </div>
+                                </div>
+
+                                <div className="flex items-center gap-2 shrink-0">
+                                  <span
+                                    className={`font-mono text-[9px] uppercase font-bold px-2 py-0.5 rounded ${
+                                      isComp
+                                        ? "bg-emerald-950 text-emerald-300 border border-emerald-500/30"
+                                        : "bg-amber-950 text-amber-300 border border-amber-500/30"
                                     }`}
                                   >
-                                    {task.status === "completed" ? "✓" : ""}
-                                  </button>
-                                  <span className={`truncate ${task.status === "completed" ? "line-through text-zinc-500" : "text-zinc-200"}`}>
-                                    {task.title}
+                                    {task.status || "pending"}
                                   </span>
                                 </div>
-                                <span className="font-mono text-[9px] text-amber-400 shrink-0">
-                                  {task.scheduled_time || "SCHEDULED"}
-                                </span>
                               </div>
-                            ))}
-                          </div>
-                        ) : (
-                          <div className="text-zinc-500 font-mono text-xs py-3 text-center">
-                            No monitored routines active.
-                          </div>
-                        )}
-                        <div className="flex items-center justify-end pt-1">
-                          <button
-                            onClick={() => handleTabSelect("routines")}
-                            className="text-xs font-mono text-amber-400 hover:underline flex items-center gap-1"
-                          >
-                            <span>View All Routines</span>
-                            <span>→</span>
-                          </button>
-                        </div>
+                            );
+                          })}
                       </div>
 
-                      {/* Social Rolodex Card */}
-                      <div className="p-4 rounded-xl bg-[#12141a] border border-white/10 hover:border-cyan-500/40 transition-colors space-y-2.5">
-                        <div className="flex items-center justify-between">
-                          <span className="font-mono text-[9px] text-cyan-400 tracking-wider uppercase font-bold flex items-center gap-1.5">
-                            <span className="w-2 h-2 rounded-full bg-cyan-400" />
-                            SOCIAL ROLODEX PROFILE
-                          </span>
-                          <span className="font-mono text-[9px] text-zinc-500">
-                            {contacts.length} CONTACTS
-                          </span>
+                      {/* Quick Add Routine Presets */}
+                      <div className="pt-2 border-t border-white/10 flex flex-wrap items-center gap-2">
+                        <span className="font-mono text-[9px] text-zinc-400 tracking-widest uppercase">Quick Add:</span>
+                        {[
+                          { title: "Turn off garden irrigation", time: "18:00" },
+                          { title: "Evening vitamins & water", time: "21:00" },
+                          { title: "Lock patio & garage doors", time: "22:30" },
+                        ].map((preset, i) => (
+                          <button
+                            key={i}
+                            onClick={() => handleCreateRoutineQuick(preset.title, preset.time)}
+                            className="px-2.5 py-1 rounded-lg bg-zinc-800/80 hover:bg-zinc-700 text-zinc-300 font-mono text-[10px] transition-colors cursor-pointer"
+                          >
+                            + {preset.title}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="pt-3 border-t border-white/10 flex items-center justify-between">
+                      <span className="text-xs font-mono text-zinc-400">
+                        Echo Show Monitored Cadence: <strong className="text-amber-400">ACTIVE</strong>
+                      </span>
+                      <button
+                        onClick={() =>
+                          speakAlexaReassurance(
+                            `Alexa routines update: You have completed ${completedTasks} of ${tasks.length} daily routines.`
+                          )
+                        }
+                        className="px-4 py-1.5 rounded-full bg-amber-500/20 hover:bg-amber-500/30 border border-amber-400/40 text-amber-300 font-mono text-xs uppercase tracking-wider font-bold transition-colors cursor-pointer"
+                      >
+                        🔊 Speak Daily Recap
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* TAB 4: SOCIAL ROLODEX */}
+                {activeTab === "social" && (
+                  <div className="space-y-4 flex-1 flex flex-col justify-between animate-in fade-in duration-150">
+                    <div className="space-y-4">
+                      {/* Contact Carousel Selector */}
+                      {contacts.length > 0 && (
+                        <div className="flex items-center gap-2 overflow-x-auto hide-scrollbar pb-1">
+                          {contacts.map((c, idx) => (
+                            <button
+                              key={c.id || idx}
+                              onClick={() => setSelectedContactIndex(idx)}
+                              className={`px-3 py-1.5 rounded-xl font-mono text-xs whitespace-nowrap transition-all flex items-center gap-2 cursor-pointer ${
+                                selectedContactIndex === idx
+                                  ? "bg-cyan-500 text-black font-bold shadow-md"
+                                  : "bg-black/40 text-zinc-400 hover:text-white border border-white/10"
+                              }`}
+                            >
+                              <span className="w-4 h-4 rounded-full bg-white/20 flex items-center justify-center text-[9px]">
+                                {typeof c.name === "string" && c.name ? c.name.charAt(0) : "C"}
+                              </span>
+                              <span>{c.name || "Contact"}</span>
+                            </button>
+                          ))}
                         </div>
-                        {selectedContact ? (
-                          <div className="space-y-1.5">
-                            <div className="flex items-center gap-2">
-                              <div className="w-7 h-7 rounded-full bg-cyan-500/20 border border-cyan-400 text-cyan-300 font-mono text-xs font-bold flex items-center justify-center">
-                                {selectedContact.name ? selectedContact.name.charAt(0).toUpperCase() : "C"}
+                      )}
+
+                      {selectedContact ? (
+                        <div className="p-5 rounded-2xl bg-[#12141a] border border-white/10 space-y-4">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="flex items-center gap-3">
+                              <div className="w-12 h-12 rounded-2xl bg-cyan-500/20 border-2 border-cyan-400 text-cyan-300 font-serif text-xl font-bold flex items-center justify-center shrink-0">
+                                {typeof selectedContact.name === "string" && selectedContact.name ? selectedContact.name.charAt(0).toUpperCase() : "C"}
                               </div>
                               <div>
-                                <h4 className="font-serif text-base text-white font-medium leading-tight">
-                                  {selectedContact.name}
-                                </h4>
-                                <div className="text-[10px] font-mono text-zinc-400 truncate">
+                                <h3 className="font-serif text-2xl text-white font-bold leading-tight">
+                                  {selectedContact.name || "Executive Contact"}
+                                </h3>
+                                <div className="text-xs font-mono text-zinc-400 uppercase tracking-wider">
                                   {selectedContact.company_or_role || selectedContact.web_profile?.headline || "Executive Contact"}
                                 </div>
                               </div>
                             </div>
-                            <div className="text-xs text-zinc-300 font-sans line-clamp-1">
-                              {selectedContact.web_profile?.bio_summary || "Autonomous web profile indexed."}
-                            </div>
-                          </div>
-                        ) : (
-                          <div className="text-zinc-500 font-mono text-xs py-3 text-center">
-                            No contacts indexed yet.
-                          </div>
-                        )}
-                        <div className="flex items-center justify-end pt-1">
-                          <button
-                            onClick={() => handleTabSelect("social")}
-                            className="text-xs font-mono text-cyan-400 hover:underline flex items-center gap-1"
-                          >
-                            <span>Open Social Rolodex</span>
-                            <span>→</span>
-                          </button>
-                        </div>
-                      </div>
 
-                      {/* Topic Dossiers Card */}
-                      <div className="p-4 rounded-xl bg-[#12141a] border border-white/10 hover:border-purple-500/40 transition-colors space-y-2.5">
-                        <div className="flex items-center justify-between">
-                          <span className="font-mono text-[9px] text-purple-400 tracking-wider uppercase font-bold flex items-center gap-1.5">
-                            <span className="w-2 h-2 rounded-full bg-purple-400" />
-                            SYNTHESIZED TOPIC DOSSIER
-                          </span>
-                          <span className="font-mono text-[9px] text-zinc-500">
-                            {topics.length} COMPILED
-                          </span>
-                        </div>
-                        {selectedTopic ? (
-                          <div className="space-y-1.5">
-                            <h4 className="font-serif text-base text-white font-medium truncate">
-                              {selectedTopic.topic_title}
-                            </h4>
-                            <p className="text-xs text-zinc-300 font-sans line-clamp-2 bg-black/40 p-2 rounded border border-white/5">
-                              {selectedTopic.explanatory_synthesis || selectedTopic.executive_summary?.[0] || "Synthesized analysis recorded."}
-                            </p>
-                          </div>
-                        ) : (
-                          <div className="text-zinc-500 font-mono text-xs py-3 text-center">
-                            No technical briefings recorded yet.
-                          </div>
-                        )}
-                        <div className="flex items-center justify-end pt-1">
-                          <button
-                            onClick={() => handleTabSelect("topics")}
-                            className="text-xs font-mono text-purple-400 hover:underline flex items-center gap-1"
-                          >
-                            <span>Read Deep Briefing</span>
-                            <span>→</span>
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Alexa Voice Speech Output Footer */}
-                  <div className="mt-4 pt-3 border-t border-white/10 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-                    <div className="flex items-center gap-2.5">
-                      <div className="w-8 h-8 rounded-full bg-cyan-500/20 border border-cyan-400/40 flex items-center justify-center text-cyan-300 shrink-0">
-                        💬
-                      </div>
-                      <div>
-                        <div className="font-mono text-[8px] text-zinc-400 tracking-widest uppercase">
-                          Alexa Voice Output
-                        </div>
-                        <div className="font-sans text-xs text-zinc-200 italic max-w-xl truncate">
-                          "EXAMEN Status: Domestic posture is all clear. {actions.length} verified actions, {completedTasks}/{tasks.length} routines completed."
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="flex flex-wrap gap-1.5">
-                      <button
-                        onClick={() => {
-                          speakAlexaReassurance("Yes, your clothes iron is confirmed unplugged and cold.");
-                          handleTabSelect("peace");
-                        }}
-                        className="px-2.5 py-1 rounded-full bg-zinc-800/80 hover:bg-zinc-700 text-zinc-300 font-mono text-[9px] tracking-wider transition-colors"
-                      >
-                        "Did I unplug iron?"
-                      </button>
-                      <button
-                        onClick={() => {
-                          speakAlexaReassurance(`You have ${pendingTasks} pending routines remaining today.`);
-                          handleTabSelect("routines");
-                        }}
-                        className="px-2.5 py-1 rounded-full bg-zinc-800/80 hover:bg-zinc-700 text-zinc-300 font-mono text-[9px] tracking-wider transition-colors"
-                      >
-                        "Routine Check"
-                      </button>
-                      <button
-                        onClick={() => {
-                          speakAlexaReassurance("Opening speech simulator on Echo Show.");
-                          handleTabSelect("simulator");
-                        }}
-                        className="px-2.5 py-1 rounded-full bg-cyan-950/80 border border-cyan-500/40 text-cyan-300 font-mono text-[9px] tracking-wider transition-colors"
-                      >
-                        "Run Simulator"
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* TAB 2: PEACE OF MIND */}
-              {activeTab === "peace" && (
-                <div className="space-y-4 flex-1 flex flex-col justify-between animate-in fade-in duration-150">
-                  <div className="space-y-4">
-                    {/* Primary Highlighted Verified Action Card */}
-                    <div className="p-5 rounded-2xl bg-gradient-to-r from-emerald-950/40 via-black/60 to-black/80 border-2 border-emerald-500/50 space-y-3">
-                      <div className="flex items-center justify-between">
-                        <span className="flex items-center gap-2 font-mono text-xs font-bold tracking-wider text-emerald-400 uppercase">
-                          <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping" />
-                          ACOUSTICALLY VERIFIED ANCHOR // DOMESTIC SAFETY
-                        </span>
-                        <span className="font-mono text-xs text-zinc-400">
-                          {latestAction?.elapsed_time_human || "just now"}
-                        </span>
-                      </div>
-
-                      <div className="font-serif text-2xl sm:text-3xl text-white font-bold">
-                        {latestAction?.action_type?.replace(/_/g, " ").toUpperCase() || "UNPLUG CLOTHES IRON"}
-                      </div>
-
-                      <div className="p-3.5 rounded-xl bg-black/60 border border-emerald-500/20 font-sans italic text-sm text-zinc-200">
-                        "{latestAction?.raw_statement || "Ho appena staccato il ferro da stiro prima di uscire."}"
-                      </div>
-
-                      <div className="flex items-center justify-between pt-2 border-t border-white/10 text-xs font-mono">
-                        <span className="text-zinc-400">ACOUSTIC CERTAINTY:</span>
-                        <span className="text-emerald-400 font-bold">
-                          {Math.round((latestAction?.confidence || 0.98) * 100)}% CONFIDENCE // GROUNDED
-                        </span>
-                      </div>
-                    </div>
-
-                    {/* Quick Domestic Reassurance Check Buttons */}
-                    <div className="space-y-2">
-                      <div className="font-mono text-[9px] text-zinc-400 tracking-widest uppercase">
-                        Ask Alexa Peace Reassurance:
-                      </div>
-                      <div className="flex flex-wrap gap-2">
-                        {[
-                          { q: "Clothes Iron", statement: "I just unplugged the clothes iron from the wall outlet." },
-                          { q: "Kitchen Stove", statement: "The gas stovetop burners are completely off and cold." },
-                          { q: "Front Door Lock", statement: "I double locked the front deadbolt lock." },
-                          { q: "Evening Medication", statement: "I just took my evening medication pills." },
-                        ].map((item, i) => (
-                          <button
-                            key={i}
-                            onClick={() => handleCorroborateActionQuick(item.statement)}
-                            className="px-3.5 py-2 rounded-xl bg-black/50 hover:bg-emerald-950/60 border border-white/10 hover:border-emerald-500/40 text-zinc-200 font-mono text-xs tracking-wider transition-all flex items-center gap-2 cursor-pointer"
-                          >
-                            <span>🛡️</span>
-                            <span>{item.q} Check</span>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* Recent Acoustic Ledger List */}
-                    <div className="space-y-2 pt-2 border-t border-white/10">
-                      <div className="font-mono text-[9px] text-zinc-400 tracking-widest uppercase">
-                        Recent Verified Ledger Entries ({actions.length}):
-                      </div>
-                      <div className="space-y-1.5 max-h-[160px] overflow-y-auto pr-1">
-                        {actions.map((act) => (
-                          <div
-                            key={act.id}
-                            className="p-2.5 rounded-lg bg-black/40 border border-white/5 flex items-center justify-between text-xs font-sans gap-2"
-                          >
-                            <div className="truncate flex-1">
-                              <span className="font-semibold text-white mr-2">
-                                {act.action_type.replace(/_/g, " ").toUpperCase()}:
-                              </span>
-                              <span className="text-zinc-300 italic">"{act.raw_statement}"</span>
-                            </div>
-                            <span className="font-mono text-[9px] text-emerald-400 shrink-0">
-                              {act.elapsed_time_human || "VERIFIED"}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="pt-3 border-t border-white/10 flex items-center justify-between">
-                    <span className="text-xs font-mono text-zinc-400">
-                      Acoustic Sensor Mesh: <strong className="text-emerald-400">ONLINE</strong>
-                    </span>
-                    <button
-                      onClick={() =>
-                        speakAlexaReassurance(
-                          `Alexa reassurance: ${latestAction?.action_type || "Clothes iron"} is verified completed with ${Math.round((latestAction?.confidence || 0.98) * 100)} percent certainty.`
-                        )
-                      }
-                      className="px-4 py-1.5 rounded-full bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/40 text-emerald-300 font-mono text-xs uppercase tracking-wider font-bold transition-colors"
-                    >
-                      🔊 Speak Acoustic Confirmation
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* TAB 3: DAILY ROUTINES */}
-              {activeTab === "routines" && (
-                <div className="space-y-4 flex-1 flex flex-col justify-between animate-in fade-in duration-150">
-                  <div className="space-y-4">
-                    {/* 4 Summary Stats */}
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center">
-                      <div className="p-2.5 rounded-xl bg-black/40 border border-white/10">
-                        <div className="font-mono text-xl font-bold text-white">{tasks.length}</div>
-                        <div className="font-mono text-[8px] text-zinc-400 uppercase tracking-wider">PLANNED TOTAL</div>
-                      </div>
-                      <div className="p-2.5 rounded-xl bg-black/40 border border-white/10">
-                        <div className="font-mono text-xl font-bold text-emerald-400">{completedTasks}</div>
-                        <div className="font-mono text-[8px] text-zinc-400 uppercase tracking-wider">COMPLETED</div>
-                      </div>
-                      <div className="p-2.5 rounded-xl bg-black/40 border border-white/10">
-                        <div className="font-mono text-xl font-bold text-amber-400">{pendingTasks}</div>
-                        <div className="font-mono text-[8px] text-zinc-400 uppercase tracking-wider">PENDING</div>
-                      </div>
-                      <div className="p-2.5 rounded-xl bg-black/40 border border-white/10">
-                        <div className="font-mono text-xl font-bold text-cyan-400">{actions.length}</div>
-                        <div className="font-mono text-[8px] text-zinc-400 uppercase tracking-wider">SPONTANEOUS</div>
-                      </div>
-                    </div>
-
-                    {/* Filter Pills */}
-                    <div className="flex items-center gap-2 pb-1 border-b border-white/5">
-                      {(["ALL", "PENDING", "COMPLETED"] as const).map((f) => (
-                        <button
-                          key={f}
-                          onClick={() => setRoutineFilter(f)}
-                          className={`px-3 py-1 rounded-lg font-mono text-[10px] uppercase tracking-wider transition-colors ${
-                            routineFilter === f
-                              ? "bg-amber-400 text-black font-bold"
-                              : "bg-black/40 text-zinc-400 hover:text-white"
-                          }`}
-                        >
-                          {f} ({f === "ALL" ? tasks.length : f === "PENDING" ? pendingTasks : completedTasks})
-                        </button>
-                      ))}
-                    </div>
-
-                    {/* Monitored Routines Checklist */}
-                    <div className="space-y-2 max-h-[220px] overflow-y-auto pr-1">
-                      {tasks
-                        .filter((t) => {
-                          if (routineFilter === "PENDING") return t.status !== "completed";
-                          if (routineFilter === "COMPLETED") return t.status === "completed";
-                          return true;
-                        })
-                        .map((task) => {
-                          const isComp = task.status === "completed";
-                          return (
-                            <div
-                              key={task.id}
-                              className="p-3 rounded-xl bg-black/40 border border-white/10 flex items-center justify-between gap-3 hover:border-white/20 transition-colors"
+                            <button
+                              onClick={() => handleEnrichContactClick(selectedContact.id || selectedContact.name, selectedContact.name)}
+                              className="px-3 py-1.5 rounded-xl bg-cyan-950/80 hover:bg-cyan-900 border border-cyan-500/40 text-cyan-300 font-mono text-[10px] uppercase tracking-wider shrink-0 transition-colors cursor-pointer"
                             >
-                              <div className="flex items-center gap-3 truncate flex-1">
-                                <button
-                                  onClick={() => handleToggleRoutineClick(task)}
-                                  className={`w-6 h-6 rounded-lg flex items-center justify-center font-mono text-xs border transition-colors shrink-0 ${
-                                    isComp
-                                      ? "bg-emerald-500 border-emerald-400 text-black font-bold"
-                                      : "border-white/30 hover:border-emerald-400 text-transparent"
-                                  }`}
-                                  title="Toggle routine completion"
-                                >
-                                  ✓
-                                </button>
-                                <div className="truncate min-w-0">
-                                  <div className={`text-sm font-sans truncate font-medium ${isComp ? "line-through text-zinc-500" : "text-zinc-100"}`}>
-                                    {task.title}
-                                  </div>
-                                  <div className="text-[10px] font-mono text-zinc-400 flex items-center gap-2">
-                                    <span className="uppercase text-cyan-400">{task.domain}</span>
-                                    <span>•</span>
-                                    <span>{task.scheduled_time || "DAILY"}</span>
-                                  </div>
-                                </div>
-                              </div>
+                              🔍 Enrich Profile
+                            </button>
+                          </div>
 
-                              <div className="flex items-center gap-2 shrink-0">
+                          {/* Bio summary */}
+                          <div className="text-sm font-sans text-zinc-200 leading-relaxed bg-black/40 p-3 rounded-xl border border-white/5">
+                            {selectedContact.web_profile?.bio_summary ||
+                              "Autonomous executive intelligence profile corroborated via live web search."}
+                          </div>
+
+                          {/* Expertise tags */}
+                          {Array.isArray(selectedContact.web_profile?.areas_of_expertise) && selectedContact.web_profile.areas_of_expertise.length > 0 && (
+                            <div className="flex flex-wrap gap-1.5">
+                              {selectedContact.web_profile.areas_of_expertise.map((tag, i) => (
                                 <span
-                                  className={`font-mono text-[9px] uppercase font-bold px-2 py-0.5 rounded ${
-                                    isComp
-                                      ? "bg-emerald-950 text-emerald-300 border border-emerald-500/30"
-                                      : "bg-amber-950 text-amber-300 border border-amber-500/30"
-                                  }`}
+                                  key={i}
+                                  className="px-2 py-0.5 rounded bg-cyan-950/60 border border-cyan-500/20 text-cyan-300 font-mono text-[9px] uppercase"
                                 >
-                                  {task.status}
+                                  #{tag}
                                 </span>
+                              ))}
+                            </div>
+                          )}
+
+                          {/* Bilateral Commitments for this contact */}
+                          {Array.isArray(selectedContact.commitments) && selectedContact.commitments.length > 0 && (
+                            <div className="space-y-2 pt-2 border-t border-white/10">
+                              <div className="font-mono text-[9px] text-zinc-400 tracking-widest uppercase">
+                                Bilateral Commitments ({selectedContact.commitments.length}):
+                              </div>
+                              <div className="space-y-1.5">
+                                {selectedContact.commitments.map((cmt, i) => {
+                                  const isObj = typeof cmt === "object" && cmt !== null;
+                                  const desc = isObj ? cmt.description : String(cmt);
+                                  const debtor = isObj ? cmt.debtor : "user";
+                                  const status = isObj ? cmt.status : "open";
+                                  const cmtId = isObj ? cmt.id : `cmt-${i}`;
+                                  return (
+                                    <div
+                                      key={cmtId || i}
+                                      className="p-2.5 rounded-lg bg-black/60 border border-white/5 flex items-center justify-between text-xs font-sans gap-2"
+                                    >
+                                      <div className="flex items-center gap-2 truncate">
+                                        <span>{debtor === "user" ? "📤" : "📥"}</span>
+                                        <span className="text-zinc-200 truncate">{desc}</span>
+                                      </div>
+                                      <div className="flex items-center gap-2 shrink-0">
+                                        <span className="font-mono text-[9px] text-cyan-400 uppercase">
+                                          {debtor === "user" ? "You Promised" : "They Promised"}
+                                        </span>
+                                        {isObj && status === "open" && (
+                                          <button
+                                            onClick={() => handleToggleCommitmentClick(cmt.id, "fulfill")}
+                                            className="px-2 py-0.5 rounded bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-500/40 text-emerald-300 font-mono text-[9px] uppercase transition-colors cursor-pointer"
+                                          >
+                                            ✓ Fulfill
+                                          </button>
+                                        )}
+                                      </div>
+                                    </div>
+                                  );
+                                })}
                               </div>
                             </div>
-                          );
-                        })}
+                          )}
+                        </div>
+                      ) : (
+                        <div className="text-center py-12 text-zinc-500 font-mono text-sm">
+                          No contacts recorded in social rolodex.
+                        </div>
+                      )}
                     </div>
 
-                    {/* Quick Add Routine Presets */}
-                    <div className="pt-2 border-t border-white/10 flex flex-wrap items-center gap-2">
-                      <span className="font-mono text-[9px] text-zinc-400 tracking-widest uppercase">Quick Add:</span>
-                      {[
-                        { title: "Turn off garden irrigation", time: "18:00" },
-                        { title: "Evening vitamins & water", time: "21:00" },
-                        { title: "Lock patio & garage doors", time: "22:30" },
-                      ].map((preset, i) => (
+                    <div className="pt-3 border-t border-white/10 flex items-center justify-between">
+                      <span className="text-xs font-mono text-zinc-400">
+                        CRM Ledger: <strong className="text-cyan-400">SYNCHRONIZED</strong>
+                      </span>
+                      {selectedContact && (
                         <button
-                          key={i}
-                          onClick={() => handleCreateRoutineQuick(preset.title, preset.time)}
-                          className="px-2.5 py-1 rounded-lg bg-zinc-800/80 hover:bg-zinc-700 text-zinc-300 font-mono text-[10px] transition-colors"
+                          onClick={() =>
+                            speakAlexaReassurance(
+                              `Executive profile for ${selectedContact.name || "contact"}: ${selectedContact.web_profile?.bio_summary || "profile indexed."}`
+                            )
+                          }
+                          className="px-4 py-1.5 rounded-full bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-400/40 text-cyan-300 font-mono text-xs uppercase tracking-wider font-bold transition-colors cursor-pointer"
                         >
-                          + {preset.title}
+                          🔊 Read Profile Aloud
                         </button>
-                      ))}
+                      )}
                     </div>
                   </div>
+                )}
 
-                  <div className="pt-3 border-t border-white/10 flex items-center justify-between">
-                    <span className="text-xs font-mono text-zinc-400">
-                      Echo Show Monitored Cadence: <strong className="text-amber-400">ACTIVE</strong>
-                    </span>
-                    <button
-                      onClick={() =>
-                        speakAlexaReassurance(
-                          `Alexa routines update: You have completed ${completedTasks} of ${tasks.length} daily routines.`
-                        )
-                      }
-                      className="px-4 py-1.5 rounded-full bg-amber-500/20 hover:bg-amber-500/30 border border-amber-400/40 text-amber-300 font-mono text-xs uppercase tracking-wider font-bold transition-colors"
-                    >
-                      🔊 Speak Daily Recap
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* TAB 4: SOCIAL ROLODEX */}
-              {activeTab === "social" && (
-                <div className="space-y-4 flex-1 flex flex-col justify-between animate-in fade-in duration-150">
-                  <div className="space-y-4">
-                    {/* Contact Carousel Selector */}
-                    {contacts.length > 0 && (
-                      <div className="flex items-center gap-2 overflow-x-auto hide-scrollbar pb-1">
-                        {contacts.map((c, idx) => (
+                {/* TAB 5: TOPIC DOSSIERS & EVENT SESSIONS */}
+                {activeTab === "topics" && (
+                  <div className="space-y-4 flex-1 flex flex-col justify-between animate-in fade-in duration-150">
+                    <div className="space-y-4">
+                      {/* View Sub-Toggle: Events vs Briefings */}
+                      {events.length > 0 && (
+                        <div className="flex items-center gap-1 p-1 rounded-full bg-black/50 border border-white/10 w-fit">
                           <button
-                            key={c.id || idx}
-                            onClick={() => setSelectedContactIndex(idx)}
-                            className={`px-3 py-1.5 rounded-xl font-mono text-xs whitespace-nowrap transition-all flex items-center gap-2 ${
-                              selectedContactIndex === idx
-                                ? "bg-cyan-500 text-black font-bold shadow-md"
-                                : "bg-black/40 text-zinc-400 hover:text-white border border-white/10"
+                            onClick={() => setTopicSubView("events")}
+                            className={`px-3 py-1 rounded-full font-mono text-[10px] font-bold tracking-wider transition-colors cursor-pointer ${
+                              topicSubView === "events" ? "bg-cyan-500 text-black shadow-sm" : "text-zinc-400 hover:text-white"
                             }`}
                           >
-                            <span className="w-4 h-4 rounded-full bg-white/20 flex items-center justify-center text-[9px]">
-                              {c.name ? c.name.charAt(0) : "C"}
-                            </span>
-                            <span>{c.name}</span>
+                            🏛️ EVENTS ({events.length})
                           </button>
-                        ))}
-                      </div>
-                    )}
-
-                    {selectedContact ? (
-                      <div className="p-5 rounded-2xl bg-[#12141a] border border-white/10 space-y-4">
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="flex items-center gap-3">
-                            <div className="w-12 h-12 rounded-2xl bg-cyan-500/20 border-2 border-cyan-400 text-cyan-300 font-serif text-xl font-bold flex items-center justify-center shrink-0">
-                              {selectedContact.name ? selectedContact.name.charAt(0).toUpperCase() : "C"}
-                            </div>
-                            <div>
-                              <h3 className="font-serif text-2xl text-white font-bold leading-tight">
-                                {selectedContact.name}
-                              </h3>
-                              <div className="text-xs font-mono text-zinc-400 uppercase tracking-wider">
-                                {selectedContact.company_or_role || selectedContact.web_profile?.headline || "Executive Contact"}
-                              </div>
-                            </div>
-                          </div>
-
                           <button
-                            onClick={() => handleEnrichContactClick(selectedContact.id || selectedContact.name, selectedContact.name)}
-                            className="px-3 py-1.5 rounded-xl bg-cyan-950/80 hover:bg-cyan-900 border border-cyan-500/40 text-cyan-300 font-mono text-[10px] uppercase tracking-wider shrink-0 transition-colors"
+                            onClick={() => setTopicSubView("briefings")}
+                            className={`px-3 py-1 rounded-full font-mono text-[10px] font-bold tracking-wider transition-colors cursor-pointer ${
+                              topicSubView === "briefings" ? "bg-purple-500 text-white shadow-sm" : "text-zinc-400 hover:text-white"
+                            }`}
                           >
-                            🔍 Enrich Profile
+                            📚 ALL BRIEFINGS ({topics.length})
                           </button>
                         </div>
+                      )}
 
-                        {/* Bio summary */}
-                        <div className="text-sm font-sans text-zinc-200 leading-relaxed bg-black/40 p-3 rounded-xl border border-white/5">
-                          {selectedContact.web_profile?.bio_summary ||
-                            "Autonomous executive intelligence profile corroborated via live web search."}
-                        </div>
-
-                        {/* Expertise tags */}
-                        {selectedContact.web_profile?.areas_of_expertise && selectedContact.web_profile.areas_of_expertise.length > 0 && (
-                          <div className="flex flex-wrap gap-1.5">
-                            {selectedContact.web_profile.areas_of_expertise.map((tag, i) => (
-                              <span
-                                key={i}
-                                className="px-2 py-0.5 rounded bg-cyan-950/60 border border-cyan-500/20 text-cyan-300 font-mono text-[9px] uppercase"
+                      {/* SUB-VIEW 1: DEEP TOPIC EVENT SESSIONS */}
+                      {topicSubView === "events" && events.length > 0 && (
+                        <>
+                          {/* Events Pill Selector */}
+                          <div className="flex items-center gap-2 overflow-x-auto hide-scrollbar pb-1">
+                            {events.map((ev, idx) => (
+                              <button
+                                key={ev.session_id || idx}
+                                onClick={() => setSelectedEventIndex(idx)}
+                                className={`px-3 py-1.5 rounded-xl font-mono text-xs whitespace-nowrap transition-all cursor-pointer ${
+                                  selectedEventIndex === idx
+                                    ? "bg-cyan-500 text-black font-bold shadow-md shadow-cyan-500/30"
+                                    : "bg-black/40 text-zinc-400 hover:text-white border border-white/10"
+                                }`}
                               >
-                                #{tag}
-                              </span>
+                                {ev.final_title || ev.title || "Lecture / Meeting"}
+                              </button>
                             ))}
                           </div>
-                        )}
 
-                        {/* Bilateral Commitments for this contact */}
-                        {selectedContact.commitments && selectedContact.commitments.length > 0 && (
-                          <div className="space-y-2 pt-2 border-t border-white/10">
-                            <div className="font-mono text-[9px] text-zinc-400 tracking-widest uppercase">
-                              Bilateral Commitments ({selectedContact.commitments.length}):
-                            </div>
-                            <div className="space-y-1.5">
-                              {selectedContact.commitments.map((cmt, i) => {
-                                const isObj = typeof cmt === "object" && cmt !== null;
-                                const desc = isObj ? cmt.description : String(cmt);
-                                const debtor = isObj ? cmt.debtor : "user";
-                                const status = isObj ? cmt.status : "open";
-                                const cmtId = isObj ? cmt.id : `cmt-${i}`;
-                                return (
-                                  <div
-                                    key={cmtId || i}
-                                    className="p-2.5 rounded-lg bg-black/60 border border-white/5 flex items-center justify-between text-xs font-sans gap-2"
+                          {selectedEvent ? (
+                            <div className="p-5 rounded-2xl bg-[#12141a] border border-white/10 space-y-4">
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                  <span
+                                    className={`px-2.5 py-0.5 rounded border font-mono text-[9px] uppercase font-bold tracking-wider ${
+                                      selectedEvent.status === "active"
+                                        ? "bg-emerald-950/80 border-emerald-500/40 text-emerald-300"
+                                        : selectedEvent.status === "paused"
+                                        ? "bg-amber-950/80 border-amber-500/40 text-amber-300"
+                                        : "bg-zinc-900 border-zinc-700 text-zinc-300"
+                                    }`}
                                   >
-                                    <div className="flex items-center gap-2 truncate">
-                                      <span>{debtor === "user" ? "📤" : "📥"}</span>
-                                      <span className="text-zinc-200 truncate">{desc}</span>
-                                    </div>
-                                    <div className="flex items-center gap-2 shrink-0">
-                                      <span className="font-mono text-[9px] text-cyan-400 uppercase">
-                                        {debtor === "user" ? "You Promised" : "They Promised"}
-                                      </span>
-                                      {isObj && status === "open" && (
-                                        <button
-                                          onClick={() => handleToggleCommitmentClick(cmt.id, "fulfill")}
-                                          className="px-2 py-0.5 rounded bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-500/40 text-emerald-300 font-mono text-[9px] uppercase transition-colors"
-                                        >
-                                          ✓ Fulfill
-                                        </button>
-                                      )}
-                                    </div>
+                                    {selectedEvent.status === "active"
+                                      ? "● LIVE"
+                                      : selectedEvent.status === "paused"
+                                      ? "⏸ PAUSED"
+                                      : "✓ CONCLUDED"}
+                                  </span>
+                                  <span className="font-mono text-[9px] text-zinc-400 uppercase">
+                                    {selectedEvent.domain || "ACADEMIC / MEETING"}
+                                  </span>
+                                </div>
+                                <span className="font-mono text-[9px] text-zinc-500">
+                                  {typeof selectedEvent.start_time === "string" ? selectedEvent.start_time.substring(0, 10) : "TODAY"}
+                                </span>
+                              </div>
+
+                              <h3 className="font-serif text-2xl text-white font-bold">
+                                {selectedEvent.final_title || selectedEvent.title || "Academic Lecture / Meeting"}
+                              </h3>
+
+                              {/* Event parts timeline (SESSION_DOSSIER_VIEWER) */}
+                              {Array.isArray(selectedEvent.segments) && selectedEvent.segments.length > 0 && (
+                                <div className="bg-black/40 border border-white/10 rounded-xl p-3.5 space-y-2">
+                                  <div className="font-mono text-[10px] tracking-wider text-cyan-300 uppercase flex items-center justify-between">
+                                    <span>🏛️ Event parts ({selectedEvent.segments.length})</span>
+                                    <span className="text-zinc-400">
+                                      {String(selectedEvent.status || "").toUpperCase()}
+                                      {selectedEvent.final_status !== "ready" ? " · PARTIAL BRIEFING" : " · FINAL"}
+                                    </span>
                                   </div>
-                                );
-                              })}
+                                  <div className="space-y-1.5">
+                                    {selectedEvent.segments.map((seg: any, idx: number) => (
+                                      <div
+                                        key={seg?.index ?? seg?.segment_id ?? idx}
+                                        className="flex items-center justify-between gap-3 text-xs bg-black/30 p-2 rounded border border-white/5"
+                                      >
+                                        <span className="text-zinc-200 truncate flex items-center gap-2">
+                                          <span className="font-mono text-[10px] text-cyan-400 font-bold">
+                                            #{seg?.index ?? idx + 1}
+                                          </span>
+                                          <span className="truncate">
+                                            {seg?.title || (seg?.status === "open" ? "Recording utterance stream…" : "Awaiting synthesis")}
+                                          </span>
+                                        </span>
+                                        <span className="font-mono text-[9px] text-zinc-400 shrink-0">{seg?.time_range || ""}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* Top Terms */}
+                              {Array.isArray(selectedEvent.top_terms) && selectedEvent.top_terms.length > 0 && (
+                                <div className="flex flex-wrap gap-1.5 pt-1">
+                                  {selectedEvent.top_terms.map((term: string, idx: number) => (
+                                    <span
+                                      key={idx}
+                                      className="px-2 py-0.5 rounded bg-cyan-950/40 border border-cyan-500/20 text-cyan-300 font-mono text-[9px]"
+                                    >
+                                      #{term}
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
                             </div>
-                          </div>
-                        )}
-                      </div>
-                    ) : (
-                      <div className="text-center py-12 text-zinc-500 font-mono text-sm">
-                        No contacts recorded in social rolodex.
-                      </div>
-                    )}
-                  </div>
+                          ) : (
+                            <div className="text-center py-12 text-zinc-500 font-mono text-sm">
+                              No event sessions recorded yet.
+                            </div>
+                          )}
+                        </>
+                      )}
 
-                  <div className="pt-3 border-t border-white/10 flex items-center justify-between">
-                    <span className="text-xs font-mono text-zinc-400">
-                      CRM Ledger: <strong className="text-cyan-400">SYNCHRONIZED</strong>
-                    </span>
-                    {selectedContact && (
-                      <button
-                        onClick={() =>
-                          speakAlexaReassurance(
-                            `Executive profile for ${selectedContact.name}: ${selectedContact.web_profile?.bio_summary || "profile indexed."}`
-                          )
-                        }
-                        className="px-4 py-1.5 rounded-full bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-400/40 text-cyan-300 font-mono text-xs uppercase tracking-wider font-bold transition-colors"
-                      >
-                        🔊 Read Profile Aloud
-                      </button>
-                    )}
-                  </div>
-                </div>
-              )}
+                      {/* SUB-VIEW 2: TECHNICAL BRIEFINGS DOSSIERS */}
+                      {(topicSubView === "briefings" || events.length === 0) && (
+                        <>
+                          {/* Topics Pill Selector with Category Filter */}
+                          {topics.length > 0 && (
+                            <div className="space-y-2">
+                              {/* Category Filter Pills */}
+                              <div className="flex items-center gap-1.5 overflow-x-auto hide-scrollbar pb-0.5">
+                                {topicCategories.map((cat) => (
+                                  <button
+                                    key={cat}
+                                    onClick={() => {
+                                      setEchoTopicCategory(cat);
+                                      setSelectedTopicIndex(0);
+                                    }}
+                                    className={`px-2.5 py-1 rounded-full font-mono text-[9px] uppercase font-bold tracking-wider transition-colors shrink-0 cursor-pointer ${
+                                      echoTopicCategory === cat
+                                        ? "bg-purple-500 text-white shadow-sm"
+                                        : "bg-black/40 text-zinc-400 hover:text-white border border-white/10"
+                                    }`}
+                                  >
+                                    {cat ? cat.replace(/_/g, " ") : "ALL"}
+                                  </button>
+                                ))}
+                              </div>
 
-              {/* TAB 5: TOPIC DOSSIERS & EVENT SESSIONS */}
-              {activeTab === "topics" && (
-                <div className="space-y-4 flex-1 flex flex-col justify-between animate-in fade-in duration-150">
-                  <div className="space-y-4">
-                    {/* View Sub-Toggle: Events vs Briefings */}
-                    {events.length > 0 && (
-                      <div className="flex items-center gap-1 p-1 rounded-full bg-black/50 border border-white/10 w-fit">
+                              {/* Topics Pill Carousel */}
+                              <div className="flex items-center gap-2 overflow-x-auto hide-scrollbar pb-1">
+                                {echoFilteredTopics.map((t, idx) => (
+                                  <button
+                                    key={t.id || idx}
+                                    onClick={() => setSelectedTopicIndex(idx)}
+                                    className={`px-3 py-1.5 rounded-xl font-mono text-xs whitespace-nowrap transition-all cursor-pointer ${
+                                      selectedTopicIndex === idx
+                                        ? "bg-purple-500 text-white font-bold shadow-md shadow-purple-500/30"
+                                        : "bg-black/40 text-zinc-400 hover:text-white border border-white/10"
+                                    }`}
+                                  >
+                                    {t.topic_title || "Untitled Briefing"}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {selectedTopic ? (
+                            <div className="p-5 rounded-2xl bg-[#12141a] border border-white/10 space-y-4">
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                  {selectedTopic.kind && Object.prototype.hasOwnProperty.call(KIND_BADGES, selectedTopic.kind) && KIND_BADGES[selectedTopic.kind] && (
+                                    <span className={`px-2.5 py-0.5 rounded border font-mono text-[9px] uppercase font-bold tracking-wider ${KIND_BADGES[selectedTopic.kind].cls}`}>
+                                      {KIND_BADGES[selectedTopic.kind].label}
+                                    </span>
+                                  )}
+                                  <span className="px-2.5 py-0.5 rounded bg-purple-950/80 border border-purple-500/30 text-purple-300 font-mono text-[9px] uppercase font-bold tracking-wider">
+                                    {selectedTopic.context_type || "TECH STACK"}
+                                  </span>
+                                </div>
+                                <span className="font-mono text-[9px] text-zinc-500">
+                                  {typeof selectedTopic.created_at === "string" ? selectedTopic.created_at.substring(0, 10) : "LIVE"}
+                                </span>
+                              </div>
+
+                              <div className="flex items-start justify-between gap-3">
+                                <h3 className="font-serif text-2xl text-white font-bold">
+                                  {selectedTopic.topic_title}
+                                </h3>
+
+                                <button
+                                  onClick={() => handleDownloadEchoTopic(selectedTopic)}
+                                  className="px-3 py-1 rounded-lg bg-purple-950/80 hover:bg-purple-900 border border-purple-500/40 text-purple-300 font-mono text-[10px] uppercase tracking-wider font-bold shrink-0 transition-colors cursor-pointer flex items-center gap-1.5"
+                                  title="Download markdown dossier"
+                                >
+                                  <span>💾</span>
+                                  <span>Download .md</span>
+                                </button>
+                              </div>
+
+                              {/* Synthesis */}
+                              {selectedTopic.explanatory_synthesis && (
+                                <div className="p-3.5 rounded-xl bg-amber-950/20 border border-amber-500/30 text-amber-200 font-sans text-sm leading-relaxed">
+                                  ⚡ <strong className="font-mono text-[10px] tracking-wider uppercase text-amber-300 mr-1">Thesis:</strong>
+                                  {selectedTopic.explanatory_synthesis}
+                                </div>
+                              )}
+
+                              {/* Event parts timeline if briefing is part of an event session */}
+                              {Array.isArray((selectedTopic as any).segments) && (selectedTopic as any).segments.length > 0 && (
+                                <div className="bg-black/40 border border-white/10 rounded-xl p-3.5 space-y-2">
+                                  <div className="font-mono text-[10px] tracking-wider text-cyan-300 uppercase flex items-center justify-between">
+                                    <span>🏛️ Event parts</span>
+                                    <span className="text-zinc-400">
+                                      {String((selectedTopic as any).status || "").toUpperCase()}
+                                    </span>
+                                  </div>
+                                  <div className="space-y-1.5">
+                                    {(selectedTopic as any).segments.map((seg: any, idx: number) => (
+                                      <div
+                                        key={seg?.index ?? idx}
+                                        className="flex items-center justify-between gap-3 text-xs bg-black/30 p-2 rounded border border-white/5"
+                                      >
+                                        <span className="text-zinc-200 truncate flex items-center gap-2">
+                                          <span className="font-mono text-[10px] text-cyan-400 font-bold">
+                                            #{seg?.index ?? idx + 1}
+                                          </span>
+                                          <span className="truncate">{seg?.title || "Part " + (seg?.index ?? idx + 1)}</span>
+                                        </span>
+                                        <span className="font-mono text-[9px] text-zinc-400 shrink-0">{seg?.time_range || ""}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* Bullets */}
+                              {Array.isArray(selectedTopic.executive_summary) && selectedTopic.executive_summary.length > 0 && (
+                                <div className="space-y-1.5">
+                                  <div className="font-mono text-[9px] text-zinc-400 tracking-widest uppercase">Key Insights:</div>
+                                  <ul className="space-y-1 text-xs text-zinc-200 font-sans">
+                                    {selectedTopic.executive_summary.map((b, i) => (
+                                      <li key={i} className="flex items-start gap-2">
+                                        <span className="text-cyan-400 font-bold">•</span>
+                                        <span>{b}</span>
+                                      </li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              )}
+
+                              {/* Deep Dive Markdown Section on Echo Show */}
+                              {selectedTopic.deep_dive_markdown && (
+                                <div className="space-y-2 pt-2 border-t border-white/10">
+                                  <MarkdownRenderer
+                                    content={selectedTopic.deep_dive_markdown}
+                                    allowRawToggle={true}
+                                    defaultMode="rendered"
+                                    title="Technical Report"
+                                    filename={sanitizeFilename(selectedTopic.topic_title, ".md")}
+                                    accentColor="purple"
+                                    showDownloadButton={true}
+                                    showCopyButton={true}
+                                  />
+                                </div>
+                              )}
+
+                              {/* Web Sources */}
+                              {Array.isArray(selectedTopic.web_sources) && selectedTopic.web_sources.length > 0 && (
+                                <div className="pt-2 border-t border-white/10 flex flex-wrap gap-2">
+                                  <span className="font-mono text-[9px] text-zinc-400 uppercase tracking-wider">Sources:</span>
+                                  {selectedTopic.web_sources.slice(0, 3).map((src, i) => {
+                                    const url = typeof src === "string" ? src : (src as any)?.url || "";
+                                    const label = typeof src === "string" ? src : (src as any)?.title || url || "Source";
+                                    return (
+                                      <a
+                                        key={i}
+                                        href={url}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="text-[10px] font-mono text-purple-300 hover:underline truncate max-w-xs"
+                                      >
+                                        🔗 {label}
+                                      </a>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </div>
+                          ) : (
+                            <div className="text-center py-12 text-zinc-500 font-mono text-sm">
+                              No technical research dossiers compiled yet.
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </div>
+
+                    <div className="pt-3 border-t border-white/10 flex items-center justify-between">
+                      <span className="text-xs font-mono text-zinc-400">
+                        Research Engine: <strong className="text-purple-400">AWS BEDROCK + DUCKDUCKGO</strong>
+                      </span>
+                      {(topicSubView === "events" && selectedEvent) ? (
                         <button
-                          onClick={() => setTopicSubView("events")}
-                          className={`px-3 py-1 rounded-full font-mono text-[10px] font-bold tracking-wider transition-colors ${
-                            topicSubView === "events" ? "bg-cyan-500 text-black shadow-sm" : "text-zinc-400 hover:text-white"
-                          }`}
+                          onClick={() =>
+                            speakAlexaReassurance(
+                              `Event summary for ${selectedEvent.final_title || selectedEvent.title || "Academic Lecture"}: ${selectedEvent.segments?.length || 0} recorded segments recorded into memory.`
+                            )
+                          }
+                          className="px-4 py-1.5 rounded-full bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-400/40 text-cyan-300 font-mono text-xs uppercase tracking-wider font-bold transition-colors cursor-pointer"
                         >
-                          🏛️ EVENTS ({events.length})
+                          🔊 Read Event Summary
                         </button>
-                        <button
-                          onClick={() => setTopicSubView("briefings")}
-                          className={`px-3 py-1 rounded-full font-mono text-[10px] font-bold tracking-wider transition-colors ${
-                            topicSubView === "briefings" ? "bg-purple-500 text-white shadow-sm" : "text-zinc-400 hover:text-white"
-                          }`}
-                        >
-                          📚 ALL BRIEFINGS ({topics.length})
-                        </button>
-                      </div>
-                    )}
+                      ) : selectedTopic ? (
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => handleDownloadEchoTopic(selectedTopic)}
+                            className="px-3.5 py-1.5 rounded-full bg-purple-950/80 hover:bg-purple-900 border border-purple-500/40 text-purple-300 font-mono text-xs uppercase tracking-wider font-bold transition-colors cursor-pointer flex items-center gap-1.5"
+                          >
+                            <span>💾</span>
+                            <span>Download .md</span>
+                          </button>
+                          <button
+                            onClick={() =>
+                              speakAlexaReassurance(
+                                `Briefing for ${selectedTopic.topic_title}: ${selectedTopic.explanatory_synthesis || (Array.isArray(selectedTopic.executive_summary) ? selectedTopic.executive_summary[0] : null) || "Analysis complete."}`
+                              )
+                            }
+                            className="px-4 py-1.5 rounded-full bg-purple-500/20 hover:bg-purple-500/30 border border-purple-400/40 text-purple-300 font-mono text-xs uppercase tracking-wider font-bold transition-colors cursor-pointer"
+                          >
+                            🔊 Read Dossier Aloud
+                          </button>
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                )}
 
-                    {/* SUB-VIEW 1: DEEP TOPIC EVENT SESSIONS */}
-                    {topicSubView === "events" && events.length > 0 && (
-                      <>
-                        {/* Events Pill Selector */}
-                        <div className="flex items-center gap-2 overflow-x-auto hide-scrollbar pb-1">
-                          {events.map((ev, idx) => (
+                {/* TAB 6: AMBIENT SIMULATOR */}
+                {activeTab === "simulator" && (
+                  <div className="space-y-4 flex-1 flex flex-col justify-between animate-in fade-in duration-150">
+                    <div className="space-y-4">
+                      {/* Presets Bar */}
+                      <div className="space-y-2">
+                        <div className="font-mono text-[9px] text-zinc-400 tracking-widest uppercase">
+                          Select Demo Scenario Preset:
+                        </div>
+                        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2">
+                          {[
+                            {
+                              label: "Iron & Gas Safety",
+                              icon: "🛡️",
+                              text: "I just unplugged the clothes iron from the wall outlet and styled my hair — all good. Gas stovetop is cold and switched off.",
+                            },
+                            {
+                              label: "Task Scheduler",
+                              icon: "⏱️",
+                              text: "Remind me to turn off the garden irrigation valve in an hour before leaving for dinner.",
+                            },
+                            {
+                              label: "Bilateral Promises",
+                              icon: "🤝",
+                              text: "Nice to meet you Giulia Verdi, Senior Director at CloudOps. I will send you our architecture pitch deck tomorrow at 10 AM.",
+                            },
+                            {
+                              label: "Executive CRM",
+                              icon: "👤",
+                              text: "Pleased to meet you, I'm Dr. Elena Rostova, VP of AI Research at CloudScale. Let's discuss distributed consensus algorithms.",
+                            },
+                            {
+                              label: "Topic Synthesis",
+                              icon: "📚",
+                              text: "In today's meeting we evaluated AWS Bedrock AgentCore Runtime microVM execution and sub-second state persistence.",
+                            },
+                          ].map((preset, i) => (
                             <button
-                              key={ev.session_id || idx}
-                              onClick={() => setSelectedEventIndex(idx)}
-                              className={`px-3 py-1.5 rounded-xl font-mono text-xs whitespace-nowrap transition-all ${
-                                selectedEventIndex === idx
-                                  ? "bg-cyan-500 text-black font-bold shadow-md shadow-cyan-500/30"
-                                  : "bg-black/40 text-zinc-400 hover:text-white border border-white/10"
-                              }`}
+                              key={i}
+                              onClick={() => {
+                                if (setSimText) setSimText(preset.text);
+                                setLocalSimText(preset.text);
+                              }}
+                              className="p-2.5 rounded-xl bg-black/40 hover:bg-cyan-950/40 border border-white/10 hover:border-cyan-500/40 text-left transition-colors cursor-pointer"
                             >
-                              {ev.final_title || ev.title || "Lecture / Meeting"}
+                              <div className="text-base mb-1">{preset.icon}</div>
+                              <div className="text-[11px] font-mono font-bold text-white leading-tight">
+                                {preset.label}
+                              </div>
                             </button>
                           ))}
                         </div>
-
-                        {selectedEvent ? (
-                          <div className="p-5 rounded-2xl bg-[#12141a] border border-white/10 space-y-4">
-                            <div className="flex items-center justify-between">
-                              <div className="flex items-center gap-2">
-                                <span
-                                  className={`px-2.5 py-0.5 rounded border font-mono text-[9px] uppercase font-bold tracking-wider ${
-                                    selectedEvent.status === "active"
-                                      ? "bg-emerald-950/80 border-emerald-500/40 text-emerald-300"
-                                      : selectedEvent.status === "paused"
-                                      ? "bg-amber-950/80 border-amber-500/40 text-amber-300"
-                                      : "bg-zinc-900 border-zinc-700 text-zinc-300"
-                                  }`}
-                                >
-                                  {selectedEvent.status === "active"
-                                    ? "● LIVE"
-                                    : selectedEvent.status === "paused"
-                                    ? "⏸ PAUSED"
-                                    : "✓ CONCLUDED"}
-                                </span>
-                                <span className="font-mono text-[9px] text-zinc-400 uppercase">
-                                  {selectedEvent.domain || "ACADEMIC / MEETING"}
-                                </span>
-                              </div>
-                              <span className="font-mono text-[9px] text-zinc-500">
-                                {selectedEvent.start_time?.substring(0, 10) || "TODAY"}
-                              </span>
-                            </div>
-
-                            <h3 className="font-serif text-2xl text-white font-bold">
-                              {selectedEvent.final_title || selectedEvent.title || "Academic Lecture / Meeting"}
-                            </h3>
-
-                            {/* Event parts timeline (SESSION_DOSSIER_VIEWER) */}
-                            {Array.isArray(selectedEvent.segments) && selectedEvent.segments.length > 0 && (
-                              <div className="bg-black/40 border border-white/10 rounded-xl p-3.5 space-y-2">
-                                <div className="font-mono text-[10px] tracking-wider text-cyan-300 uppercase flex items-center justify-between">
-                                  <span>🏛️ Event parts ({selectedEvent.segments.length})</span>
-                                  <span className="text-zinc-400">
-                                    {String(selectedEvent.status || "").toUpperCase()}
-                                    {selectedEvent.final_status !== "ready" ? " · PARTIAL BRIEFING" : " · FINAL"}
-                                  </span>
-                                </div>
-                                <div className="space-y-1.5">
-                                  {selectedEvent.segments.map((seg: any) => (
-                                    <div
-                                      key={seg.index}
-                                      className="flex items-center justify-between gap-3 text-xs bg-black/30 p-2 rounded border border-white/5"
-                                    >
-                                      <span className="text-zinc-200 truncate flex items-center gap-2">
-                                        <span className="font-mono text-[10px] text-cyan-400 font-bold">#{seg.index}</span>
-                                        <span className="truncate">
-                                          {seg.title || (seg.status === "open" ? "Recording utterance stream…" : "Awaiting synthesis")}
-                                        </span>
-                                      </span>
-                                      <span className="font-mono text-[9px] text-zinc-400 shrink-0">{seg.time_range}</span>
-                                    </div>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
-
-                            {/* Top Terms */}
-                            {selectedEvent.top_terms && selectedEvent.top_terms.length > 0 && (
-                              <div className="flex flex-wrap gap-1.5 pt-1">
-                                {selectedEvent.top_terms.map((term: string, idx: number) => (
-                                  <span
-                                    key={idx}
-                                    className="px-2 py-0.5 rounded bg-cyan-950/40 border border-cyan-500/20 text-cyan-300 font-mono text-[9px]"
-                                  >
-                                    #{term}
-                                  </span>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        ) : (
-                          <div className="text-center py-12 text-zinc-500 font-mono text-sm">
-                            No event sessions recorded yet.
-                          </div>
-                        )}
-                      </>
-                    )}
-
-                    {/* SUB-VIEW 2: TECHNICAL BRIEFINGS DOSSIERS */}
-                    {(topicSubView === "briefings" || events.length === 0) && (
-                      <>
-                        {/* Topics Pill Selector with Category Filter */}
-                        {topics.length > 0 && (
-                          <div className="space-y-2">
-                            {/* Category Filter Pills */}
-                            <div className="flex items-center gap-1.5 overflow-x-auto hide-scrollbar pb-0.5">
-                              {["ALL", ...Array.from(new Set(topics.map((t) => t.context_type))).filter(Boolean)].map((cat) => (
-                                <button
-                                  key={cat}
-                                  onClick={() => {
-                                    setEchoTopicCategory(cat);
-                                    setSelectedTopicIndex(0);
-                                  }}
-                                  className={`px-2.5 py-1 rounded-full font-mono text-[9px] uppercase font-bold tracking-wider transition-colors shrink-0 ${
-                                    echoTopicCategory === cat
-                                      ? "bg-purple-500 text-white shadow-sm"
-                                      : "bg-black/40 text-zinc-400 hover:text-white border border-white/10"
-                                  }`}
-                                >
-                                  {cat.replace(/_/g, " ")}
-                                </button>
-                              ))}
-                            </div>
-
-                            {/* Topics Pill Carousel */}
-                            <div className="flex items-center gap-2 overflow-x-auto hide-scrollbar pb-1">
-                              {echoFilteredTopics.map((t, idx) => (
-                                <button
-                                  key={t.id || idx}
-                                  onClick={() => setSelectedTopicIndex(idx)}
-                                  className={`px-3 py-1.5 rounded-xl font-mono text-xs whitespace-nowrap transition-all ${
-                                    selectedTopicIndex === idx
-                                      ? "bg-purple-500 text-white font-bold shadow-md shadow-purple-500/30"
-                                      : "bg-black/40 text-zinc-400 hover:text-white border border-white/10"
-                                  }`}
-                                >
-                                  {t.topic_title}
-                                </button>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-
-                        {selectedTopic ? (
-                          <div className="p-5 rounded-2xl bg-[#12141a] border border-white/10 space-y-4">
-                            <div className="flex items-center justify-between">
-                              <div className="flex items-center gap-2">
-                                {selectedTopic.kind && KIND_BADGES[selectedTopic.kind] && (
-                                  <span className={`px-2.5 py-0.5 rounded border font-mono text-[9px] uppercase font-bold tracking-wider ${KIND_BADGES[selectedTopic.kind].cls}`}>
-                                    {KIND_BADGES[selectedTopic.kind].label}
-                                  </span>
-                                )}
-                                <span className="px-2.5 py-0.5 rounded bg-purple-950/80 border border-purple-500/30 text-purple-300 font-mono text-[9px] uppercase font-bold tracking-wider">
-                                  {selectedTopic.context_type || "TECH STACK"}
-                                </span>
-                              </div>
-                              <span className="font-mono text-[9px] text-zinc-500">
-                                {selectedTopic.created_at?.substring(0, 10) || "LIVE"}
-                              </span>
-                            </div>
-
-                            <h3 className="font-serif text-2xl text-white font-bold">
-                              {selectedTopic.topic_title}
-                            </h3>
-
-                            {/* Synthesis */}
-                            {selectedTopic.explanatory_synthesis && (
-                              <div className="p-3.5 rounded-xl bg-amber-950/20 border border-amber-500/30 text-amber-200 font-sans text-sm leading-relaxed">
-                                ⚡ <strong className="font-mono text-[10px] tracking-wider uppercase text-amber-300 mr-1">Thesis:</strong>
-                                {selectedTopic.explanatory_synthesis}
-                              </div>
-                            )}
-
-                            {/* Event parts timeline if briefing is part of an event session */}
-                            {Array.isArray((selectedTopic as any).segments) && (selectedTopic as any).segments.length > 0 && (
-                              <div className="bg-black/40 border border-white/10 rounded-xl p-3.5 space-y-2">
-                                <div className="font-mono text-[10px] tracking-wider text-cyan-300 uppercase flex items-center justify-between">
-                                  <span>🏛️ Event parts</span>
-                                  <span className="text-zinc-400">
-                                    {String((selectedTopic as any).status || "").toUpperCase()}
-                                  </span>
-                                </div>
-                                <div className="space-y-1.5">
-                                  {(selectedTopic as any).segments.map((seg: any) => (
-                                    <div
-                                      key={seg.index}
-                                      className="flex items-center justify-between gap-3 text-xs bg-black/30 p-2 rounded border border-white/5"
-                                    >
-                                      <span className="text-zinc-200 truncate flex items-center gap-2">
-                                        <span className="font-mono text-[10px] text-cyan-400 font-bold">#{seg.index}</span>
-                                        <span className="truncate">{seg.title || "Part " + seg.index}</span>
-                                      </span>
-                                      <span className="font-mono text-[9px] text-zinc-400 shrink-0">{seg.time_range}</span>
-                                    </div>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
-
-                            {/* Bullets */}
-                            {selectedTopic.executive_summary && selectedTopic.executive_summary.length > 0 && (
-                              <div className="space-y-1.5">
-                                <div className="font-mono text-[9px] text-zinc-400 tracking-widest uppercase">Key Insights:</div>
-                                <ul className="space-y-1 text-xs text-zinc-200 font-sans">
-                                  {selectedTopic.executive_summary.map((b, i) => (
-                                    <li key={i} className="flex items-start gap-2">
-                                      <span className="text-cyan-400 font-bold">•</span>
-                                      <span>{b}</span>
-                                    </li>
-                                  ))}
-                                </ul>
-                              </div>
-                            )}
-
-                            {/* Web Sources */}
-                            {selectedTopic.web_sources && selectedTopic.web_sources.length > 0 && (
-                              <div className="pt-2 border-t border-white/10 flex flex-wrap gap-2">
-                                <span className="font-mono text-[9px] text-zinc-400 uppercase tracking-wider">Sources:</span>
-                                {selectedTopic.web_sources.slice(0, 3).map((src, i) => (
-                                  <a
-                                    key={i}
-                                    href={src}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                    className="text-[10px] font-mono text-purple-300 hover:underline truncate max-w-xs"
-                                  >
-                                    🔗 {src}
-                                  </a>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        ) : (
-                          <div className="text-center py-12 text-zinc-500 font-mono text-sm">
-                            No technical research dossiers compiled yet.
-                          </div>
-                        )}
-                      </>
-                    )}
-                  </div>
-
-                  <div className="pt-3 border-t border-white/10 flex items-center justify-between">
-                    <span className="text-xs font-mono text-zinc-400">
-                      Research Engine: <strong className="text-purple-400">AWS BEDROCK + DUCKDUCKGO</strong>
-                    </span>
-                    {(topicSubView === "events" && selectedEvent) ? (
-                      <button
-                        onClick={() =>
-                          speakAlexaReassurance(
-                            `Event summary for ${selectedEvent.final_title || selectedEvent.title || "Academic Lecture"}: ${selectedEvent.segments?.length || 0} recorded segments recorded into memory.`
-                          )
-                        }
-                        className="px-4 py-1.5 rounded-full bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-400/40 text-cyan-300 font-mono text-xs uppercase tracking-wider font-bold transition-colors"
-                      >
-                        🔊 Read Event Summary
-                      </button>
-                    ) : selectedTopic ? (
-                      <button
-                        onClick={() =>
-                          speakAlexaReassurance(
-                            `Briefing for ${selectedTopic.topic_title}: ${selectedTopic.explanatory_synthesis || selectedTopic.executive_summary?.[0] || "Analysis complete."}`
-                          )
-                        }
-                        className="px-4 py-1.5 rounded-full bg-purple-500/20 hover:bg-purple-500/30 border border-purple-400/40 text-purple-300 font-mono text-xs uppercase tracking-wider font-bold transition-colors"
-                      >
-                        🔊 Read Dossier Aloud
-                      </button>
-                    ) : null}
-                  </div>
-                </div>
-              )}
-
-              {/* TAB 6: AMBIENT SIMULATOR */}
-              {activeTab === "simulator" && (
-                <div className="space-y-4 flex-1 flex flex-col justify-between animate-in fade-in duration-150">
-                  <div className="space-y-4">
-                    {/* Presets Bar */}
-                    <div className="space-y-2">
-                      <div className="font-mono text-[9px] text-zinc-400 tracking-widest uppercase">
-                        Select Demo Scenario Preset:
                       </div>
-                      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2">
-                        {[
-                          {
-                            label: "Iron & Gas Safety",
-                            icon: "🛡️",
-                            text: "I just unplugged the clothes iron from the wall outlet and styled my hair — all good. Gas stovetop is cold and switched off.",
-                          },
-                          {
-                            label: "Task Scheduler",
-                            icon: "⏱️",
-                            text: "Remind me to turn off the garden irrigation valve in an hour before leaving for dinner.",
-                          },
-                          {
-                            label: "Bilateral Promises",
-                            icon: "🤝",
-                            text: "Nice to meet you Giulia Verdi, Senior Director at CloudOps. I will send you our architecture pitch deck tomorrow at 10 AM.",
-                          },
-                          {
-                            label: "Executive CRM",
-                            icon: "👤",
-                            text: "Pleased to meet you, I'm Dr. Elena Rostova, VP of AI Research at CloudScale. Let's discuss distributed consensus algorithms.",
-                          },
-                          {
-                            label: "Topic Synthesis",
-                            icon: "📚",
-                            text: "In today's meeting we evaluated AWS Bedrock AgentCore Runtime microVM execution and sub-second state persistence.",
-                          },
-                        ].map((preset, i) => (
-                          <button
-                            key={i}
-                            onClick={() => {
-                              if (setSimText) setSimText(preset.text);
-                              setLocalSimText(preset.text);
-                            }}
-                            className="p-2.5 rounded-xl bg-black/40 hover:bg-cyan-950/40 border border-white/10 hover:border-cyan-500/40 text-left transition-colors cursor-pointer"
-                          >
-                            <div className="text-base mb-1">{preset.icon}</div>
-                            <div className="text-[11px] font-mono font-bold text-white leading-tight">
-                              {preset.label}
-                            </div>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
 
-                    {/* Speech Transcript Input Box */}
-                    <div className="space-y-1.5">
-                      <div className="font-mono text-[9px] text-zinc-400 tracking-widest uppercase">
-                        Ambient Utterance Transcript Stream:
-                      </div>
-                      <textarea
-                        value={simText || localSimText}
-                        onChange={(e) => {
-                          if (setSimText) setSimText(e.target.value);
-                          setLocalSimText(e.target.value);
-                        }}
-                        rows={3}
-                        className="w-full p-3 rounded-xl bg-black/60 border border-white/15 text-zinc-100 font-sans text-xs focus:outline-none focus:border-cyan-400 resize-none"
-                        placeholder="Enter simulated spoken transcript..."
-                      />
-                    </div>
-
-                    {/* Simulation Execution Trigger */}
-                    <div className="flex items-center justify-between">
-                      <div className="text-[10px] font-mono text-zinc-400">
-                        TARGET: <span className="text-cyan-400 font-semibold">AWS Bedrock AgentCore Runtime</span>
-                      </div>
-                      <button
-                        onClick={handleRunSimulationClick}
-                        disabled={simRunning || localSimRunning}
-                        className="px-5 py-2.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-black font-mono text-xs uppercase tracking-wider font-bold shadow-lg shadow-cyan-500/30 transition-all flex items-center gap-2 cursor-pointer disabled:opacity-50"
-                      >
-                        <span>{simRunning || localSimRunning ? "⚡ Processing..." : "⚡ Run Pipeline Ingestion"}</span>
-                      </button>
-                    </div>
-
-                    {/* Simulation Output Card */}
-                    {(simResult || localSimResult) && (
-                      <div className="p-4 rounded-xl bg-black/60 border border-cyan-500/30 space-y-2">
-                        <div className="flex items-center justify-between">
-                          <span className="font-mono text-[9px] text-emerald-400 uppercase font-bold">
-                            ✓ Ingestion Successful
-                          </span>
-                          <span className="font-mono text-[9px] text-zinc-500">
-                            AgentCore Latency: ~1.2s
-                          </span>
+                      {/* Speech Transcript Input Box */}
+                      <div className="space-y-1.5">
+                        <div className="font-mono text-[9px] text-zinc-400 tracking-widest uppercase">
+                          Ambient Utterance Transcript Stream:
                         </div>
-                        <pre className="font-mono text-[10px] text-zinc-300 max-h-32 overflow-y-auto hide-scrollbar bg-black/80 p-2.5 rounded">
-                          {JSON.stringify(simResult || localSimResult, null, 2)}
-                        </pre>
+                        <textarea
+                          value={simText || localSimText}
+                          onChange={(e) => {
+                            if (setSimText) setSimText(e.target.value);
+                            setLocalSimText(e.target.value);
+                          }}
+                          rows={3}
+                          className="w-full p-3 rounded-xl bg-black/60 border border-white/15 text-zinc-100 font-sans text-xs focus:outline-none focus:border-cyan-400 resize-none"
+                          placeholder="Enter simulated spoken transcript..."
+                        />
                       </div>
-                    )}
-                  </div>
 
-                  <div className="pt-3 border-t border-white/10 flex items-center justify-between">
-                    <span className="text-xs font-mono text-zinc-400">
-                      Echo Simulator: <strong className="text-cyan-400">REAL-TIME BRIDGE</strong>
-                    </span>
-                    <button
-                      onClick={() =>
-                        speakAlexaReassurance("Simulation complete. All domain ledgers updated on Echo Show.")
-                      }
-                      className="px-4 py-1.5 rounded-full bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-400/40 text-cyan-300 font-mono text-xs uppercase tracking-wider font-bold transition-colors"
-                    >
-                      🔊 Test Echo Audio
-                    </button>
+                      {/* Simulation Execution Trigger */}
+                      <div className="flex items-center justify-between">
+                        <div className="text-[10px] font-mono text-zinc-400">
+                          TARGET: <span className="text-cyan-400 font-semibold">AWS Bedrock AgentCore Runtime</span>
+                        </div>
+                        <button
+                          onClick={handleRunSimulationClick}
+                          disabled={simRunning || localSimRunning}
+                          className="px-5 py-2.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-black font-mono text-xs uppercase tracking-wider font-bold shadow-lg shadow-cyan-500/30 transition-all flex items-center gap-2 cursor-pointer disabled:opacity-50"
+                        >
+                          <span>{simRunning || localSimRunning ? "⚡ Processing..." : "⚡ Run Pipeline Ingestion"}</span>
+                        </button>
+                      </div>
+
+                      {/* Simulation Output Card */}
+                      {(simResult || localSimResult) && (
+                        <div className="p-4 rounded-xl bg-black/60 border border-cyan-500/30 space-y-2">
+                          <div className="flex items-center justify-between">
+                            <span className="font-mono text-[9px] text-emerald-400 uppercase font-bold">
+                              ✓ Ingestion Successful
+                            </span>
+                            <span className="font-mono text-[9px] text-zinc-500">
+                              AgentCore Latency: ~1.2s
+                            </span>
+                          </div>
+                          <pre className="font-mono text-[10px] text-zinc-300 max-h-32 overflow-y-auto hide-scrollbar bg-black/80 p-2.5 rounded">
+                            {JSON.stringify(simResult || localSimResult, null, 2)}
+                          </pre>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="pt-3 border-t border-white/10 flex items-center justify-between">
+                      <span className="text-xs font-mono text-zinc-400">
+                        Echo Simulator: <strong className="text-cyan-400">REAL-TIME BRIDGE</strong>
+                      </span>
+                      <button
+                        onClick={() =>
+                          speakAlexaReassurance("Simulation complete. All domain ledgers updated on Echo Show.")
+                        }
+                        className="px-4 py-1.5 rounded-full bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-400/40 text-cyan-300 font-mono text-xs uppercase tracking-wider font-bold transition-colors cursor-pointer"
+                      >
+                        🔊 Test Echo Audio
+                      </button>
+                    </div>
                   </div>
-                </div>
-              )}
+                )}
+              </EchoShowErrorBoundary>
             </div>
           </div>
         </div>
