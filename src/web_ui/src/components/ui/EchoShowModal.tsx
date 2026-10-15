@@ -152,6 +152,7 @@ export function EchoShowModal({
   );
   const [quickRoutineTitle, setQuickRoutineTitle] = useState("");
   const [routineFilter, setRoutineFilter] = useState<"ALL" | "PENDING" | "COMPLETED">("ALL");
+  const [echoTopicCategory, setEchoTopicCategory] = useState<string>("ALL");
 
   useEffect(() => {
     setMounted(true);
@@ -427,7 +428,11 @@ export function EchoShowModal({
   };
 
   const selectedContact = contacts[selectedContactIndex] || contacts[0] || null;
-  const selectedTopic = topics[selectedTopicIndex] || topics[0] || null;
+  const echoFilteredTopics = useMemo(() => {
+    if (echoTopicCategory === "ALL") return topics;
+    return topics.filter((t) => t.context_type === echoTopicCategory);
+  }, [topics, echoTopicCategory]);
+  const selectedTopic = echoFilteredTopics[selectedTopicIndex] || echoFilteredTopics[0] || null;
   const selectedEvent = events[selectedEventIndex] || events[0] || null;
   const latestAction = actions[0] || null;
 
@@ -1547,22 +1552,45 @@ export function EchoShowModal({
                     {/* SUB-VIEW 2: TECHNICAL BRIEFINGS DOSSIERS */}
                     {(topicSubView === "briefings" || events.length === 0) && (
                       <>
-                        {/* Topics Pill Selector */}
+                        {/* Topics Pill Selector with Category Filter */}
                         {topics.length > 0 && (
-                          <div className="flex items-center gap-2 overflow-x-auto hide-scrollbar pb-1">
-                            {topics.map((t, idx) => (
-                              <button
-                                key={t.id || idx}
-                                onClick={() => setSelectedTopicIndex(idx)}
-                                className={`px-3 py-1.5 rounded-xl font-mono text-xs whitespace-nowrap transition-all ${
-                                  selectedTopicIndex === idx
-                                    ? "bg-purple-500 text-white font-bold shadow-md shadow-purple-500/30"
-                                    : "bg-black/40 text-zinc-400 hover:text-white border border-white/10"
-                                }`}
-                              >
-                                {t.topic_title}
-                              </button>
-                            ))}
+                          <div className="space-y-2">
+                            {/* Category Filter Pills */}
+                            <div className="flex items-center gap-1.5 overflow-x-auto hide-scrollbar pb-0.5">
+                              {["ALL", ...Array.from(new Set(topics.map((t) => t.context_type))).filter(Boolean)].map((cat) => (
+                                <button
+                                  key={cat}
+                                  onClick={() => {
+                                    setEchoTopicCategory(cat);
+                                    setSelectedTopicIndex(0);
+                                  }}
+                                  className={`px-2.5 py-1 rounded-full font-mono text-[9px] uppercase font-bold tracking-wider transition-colors shrink-0 ${
+                                    echoTopicCategory === cat
+                                      ? "bg-purple-500 text-white shadow-sm"
+                                      : "bg-black/40 text-zinc-400 hover:text-white border border-white/10"
+                                  }`}
+                                >
+                                  {cat.replace(/_/g, " ")}
+                                </button>
+                              ))}
+                            </div>
+
+                            {/* Topics Pill Carousel */}
+                            <div className="flex items-center gap-2 overflow-x-auto hide-scrollbar pb-1">
+                              {echoFilteredTopics.map((t, idx) => (
+                                <button
+                                  key={t.id || idx}
+                                  onClick={() => setSelectedTopicIndex(idx)}
+                                  className={`px-3 py-1.5 rounded-xl font-mono text-xs whitespace-nowrap transition-all ${
+                                    selectedTopicIndex === idx
+                                      ? "bg-purple-500 text-white font-bold shadow-md shadow-purple-500/30"
+                                      : "bg-black/40 text-zinc-400 hover:text-white border border-white/10"
+                                  }`}
+                                >
+                                  {t.topic_title}
+                                </button>
+                              ))}
+                            </div>
                           </div>
                         )}
 
