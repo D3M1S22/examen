@@ -12,15 +12,28 @@ import {
   EchoNotification,
   EventSummary,
   EventEngineStatus,
+  DossierFolderDef,
+  DossierBreadcrumbItem,
+  DEFAULT_DOSSIER_FOLDERS,
 } from "@/types/schemas";
 import { speakAlexaReassurance, playAcousticVerificationTone } from "@/utils/audioEffects";
 import { getApiBaseUrl } from "@/utils/api";
 import { MarkdownRenderer } from "./MarkdownRenderer";
+import { DossierBreadcrumbs } from "./DossierBreadcrumbs";
+import { DossierFolderCard } from "./DossierFolderCard";
 import {
   generateTopicMarkdown,
   downloadTextFile,
   sanitizeFilename,
 } from "@/utils/dossierExport";
+
+interface EchoSubfolderItem {
+  id: string;
+  label: string;
+  count: number;
+  topicFilter?: (t: BriefingReport) => boolean;
+  eventFilter?: (e: EventSummary) => boolean;
+}
 
 export interface EchoShowModalProps {
   isOpen: boolean;
@@ -203,6 +216,15 @@ export function EchoShowModal({
   const [routineFilter, setRoutineFilter] = useState<"ALL" | "PENDING" | "COMPLETED">("ALL");
   const [echoTopicCategory, setEchoTopicCategory] = useState<string>("ALL");
 
+  // Topic Dossiers folder hierarchy states on Echo Show
+  const [echoTopicViewMode, setEchoTopicViewMode] = useState<"folders" | "all_feed">("folders");
+  const [echoFolderId, setEchoFolderId] = useState<string | null>(
+    initialTemplate === "SESSION_DOSSIER_VIEWER" ? "event_sessions" : null
+  );
+  const [echoSubfolderId, setEchoSubfolderId] = useState<string | null>(null);
+  const [echoFocusedTopicId, setEchoFocusedTopicId] = useState<string | null>(null);
+  const [echoSelectedSessionId, setEchoSelectedSessionId] = useState<string | null>(null);
+
   useEffect(() => {
     setMounted(true);
   }, []);
@@ -211,8 +233,13 @@ export function EchoShowModal({
   useEffect(() => {
     if (isOpen) {
       setActiveTab(resolveInitialTab());
+      if (initialTemplate === "SESSION_DOSSIER_VIEWER") {
+        setEchoTopicViewMode("folders");
+        setEchoFolderId("event_sessions");
+        setTopicSubView("events");
+      }
     }
-  }, [isOpen, resolveInitialTab]);
+  }, [isOpen, resolveInitialTab, initialTemplate]);
 
   // Audio tone and voice announcement on new notification arrival
   useEffect(() => {
@@ -389,6 +416,369 @@ export function EchoShowModal({
     if (echoTopicCategory === "ALL") return valid;
     return valid.filter((t) => t.context_type === echoTopicCategory);
   }, [topics, echoTopicCategory]);
+
+  // Complete list of folders including any dynamic / custom context types on Echo Show
+  const echoAllFolders: DossierFolderDef[] = useMemo(() => {
+    const knownTypes = new Set(DEFAULT_DOSSIER_FOLDERS.flatMap((f) => f.contextTypes));
+    const dynamicFolders: DossierFolderDef[] = [];
+
+    topics.forEach((t) => {
+      if (t.context_type && !knownTypes.has(t.context_type)) {
+        knownTypes.add(t.context_type);
+        const folderId = `custom_${t.context_type}`;
+        dynamicFolders.push({
+          id: folderId,
+          name: t.context_type.replace(/_/g, " ").toUpperCase(),
+          icon: "📁",
+          accent: "zinc",
+          description: `Synthesized research topics tagged under ${t.context_type.replace(/_/g, " ")}`,
+          contextTypes: [t.context_type],
+        });
+      }
+    });
+
+    return [...DEFAULT_DOSSIER_FOLDERS, ...dynamicFolders];
+  }, [topics]);
+
+  // Active folder object
+  const echoActiveFolder = useMemo(
+    () => echoAllFolders.find((f) => f.id === echoFolderId) || null,
+    [echoAllFolders, echoFolderId]
+  );
+
+  // Filter topics for the active folder
+  const echoFolderTopics = useMemo(() => {
+    if (!echoActiveFolder || echoActiveFolder.isEventFolder) return [];
+    return topics.filter((t) => echoActiveFolder.contextTypes.includes(t.context_type));
+  }, [echoActiveFolder, topics]);
+
+  // Focused topic dossier object (Level 3 drill-down)
+  const echoFocusedTopic = useMemo(() => {
+    if (!echoFocusedTopicId) return null;
+    return topics.find((t) => t.id === echoFocusedTopicId) || null;
+  }, [topics, echoFocusedTopicId]);
+
+  // Focused event session object
+  const echoFocusedEvent = useMemo(() => {
+    if (!echoSelectedSessionId) return null;
+    return events.find((e) => e.session_id === echoSelectedSessionId) || null;
+  }, [events, echoSelectedSessionId]);
+
+  // Subfolders definition for active folder
+  const echoSubfolders: EchoSubfolderItem[] = useMemo(() => {
+    if (!echoActiveFolder) return [];
+
+    if (echoActiveFolder.isEventFolder) {
+      return [
+        { id: "all", label: "ALL SESSIONS", count: events.length },
+        {
+          id: "active",
+          label: "LIVE RECORDING",
+          count: events.filter((e) => e.status === "active").length,
+          eventFilter: (e: EventSummary) => e.status === "active",
+        },
+        {
+          id: "paused",
+          label: "PAUSED / IN BREAK",
+          count: events.filter((e) => e.status === "paused" || e.status === "finalizing").length,
+          eventFilter: (e: EventSummary) => e.status === "paused" || e.status === "finalizing",
+        },
+        {
+          id: "concluded",
+          label: "CONCLUDED",
+          count: events.filter((e) => e.status === "concluded").length,
+          eventFilter: (e: EventSummary) => e.status === "concluded",
+        },
+      ];
+    }
+
+    if (echoActiveFolder.id === "academic") {
+      return [
+        { id: "all", label: "ALL ACADEMIC", count: echoFolderTopics.length },
+        {
+          id: "lectures",
+          label: "LECTURES & SYLLABI",
+          count: echoFolderTopics.filter((t) => t.kind !== "final").length,
+          topicFilter: (t: BriefingReport) => t.kind !== "final",
+        },
+        {
+          id: "final",
+          label: "FINAL SYNTHESES",
+          count: echoFolderTopics.filter((t) => t.kind === "final").length,
+          topicFilter: (t: BriefingReport) => t.kind === "final",
+        },
+        {
+          id: "sources",
+          label: "WITH CITATIONS",
+          count: echoFolderTopics.filter((t) => Boolean(t.web_sources && t.web_sources.length > 0)).length,
+          topicFilter: (t: BriefingReport) => Boolean(t.web_sources && t.web_sources.length > 0),
+        },
+      ];
+    }
+
+    if (echoActiveFolder.id === "tech_stack") {
+      return [
+        { id: "all", label: "ALL TECH TOPICS", count: echoFolderTopics.length },
+        {
+          id: "deep_dive",
+          label: "DEEP RESEARCH MARKDOWN",
+          count: echoFolderTopics.filter((t) => Boolean(t.deep_dive_markdown)).length,
+          topicFilter: (t: BriefingReport) => Boolean(t.deep_dive_markdown),
+        },
+        {
+          id: "citations",
+          label: "WITH CITATIONS",
+          count: echoFolderTopics.filter((t) => Boolean(t.web_sources && t.web_sources.length > 0)).length,
+          topicFilter: (t: BriefingReport) => Boolean(t.web_sources && t.web_sources.length > 0),
+        },
+        {
+          id: "actions",
+          label: "ACTION ITEMS",
+          count: echoFolderTopics.filter((t) => Boolean(t.action_items && t.action_items.length > 0)).length,
+          topicFilter: (t: BriefingReport) => Boolean(t.action_items && t.action_items.length > 0),
+        },
+      ];
+    }
+
+    if (echoActiveFolder.id === "engineering") {
+      return [
+        { id: "all", label: "ALL PRODUCT TOPICS", count: echoFolderTopics.length },
+        {
+          id: "features",
+          label: "FEATURE PROPOSALS",
+          count: echoFolderTopics.filter((t) => t.context_type === "feature_discussion").length,
+          topicFilter: (t: BriefingReport) => t.context_type === "feature_discussion",
+        },
+        {
+          id: "incidents",
+          label: "BUGS & INCIDENTS",
+          count: echoFolderTopics.filter(
+            (t) => t.context_type === "bug" || t.context_type === "system_incident"
+          ).length,
+          topicFilter: (t: BriefingReport) =>
+            t.context_type === "bug" || t.context_type === "system_incident",
+        },
+        {
+          id: "sources",
+          label: "WITH CITATIONS",
+          count: echoFolderTopics.filter((t) => Boolean(t.web_sources && t.web_sources.length > 0)).length,
+          topicFilter: (t: BriefingReport) => Boolean(t.web_sources && t.web_sources.length > 0),
+        },
+      ];
+    }
+
+    if (echoActiveFolder.id === "business") {
+      return [
+        { id: "all", label: "ALL BUSINESS", count: echoFolderTopics.length },
+        {
+          id: "actions",
+          label: "WITH ACTION ITEMS",
+          count: echoFolderTopics.filter((t) => Boolean(t.action_items && t.action_items.length > 0)).length,
+          topicFilter: (t: BriefingReport) => Boolean(t.action_items && t.action_items.length > 0),
+        },
+        {
+          id: "briefs",
+          label: "EXECUTIVE BRIEFS",
+          count: echoFolderTopics.filter((t) => Boolean(t.executive_summary && t.executive_summary.length > 0)).length,
+          topicFilter: (t: BriefingReport) => Boolean(t.executive_summary && t.executive_summary.length > 0),
+        },
+      ];
+    }
+
+    return [
+      { id: "all", label: "ALL ITEMS", count: echoFolderTopics.length },
+      {
+        id: "citations",
+        label: "WITH CITATIONS",
+        count: echoFolderTopics.filter((t) => Boolean(t.web_sources && t.web_sources.length > 0)).length,
+        topicFilter: (t: BriefingReport) => Boolean(t.web_sources && t.web_sources.length > 0),
+      },
+    ];
+  }, [echoActiveFolder, echoFolderTopics, events]);
+
+  // Topics displayed inside active folder after subfolder filter
+  const echoDisplayedFolderTopics = useMemo(() => {
+    let result = echoFolderTopics;
+    if (echoSubfolderId && echoSubfolderId !== "all") {
+      const sub = echoSubfolders.find((s) => s.id === echoSubfolderId);
+      if (sub && sub.topicFilter) {
+        result = result.filter(sub.topicFilter);
+      }
+    }
+    return result;
+  }, [echoFolderTopics, echoSubfolderId, echoSubfolders]);
+
+  // Event sessions displayed inside event folder after subfolder filter
+  const echoDisplayedEvents = useMemo(() => {
+    let result = events;
+    if (echoActiveFolder?.isEventFolder && echoSubfolderId && echoSubfolderId !== "all") {
+      const sub = echoSubfolders.find((s) => s.id === echoSubfolderId);
+      if (sub && sub.eventFilter) {
+        result = result.filter(sub.eventFilter);
+      }
+    }
+    return result;
+  }, [events, echoActiveFolder, echoSubfolderId, echoSubfolders]);
+
+  // Breadcrumbs Generation for Echo Show
+  const echoBreadcrumbItems: DossierBreadcrumbItem[] = useMemo(() => {
+    const items: DossierBreadcrumbItem[] = [
+      {
+        id: "root",
+        label: "DOSSIERS REPOSITORY",
+        icon: "📁",
+        count: topics.length,
+      },
+    ];
+
+    if (echoTopicViewMode === "all_feed") {
+      items.push({
+        id: "all_feed",
+        label: "ALL BRIEFINGS FEED",
+        icon: "📚",
+        count: topics.length,
+      });
+      return items;
+    }
+
+    if (echoActiveFolder) {
+      items.push({
+        id: echoActiveFolder.id,
+        label: echoActiveFolder.name,
+        icon: echoActiveFolder.icon,
+        count: echoActiveFolder.isEventFolder ? events.length : echoFolderTopics.length,
+      });
+
+      if (echoSubfolderId && echoSubfolderId !== "all") {
+        const sub = echoSubfolders.find((s) => s.id === echoSubfolderId);
+        if (sub) {
+          items.push({
+            id: sub.id,
+            label: sub.label,
+            icon: "📂",
+            count: sub.count,
+          });
+        }
+      }
+
+      if (echoSelectedSessionId && echoActiveFolder.isEventFolder) {
+        const ev = events.find((e) => e.session_id === echoSelectedSessionId);
+        items.push({
+          id: echoSelectedSessionId,
+          label: ev?.final_title || ev?.title || "EVENT SESSION",
+          icon: "🏛️",
+        });
+      }
+
+      if (echoFocusedTopic) {
+        items.push({
+          id: echoFocusedTopic.id,
+          label: echoFocusedTopic.topic_title,
+          icon: "📄",
+        });
+      }
+    }
+
+    return items;
+  }, [
+    echoTopicViewMode,
+    echoActiveFolder,
+    echoSubfolderId,
+    echoSubfolders,
+    echoSelectedSessionId,
+    events,
+    echoFocusedTopic,
+    topics.length,
+    echoFolderTopics.length,
+  ]);
+
+  const echoCurrentPathString = useMemo(() => {
+    if (echoTopicViewMode === "all_feed") return "~/echo/dossiers/all_feed/";
+    if (!echoActiveFolder) return "~/echo/dossiers/";
+    let base = `~/echo/dossiers/${echoActiveFolder.id}/`;
+    if (echoSubfolderId && echoSubfolderId !== "all") {
+      base += `${echoSubfolderId}/`;
+    }
+    if (echoActiveFolder.isEventFolder && echoSelectedSessionId) {
+      base += `${echoSelectedSessionId.substring(0, 8)}/`;
+    }
+    if (echoFocusedTopic) {
+      const slug = echoFocusedTopic.topic_title
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/(^-|-$)/g, "");
+      base += `${slug.substring(0, 20)}/`;
+    }
+    return base;
+  }, [echoTopicViewMode, echoActiveFolder, echoSubfolderId, echoSelectedSessionId, echoFocusedTopic]);
+
+  const handleEchoNavigateBreadcrumb = (item: DossierBreadcrumbItem) => {
+    if (item.id === "root") {
+      setEchoFolderId(null);
+      setEchoSubfolderId(null);
+      setEchoFocusedTopicId(null);
+      setEchoSelectedSessionId(null);
+      setEchoTopicViewMode("folders");
+    } else if (item.id === "all_feed") {
+      setEchoTopicViewMode("all_feed");
+    } else if (echoActiveFolder && item.id === echoActiveFolder.id) {
+      setEchoSubfolderId(null);
+      setEchoFocusedTopicId(null);
+      setEchoSelectedSessionId(null);
+    } else if (item.id === echoSubfolderId) {
+      setEchoFocusedTopicId(null);
+      setEchoSelectedSessionId(null);
+    }
+  };
+
+  const handleEchoBack = () => {
+    if (echoFocusedTopicId) {
+      setEchoFocusedTopicId(null);
+    } else if (echoSelectedSessionId) {
+      setEchoSelectedSessionId(null);
+    } else if (echoSubfolderId && echoSubfolderId !== "all") {
+      setEchoSubfolderId(null);
+    } else if (echoFolderId) {
+      setEchoFolderId(null);
+    } else if (echoTopicViewMode !== "folders") {
+      setEchoTopicViewMode("folders");
+    }
+  };
+
+  const handleOpenEchoFolder = (folderId: string) => {
+    setEchoTopicViewMode("folders");
+    setEchoFolderId(folderId);
+    setEchoSubfolderId(null);
+    setEchoFocusedTopicId(null);
+    setEchoSelectedSessionId(null);
+  };
+
+  const getEchoFolderForTopic = useCallback((topic: BriefingReport): DossierFolderDef => {
+    if (!topic.context_type) return echoAllFolders[0];
+    const found = echoAllFolders.find(
+      (f) => !f.isEventFolder && f.contextTypes.includes(topic.context_type)
+    );
+    return found || echoAllFolders[0];
+  }, [echoAllFolders]);
+
+  const handleSelectEchoTopic = (topic: BriefingReport) => {
+    const parentFolder = getEchoFolderForTopic(topic);
+    setEchoFolderId(parentFolder.id);
+    setEchoFocusedTopicId(topic.id);
+    setEchoTopicViewMode("folders");
+  };
+
+  // Pager navigation for focused topic on Echo Show
+  const echoFocusedIndex = useMemo(() => {
+    if (!echoFocusedTopic) return -1;
+    return echoDisplayedFolderTopics.findIndex((t) => t.id === echoFocusedTopic.id);
+  }, [echoDisplayedFolderTopics, echoFocusedTopic]);
+
+  const echoPrevTopic = echoFocusedIndex > 0 ? echoDisplayedFolderTopics[echoFocusedIndex - 1] : null;
+  const echoNextTopic =
+    echoFocusedIndex >= 0 && echoFocusedIndex < echoDisplayedFolderTopics.length - 1
+      ? echoDisplayedFolderTopics[echoFocusedIndex + 1]
+      : null;
 
   // Defensive active selections
   const selectedContact = (contacts && contacts[selectedContactIndex]) || (contacts && contacts[0]) || null;
@@ -917,7 +1307,13 @@ export function EchoShowModal({
                             👥 {contacts.length} Social Contacts
                           </button>
                           <button
-                            onClick={() => handleTabSelect("topics")}
+                            onClick={() => {
+                              setEchoTopicViewMode("folders");
+                              setEchoFolderId(null);
+                              setEchoFocusedTopicId(null);
+                              setEchoSelectedSessionId(null);
+                              handleTabSelect("topics");
+                            }}
                             className="px-2.5 py-1 rounded-lg bg-purple-950/60 border border-purple-500/30 text-purple-300 hover:bg-purple-900 transition-colors cursor-pointer"
                           >
                             📚 {topics.length} Dossiers
@@ -926,6 +1322,8 @@ export function EchoShowModal({
                             <button
                               onClick={() => {
                                 setTopicSubView("events");
+                                setEchoFolderId("event_sessions");
+                                setEchoTopicViewMode("folders");
                                 handleTabSelect("topics");
                               }}
                               className="px-2.5 py-1 rounded-lg bg-cyan-950/60 border border-cyan-500/30 text-cyan-300 hover:bg-cyan-900 transition-colors cursor-pointer"
@@ -941,6 +1339,8 @@ export function EchoShowModal({
                         <div
                           onClick={() => {
                             setTopicSubView("events");
+                            setEchoFolderId("event_sessions");
+                            setEchoTopicViewMode("folders");
                             handleTabSelect("topics");
                           }}
                           className={`rounded-xl p-3.5 mt-3 border cursor-pointer flex items-center justify-between gap-3 transition-colors ${
@@ -1128,7 +1528,12 @@ export function EchoShowModal({
                           )}
                           <div className="flex items-center justify-end pt-1">
                             <button
-                              onClick={() => handleTabSelect("topics")}
+                              onClick={() => {
+                                if (selectedTopic) {
+                                  handleSelectEchoTopic(selectedTopic);
+                                }
+                                handleTabSelect("topics");
+                              }}
                               className="text-xs font-mono text-purple-400 hover:underline flex items-center gap-1 cursor-pointer"
                             >
                               <span>Read Deep Briefing</span>
@@ -1562,96 +1967,597 @@ export function EchoShowModal({
                   </div>
                 )}
 
-                {/* TAB 5: TOPIC DOSSIERS & EVENT SESSIONS */}
+                {/* TAB 5: TOPIC DOSSIERS & EVENT SESSIONS - HIERARCHICAL FOLDERS & SPECULAR FEED */}
                 {activeTab === "topics" && (
                   <div className="space-y-4 flex-1 flex flex-col justify-between animate-in fade-in duration-150">
                     <div className="space-y-4">
-                      {/* View Sub-Toggle: Events vs Briefings */}
-                      {events.length > 0 && (
-                        <div className="flex items-center gap-1 p-1 rounded-full bg-black/50 border border-white/10 w-fit">
+                      {/* Top Bar: Sub-Toggle between Folders, All Briefings, and Event Sessions */}
+                      <div className="flex flex-wrap items-center justify-between gap-3 pb-1">
+                        <div className="flex items-center gap-1.5 p-1 rounded-full bg-black/60 border border-white/10">
                           <button
-                            onClick={() => setTopicSubView("events")}
-                            className={`px-3 py-1 rounded-full font-mono text-[10px] font-bold tracking-wider transition-colors cursor-pointer ${
-                              topicSubView === "events" ? "bg-cyan-500 text-black shadow-sm" : "text-zinc-400 hover:text-white"
+                            onClick={() => {
+                              setEchoTopicViewMode("folders");
+                              setEchoFolderId(null);
+                              setEchoFocusedTopicId(null);
+                              setEchoSelectedSessionId(null);
+                            }}
+                            className={`px-3.5 py-1.5 rounded-full font-mono text-[10px] font-bold tracking-wider transition-colors cursor-pointer flex items-center gap-1.5 ${
+                              echoTopicViewMode === "folders" && echoFolderId !== "event_sessions"
+                                ? "bg-amber-500 text-black shadow-sm font-bold"
+                                : "text-zinc-400 hover:text-white"
                             }`}
                           >
-                            🏛️ EVENTS ({events.length})
+                            <span>📁</span>
+                            <span>FOLDERS</span>
                           </button>
                           <button
-                            onClick={() => setTopicSubView("briefings")}
-                            className={`px-3 py-1 rounded-full font-mono text-[10px] font-bold tracking-wider transition-colors cursor-pointer ${
-                              topicSubView === "briefings" ? "bg-purple-500 text-white shadow-sm" : "text-zinc-400 hover:text-white"
+                            onClick={() => {
+                              setEchoTopicViewMode("all_feed");
+                              setEchoFocusedTopicId(null);
+                              setEchoSelectedSessionId(null);
+                            }}
+                            className={`px-3.5 py-1.5 rounded-full font-mono text-[10px] font-bold tracking-wider transition-colors cursor-pointer flex items-center gap-1.5 ${
+                              echoTopicViewMode === "all_feed"
+                                ? "bg-purple-500 text-white shadow-sm font-bold"
+                                : "text-zinc-400 hover:text-white"
                             }`}
                           >
-                            📚 ALL BRIEFINGS ({topics.length})
+                            <span>📚</span>
+                            <span>ALL BRIEFINGS ({topics.length})</span>
                           </button>
+                          {events.length > 0 && (
+                            <button
+                              onClick={() => handleOpenEchoFolder("event_sessions")}
+                              className={`px-3.5 py-1.5 rounded-full font-mono text-[10px] font-bold tracking-wider transition-colors cursor-pointer flex items-center gap-1.5 ${
+                                echoTopicViewMode === "folders" && echoFolderId === "event_sessions"
+                                  ? "bg-cyan-500 text-black shadow-sm font-bold"
+                                  : "text-zinc-400 hover:text-white"
+                              }`}
+                            >
+                              <span>⚡</span>
+                              <span>EVENT SESSIONS ({events.length})</span>
+                            </button>
+                          )}
                         </div>
-                      )}
 
-                      {/* SUB-VIEW 1: DEEP TOPIC EVENT SESSIONS */}
-                      {topicSubView === "events" && events.length > 0 && (
-                        <>
-                          {/* Events Pill Selector */}
-                          <div className="flex items-center gap-2 overflow-x-auto hide-scrollbar pb-1">
-                            {events.map((ev, idx) => (
-                              <button
-                                key={ev.session_id || idx}
-                                onClick={() => setSelectedEventIndex(idx)}
-                                className={`px-3 py-1.5 rounded-xl font-mono text-xs whitespace-nowrap transition-all cursor-pointer ${
-                                  selectedEventIndex === idx
-                                    ? "bg-cyan-500 text-black font-bold shadow-md shadow-cyan-500/30"
-                                    : "bg-black/40 text-zinc-400 hover:text-white border border-white/10"
-                                }`}
-                              >
-                                {ev.final_title || ev.title || "Lecture / Meeting"}
-                              </button>
-                            ))}
-                          </div>
+                        <div className="font-mono text-[9px] text-zinc-500 uppercase tracking-widest hidden sm:block">
+                          COGNITIVE TELEMETRY // AWS BEDROCK AGENTCORE
+                        </div>
+                      </div>
 
-                          {selectedEvent ? (
-                            <div className="p-5 rounded-2xl bg-[#12141a] border border-white/10 space-y-4">
+                      {/* Breadcrumbs Navigation Bar */}
+                      <DossierBreadcrumbs
+                        items={echoBreadcrumbItems}
+                        onNavigate={handleEchoNavigateBreadcrumb}
+                        onBack={handleEchoBack}
+                        canGoBack={Boolean(echoFolderId || echoFocusedTopicId || echoSelectedSessionId || echoTopicViewMode !== "folders")}
+                        currentPathString={echoCurrentPathString}
+                        itemCount={
+                          echoFocusedTopic
+                            ? 1
+                            : echoActiveFolder
+                            ? echoActiveFolder.isEventFolder
+                              ? echoDisplayedEvents.length
+                              : echoDisplayedFolderTopics.length
+                            : topics.length
+                        }
+                        className="border border-white/10 bg-[#101217]"
+                      />
+
+                      {/* =========================================================================
+                          VIEW MODE 1: HIERARCHICAL FOLDERS (LEVEL 1, LEVEL 2, LEVEL 3)
+                          ========================================================================= */}
+                      {echoTopicViewMode === "folders" && (
+                        <div className="space-y-4">
+                          {/* LEVEL 1: ROOT DIRECTORY FOLDERS GRID */}
+                          {!echoFolderId && (
+                            <div className="space-y-4">
+                              {/* Directory Stats Banner */}
+                              <div className="p-4 rounded-2xl bg-gradient-to-r from-[#12141a] via-[#161922] to-[#12141a] border border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                                <div className="space-y-1">
+                                  <div className="font-mono text-[9px] text-amber-400 tracking-[0.2em] uppercase font-bold flex items-center gap-1.5">
+                                    <span>🗂️</span>
+                                    <span>STRUCTURED AMBIENT KNOWLEDGE VAULT</span>
+                                  </div>
+                                  <h4 className="font-serif text-lg sm:text-xl text-white font-bold">
+                                    Echo Research Dossier Directory
+                                  </h4>
+                                  <p className="font-sans text-xs text-zinc-400 max-w-xl">
+                                    Topic research is grouped into specialized repositories according to semantic domain. Tap any folder to browse or inspect synthesized dossiers.
+                                  </p>
+                                </div>
+                                <div className="flex items-center gap-2 shrink-0">
+                                  <div className="px-3 py-1.5 rounded-xl bg-black/40 border border-white/10 text-center min-w-[75px]">
+                                    <div className="font-mono text-base font-bold text-amber-400">{topics.length}</div>
+                                    <div className="font-mono text-[8px] text-zinc-400 uppercase tracking-wider">Briefings</div>
+                                  </div>
+                                  <div className="px-3 py-1.5 rounded-xl bg-black/40 border border-white/10 text-center min-w-[75px]">
+                                    <div className="font-mono text-base font-bold text-cyan-400">{events.length}</div>
+                                    <div className="font-mono text-[8px] text-zinc-400 uppercase tracking-wider">Events</div>
+                                  </div>
+                                  <div className="px-3 py-1.5 rounded-xl bg-black/40 border border-white/10 text-center min-w-[75px]">
+                                    <div className="font-mono text-base font-bold text-emerald-400">{echoAllFolders.length}</div>
+                                    <div className="font-mono text-[8px] text-zinc-400 uppercase tracking-wider">Folders</div>
+                                  </div>
+                                </div>
+                              </div>
+
+                              {/* Folder Cards Grid */}
+                              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
+                                {echoAllFolders.map((folder) => {
+                                  const count = folder.isEventFolder
+                                    ? events.length
+                                    : topics.filter((t) => folder.contextTypes.includes(t.context_type)).length;
+
+                                  let secondary = "";
+                                  if (count === 0) {
+                                    secondary = folder.isEventFolder ? "0 Sessions" : "Empty Directory";
+                                  } else if (folder.isEventFolder) {
+                                    const activeEvents = events.filter((e) => e.status === "active").length;
+                                    secondary = activeEvents > 0 ? `${activeEvents} Live Recording` : `${count} Concluded`;
+                                  } else {
+                                    const finals = topics.filter(
+                                      (t) => folder.contextTypes.includes(t.context_type) && t.kind === "final"
+                                    ).length;
+                                    secondary = finals > 0 ? `${finals} Final Syntheses` : "Categorized";
+                                  }
+
+                                  return (
+                                    <DossierFolderCard
+                                      key={folder.id}
+                                      folder={folder}
+                                      itemCount={count}
+                                      secondaryLabel={secondary}
+                                      onClick={() => handleOpenEchoFolder(folder.id)}
+                                    />
+                                  );
+                                })}
+                              </div>
+
+                              {/* Quick Access: Recent Syntheses */}
+                              {topics.length > 0 && (
+                                <div className="space-y-2 pt-2 border-t border-white/5">
+                                  <div className="flex items-center justify-between">
+                                    <span className="font-mono text-[10px] text-amber-400 tracking-wider uppercase font-bold flex items-center gap-1.5">
+                                      <span>⚡</span>
+                                      <span>RECENT DOSSIERS QUICK ACCESS</span>
+                                    </span>
+                                    <button
+                                      onClick={() => setEchoTopicViewMode("all_feed")}
+                                      className="font-mono text-[9px] text-zinc-400 hover:text-white tracking-widest uppercase transition-colors cursor-pointer"
+                                    >
+                                      View Flat Feed →
+                                    </button>
+                                  </div>
+                                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                                    {topics.slice(0, 2).map((top) => (
+                                      <div
+                                        key={top.id}
+                                        onClick={() => handleSelectEchoTopic(top)}
+                                        className="p-3 rounded-xl bg-black/40 border border-white/10 hover:border-amber-500/40 transition-all cursor-pointer flex flex-col justify-between gap-1.5 group"
+                                      >
+                                        <div className="flex items-center justify-between">
+                                          <span className="px-2 py-0.5 rounded text-[8px] font-mono tracking-wider uppercase bg-amber-950/30 border border-amber-500/30 text-amber-300">
+                                            {top.context_type?.replace(/_/g, " ") || "RESEARCH"}
+                                          </span>
+                                          <span className="font-mono text-[8px] text-zinc-500">
+                                            #{top.id.substring(0, 6).toUpperCase()}
+                                          </span>
+                                        </div>
+                                        <div className="font-serif text-sm font-bold text-white group-hover:text-amber-300 transition-colors line-clamp-1">
+                                          {top.topic_title}
+                                        </div>
+                                        {top.explanatory_synthesis && (
+                                          <div className="text-zinc-400 font-sans text-xs line-clamp-1">
+                                            {top.explanatory_synthesis}
+                                          </div>
+                                        )}
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          )}
+
+                          {/* LEVEL 2: INSIDE FOLDER (TOPIC OR EVENT LISTING) */}
+                          {echoFolderId && !echoFocusedTopic && !echoSelectedSessionId && (
+                            <div className="space-y-4">
+                              {/* Folder Header */}
+                              {echoActiveFolder && (
+                                <div className="p-4 rounded-2xl bg-[#12141a] border border-white/10 flex items-center justify-between gap-3">
+                                  <div className="flex items-center gap-3">
+                                    <div className="w-11 h-11 rounded-xl bg-black/50 border border-white/10 flex items-center justify-center text-2xl shadow-inner shrink-0">
+                                      {echoActiveFolder.icon}
+                                    </div>
+                                    <div>
+                                      <div className="font-mono text-[9px] text-amber-400 tracking-widest uppercase font-bold">
+                                        DIRECTORY // {echoActiveFolder.id.toUpperCase()}
+                                      </div>
+                                      <h3 className="font-serif text-xl text-white font-bold">
+                                        {echoActiveFolder.name}
+                                      </h3>
+                                      <p className="font-sans text-xs text-zinc-400 line-clamp-1">
+                                        {echoActiveFolder.description}
+                                      </p>
+                                    </div>
+                                  </div>
+                                  <button
+                                    onClick={handleEchoBack}
+                                    className="px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-zinc-300 hover:text-white font-mono text-[9px] uppercase tracking-wider font-bold shrink-0 transition-colors cursor-pointer"
+                                  >
+                                    ← All Folders
+                                  </button>
+                                </div>
+                              )}
+
+                              {/* Subfolder Filter Chips */}
+                              {echoSubfolders.length > 1 && (
+                                <div className="flex items-center gap-1.5 overflow-x-auto hide-scrollbar pb-0.5">
+                                  {echoSubfolders.map((sub) => {
+                                    const isSelected =
+                                      echoSubfolderId === sub.id || (!echoSubfolderId && sub.id === "all");
+                                    return (
+                                      <button
+                                        key={sub.id}
+                                        onClick={() => setEchoSubfolderId(sub.id)}
+                                        className={`px-3 py-1 rounded-full font-mono text-[9px] font-bold tracking-wider whitespace-nowrap transition-all flex items-center gap-1.5 cursor-pointer ${
+                                          isSelected
+                                            ? "bg-amber-500 text-black shadow-sm"
+                                            : "bg-black/40 border border-white/10 text-zinc-400 hover:text-white hover:border-white/20"
+                                        }`}
+                                      >
+                                        <span>{sub.label}</span>
+                                        <span
+                                          className={`px-1.5 py-0.2 rounded-full text-[8px] ${
+                                            isSelected ? "bg-black/30 text-black" : "bg-white/10 text-zinc-300"
+                                          }`}
+                                        >
+                                          {sub.count}
+                                        </span>
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              )}
+
+                              {/* Event Sessions inside Event Folder */}
+                              {echoActiveFolder?.isEventFolder && (
+                                <div className="space-y-3">
+                                  {echoDisplayedEvents.length === 0 ? (
+                                    <div className="text-center py-12 text-zinc-500 font-mono text-sm bg-black/20 rounded-2xl border border-white/5">
+                                      No event sessions recorded in this folder yet.
+                                    </div>
+                                  ) : (
+                                    echoDisplayedEvents.map((ev, idx) => (
+                                      <div
+                                        key={ev.session_id || idx}
+                                        onClick={() => setEchoSelectedSessionId(ev.session_id)}
+                                        className="p-4 rounded-xl bg-[#12141a] border border-white/10 hover:border-cyan-400/50 transition-all cursor-pointer flex flex-col gap-2.5 group"
+                                      >
+                                        <div className="flex items-center justify-between">
+                                          <div className="flex items-center gap-2">
+                                            <span
+                                              className={`px-2 py-0.5 rounded border font-mono text-[8px] uppercase font-bold tracking-wider ${
+                                                ev.status === "active"
+                                                  ? "bg-emerald-950/80 border-emerald-500/40 text-emerald-300"
+                                                  : ev.status === "paused"
+                                                  ? "bg-amber-950/80 border-amber-500/40 text-amber-300"
+                                                  : "bg-zinc-900 border-zinc-700 text-zinc-300"
+                                              }`}
+                                            >
+                                              {ev.status === "active" ? "● LIVE" : ev.status === "paused" ? "⏸ PAUSED" : "✓ CONCLUDED"}
+                                            </span>
+                                            <span className="font-mono text-[9px] text-zinc-400 uppercase">
+                                              {ev.domain || "ACADEMIC / MEETING"}
+                                            </span>
+                                          </div>
+                                          <span className="font-mono text-[9px] text-zinc-500">
+                                            {typeof ev.start_time === "string" ? ev.start_time.substring(0, 10) : "TODAY"}
+                                          </span>
+                                        </div>
+                                        <div className="flex items-center justify-between gap-3">
+                                          <h4 className="font-serif text-lg text-white font-bold group-hover:text-cyan-300 transition-colors">
+                                            {ev.final_title || ev.title || "Academic Lecture / Meeting"}
+                                          </h4>
+                                          <span className="px-2.5 py-1 rounded-lg bg-white/5 border border-white/10 text-cyan-300 font-mono text-[9px] uppercase font-bold tracking-wider shrink-0">
+                                            Inspect Session →
+                                          </span>
+                                        </div>
+                                        {Array.isArray(ev.segments) && ev.segments.length > 0 && (
+                                          <div className="font-mono text-[9px] text-zinc-400">
+                                            🏛️ {ev.segments.length} Event Parts Synthesized
+                                          </div>
+                                        )}
+                                      </div>
+                                    ))
+                                  )}
+                                </div>
+                              )}
+
+                              {/* Topic Dossiers inside Topic Folder */}
+                              {!echoActiveFolder?.isEventFolder && (
+                                <div>
+                                  {echoDisplayedFolderTopics.length === 0 ? (
+                                    <div className="text-center py-12 text-zinc-500 font-mono text-sm bg-black/20 rounded-2xl border border-white/5">
+                                      No research dossiers in this directory yet.
+                                    </div>
+                                  ) : (
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                      {echoDisplayedFolderTopics.map((top) => (
+                                        <div
+                                          key={top.id}
+                                          onClick={() => setEchoFocusedTopicId(top.id)}
+                                          className="p-4 rounded-xl bg-[#12141a] border border-white/10 hover:border-amber-500/40 transition-all cursor-pointer flex flex-col justify-between gap-3 group"
+                                        >
+                                          <div className="space-y-1.5">
+                                            <div className="flex items-center justify-between gap-2">
+                                              <div className="flex items-center gap-1.5 flex-wrap">
+                                                {top.kind && KIND_BADGES[top.kind] && (
+                                                  <span
+                                                    className={`px-2 py-0.5 rounded border font-mono text-[8px] uppercase tracking-wider ${
+                                                      KIND_BADGES[top.kind].cls
+                                                    }`}
+                                                  >
+                                                    {KIND_BADGES[top.kind].label}
+                                                  </span>
+                                                )}
+                                                <span className="px-2 py-0.5 rounded bg-white/5 border border-white/10 font-mono text-[8px] text-zinc-400 uppercase">
+                                                  {top.context_type?.replace(/_/g, " ") || "RESEARCH"}
+                                                </span>
+                                              </div>
+                                              <span className="font-mono text-[8px] text-zinc-500">
+                                                #{top.id.substring(0, 6).toUpperCase()}
+                                              </span>
+                                            </div>
+                                            <h4 className="font-serif text-base font-bold text-white group-hover:text-amber-200 transition-colors line-clamp-2">
+                                              {top.topic_title}
+                                            </h4>
+                                            {top.explanatory_synthesis && (
+                                              <p className="font-sans text-xs text-zinc-400 line-clamp-2">
+                                                {top.explanatory_synthesis}
+                                              </p>
+                                            )}
+                                          </div>
+
+                                          <div className="pt-2 border-t border-white/5 flex items-center justify-between">
+                                            <div className="flex items-center gap-2 font-mono text-[9px] text-zinc-400">
+                                              <span>⚡ {top.executive_summary?.length || 0} pts</span>
+                                              {top.web_sources && top.web_sources.length > 0 && (
+                                                <span className="text-amber-400/90">🔗 {top.web_sources.length} srcs</span>
+                                              )}
+                                            </div>
+                                            <span className="font-mono text-[9px] text-amber-400 group-hover:translate-x-0.5 transition-transform font-bold uppercase">
+                                              Open Dossier →
+                                            </span>
+                                          </div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          )}
+
+                          {/* LEVEL 3: FOCUSED TOPIC DOSSIER */}
+                          {echoFocusedTopic && (
+                            <div className="p-5 rounded-2xl bg-[#12141a] border border-amber-500/40 space-y-4 animate-in fade-in">
+                              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-white/10">
+                                <div className="space-y-1">
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <span className="font-mono text-[9px] text-amber-400 font-bold uppercase tracking-wider">
+                                      📄 DOSSIER #{echoFocusedTopic.id.substring(0, 6).toUpperCase()}
+                                    </span>
+                                    {echoFocusedTopic.kind && KIND_BADGES[echoFocusedTopic.kind] && (
+                                      <span className={`px-2 py-0.5 rounded border font-mono text-[8px] uppercase font-bold tracking-wider ${KIND_BADGES[echoFocusedTopic.kind].cls}`}>
+                                        {KIND_BADGES[echoFocusedTopic.kind].label}
+                                      </span>
+                                    )}
+                                    <span className="px-2 py-0.5 rounded bg-purple-950/80 border border-purple-500/30 text-purple-300 font-mono text-[8px] uppercase font-bold tracking-wider">
+                                      {echoFocusedTopic.context_type || "TECH STACK"}
+                                    </span>
+                                  </div>
+                                  <span className="font-mono text-[9px] text-zinc-500 block">
+                                    SYNTHESIZED: {typeof echoFocusedTopic.created_at === "string" ? echoFocusedTopic.created_at.substring(0, 10) : "LIVE"}
+                                  </span>
+                                </div>
+
+                                <div className="flex items-center gap-2 shrink-0 flex-wrap">
+                                  {echoPrevTopic && (
+                                    <button
+                                      onClick={() => setEchoFocusedTopicId(echoPrevTopic.id)}
+                                      className="px-2.5 py-1 rounded-lg border border-white/10 bg-white/5 hover:bg-white/10 text-zinc-300 font-mono text-[9px] font-bold uppercase cursor-pointer"
+                                      title="Previous dossier"
+                                    >
+                                      ← Prev
+                                    </button>
+                                  )}
+                                  {echoNextTopic && (
+                                    <button
+                                      onClick={() => setEchoFocusedTopicId(echoNextTopic.id)}
+                                      className="px-2.5 py-1 rounded-lg border border-white/10 bg-white/5 hover:bg-white/10 text-zinc-300 font-mono text-[9px] font-bold uppercase cursor-pointer"
+                                      title="Next dossier"
+                                    >
+                                      Next →
+                                    </button>
+                                  )}
+                                  <button
+                                    onClick={() => handleDownloadEchoTopic(echoFocusedTopic)}
+                                    className="px-3 py-1 rounded-lg bg-amber-950/80 hover:bg-amber-900 border border-amber-500/40 text-amber-300 font-mono text-[10px] uppercase tracking-wider font-bold transition-colors cursor-pointer flex items-center gap-1.5"
+                                    title="Download markdown dossier"
+                                  >
+                                    <span>💾</span>
+                                    <span>Download .md</span>
+                                  </button>
+                                  <button
+                                    onClick={() =>
+                                      speakAlexaReassurance(
+                                        `Briefing for ${echoFocusedTopic.topic_title}: ${echoFocusedTopic.explanatory_synthesis || (Array.isArray(echoFocusedTopic.executive_summary) ? echoFocusedTopic.executive_summary[0] : null) || "Analysis complete."}`
+                                      )
+                                    }
+                                    className="px-3 py-1 rounded-lg bg-purple-500/20 hover:bg-purple-500/30 border border-purple-400/40 text-purple-300 font-mono text-[10px] uppercase tracking-wider font-bold transition-colors cursor-pointer flex items-center gap-1.5"
+                                  >
+                                    <span>🔊</span>
+                                    <span>Read Aloud</span>
+                                  </button>
+                                </div>
+                              </div>
+
+                              <h3 className="font-serif text-2xl text-white font-bold">
+                                {echoFocusedTopic.topic_title}
+                              </h3>
+
+                              {/* Thesis */}
+                              {echoFocusedTopic.explanatory_synthesis && (
+                                <div className="p-3.5 rounded-xl bg-amber-950/20 border border-amber-500/30 text-amber-200 font-sans text-sm leading-relaxed">
+                                  ⚡ <strong className="font-mono text-[10px] tracking-wider uppercase text-amber-300 mr-1">Thesis:</strong>
+                                  {echoFocusedTopic.explanatory_synthesis}
+                                </div>
+                              )}
+
+                              {/* Event parts timeline if briefing is part of an event session */}
+                              {Array.isArray((echoFocusedTopic as any).segments) && (echoFocusedTopic as any).segments.length > 0 && (
+                                <div className="bg-black/40 border border-white/10 rounded-xl p-3.5 space-y-2">
+                                  <div className="font-mono text-[10px] tracking-wider text-cyan-300 uppercase flex items-center justify-between">
+                                    <span>🏛️ Event parts</span>
+                                    <span className="text-zinc-400">
+                                      {String((echoFocusedTopic as any).status || "").toUpperCase()}
+                                    </span>
+                                  </div>
+                                  <div className="space-y-1.5">
+                                    {(echoFocusedTopic as any).segments.map((seg: any, idx: number) => (
+                                      <div
+                                        key={seg?.index ?? idx}
+                                        className="flex items-center justify-between gap-3 text-xs bg-black/30 p-2 rounded border border-white/5"
+                                      >
+                                        <span className="text-zinc-200 truncate flex items-center gap-2">
+                                          <span className="font-mono text-[10px] text-cyan-400 font-bold">
+                                            #{seg?.index ?? idx + 1}
+                                          </span>
+                                          <span className="truncate">{seg?.title || "Part " + (seg?.index ?? idx + 1)}</span>
+                                        </span>
+                                        <span className="font-mono text-[9px] text-zinc-400 shrink-0">{seg?.time_range || ""}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* Bullets */}
+                              {Array.isArray(echoFocusedTopic.executive_summary) && echoFocusedTopic.executive_summary.length > 0 && (
+                                <div className="space-y-1.5">
+                                  <div className="font-mono text-[9px] text-zinc-400 tracking-widest uppercase">Key Insights:</div>
+                                  <ul className="space-y-1 text-xs text-zinc-200 font-sans">
+                                    {echoFocusedTopic.executive_summary.map((b, i) => (
+                                      <li key={i} className="flex items-start gap-2">
+                                        <span className="text-amber-400 font-bold">•</span>
+                                        <span>{b}</span>
+                                      </li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              )}
+
+                              {/* Deep Dive Markdown Section on Echo Show */}
+                              {echoFocusedTopic.deep_dive_markdown && (
+                                <div className="space-y-2 pt-2 border-t border-white/10">
+                                  <MarkdownRenderer
+                                    content={echoFocusedTopic.deep_dive_markdown}
+                                    allowRawToggle={true}
+                                    defaultMode="rendered"
+                                    title="Technical Report"
+                                    filename={sanitizeFilename(echoFocusedTopic.topic_title, ".md")}
+                                    accentColor="amber"
+                                    showDownloadButton={true}
+                                    showCopyButton={true}
+                                  />
+                                </div>
+                              )}
+
+                              {/* Web Sources */}
+                              {Array.isArray(echoFocusedTopic.web_sources) && echoFocusedTopic.web_sources.length > 0 && (
+                                <div className="pt-2 border-t border-white/10 flex flex-wrap gap-2">
+                                  <span className="font-mono text-[9px] text-zinc-400 uppercase tracking-wider">Sources:</span>
+                                  {echoFocusedTopic.web_sources.slice(0, 3).map((src, i) => {
+                                    const url = typeof src === "string" ? src : (src as any)?.url || "";
+                                    const label = typeof src === "string" ? src : (src as any)?.title || url || "Source";
+                                    return (
+                                      <a
+                                        key={i}
+                                        href={url}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="text-[10px] font-mono text-amber-300 hover:underline truncate max-w-xs"
+                                      >
+                                        🔗 {label}
+                                      </a>
+                                    );
+                                  })}
+                                </div>
+                              )}
+
+                              {/* Return to Folder Button */}
+                              <div className="pt-3 border-t border-white/10 flex items-center justify-between">
+                                <button
+                                  onClick={() => setEchoFocusedTopicId(null)}
+                                  className="px-3.5 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-zinc-200 font-mono text-[10px] uppercase font-bold tracking-wider cursor-pointer flex items-center gap-1.5"
+                                >
+                                  <span>←</span>
+                                  <span>Return to {echoActiveFolder?.name || "Folder"} Directory</span>
+                                </button>
+                                <span className="font-mono text-[9px] text-zinc-500 uppercase tracking-wider">
+                                  {echoFocusedIndex >= 0 ? `Entry ${echoFocusedIndex + 1} of ${echoDisplayedFolderTopics.length}` : ""}
+                                </span>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* LEVEL 3: FOCUSED EVENT SESSION */}
+                          {echoSelectedSessionId && echoFocusedEvent && (
+                            <div className="p-5 rounded-2xl bg-[#12141a] border border-cyan-500/40 space-y-4 animate-in fade-in">
                               <div className="flex items-center justify-between">
                                 <div className="flex items-center gap-2">
                                   <span
                                     className={`px-2.5 py-0.5 rounded border font-mono text-[9px] uppercase font-bold tracking-wider ${
-                                      selectedEvent.status === "active"
+                                      echoFocusedEvent.status === "active"
                                         ? "bg-emerald-950/80 border-emerald-500/40 text-emerald-300"
-                                        : selectedEvent.status === "paused"
+                                        : echoFocusedEvent.status === "paused"
                                         ? "bg-amber-950/80 border-amber-500/40 text-amber-300"
                                         : "bg-zinc-900 border-zinc-700 text-zinc-300"
                                     }`}
                                   >
-                                    {selectedEvent.status === "active"
+                                    {echoFocusedEvent.status === "active"
                                       ? "● LIVE"
-                                      : selectedEvent.status === "paused"
+                                      : echoFocusedEvent.status === "paused"
                                       ? "⏸ PAUSED"
                                       : "✓ CONCLUDED"}
                                   </span>
                                   <span className="font-mono text-[9px] text-zinc-400 uppercase">
-                                    {selectedEvent.domain || "ACADEMIC / MEETING"}
+                                    {echoFocusedEvent.domain || "ACADEMIC / MEETING"}
                                   </span>
                                 </div>
                                 <span className="font-mono text-[9px] text-zinc-500">
-                                  {typeof selectedEvent.start_time === "string" ? selectedEvent.start_time.substring(0, 10) : "TODAY"}
+                                  {typeof echoFocusedEvent.start_time === "string" ? echoFocusedEvent.start_time.substring(0, 10) : "TODAY"}
                                 </span>
                               </div>
 
                               <h3 className="font-serif text-2xl text-white font-bold">
-                                {selectedEvent.final_title || selectedEvent.title || "Academic Lecture / Meeting"}
+                                {echoFocusedEvent.final_title || echoFocusedEvent.title || "Academic Lecture / Meeting"}
                               </h3>
 
                               {/* Event parts timeline (SESSION_DOSSIER_VIEWER) */}
-                              {Array.isArray(selectedEvent.segments) && selectedEvent.segments.length > 0 && (
+                              {Array.isArray(echoFocusedEvent.segments) && echoFocusedEvent.segments.length > 0 && (
                                 <div className="bg-black/40 border border-white/10 rounded-xl p-3.5 space-y-2">
                                   <div className="font-mono text-[10px] tracking-wider text-cyan-300 uppercase flex items-center justify-between">
-                                    <span>🏛️ Event parts ({selectedEvent.segments.length})</span>
+                                    <span>🏛️ Event parts ({echoFocusedEvent.segments.length})</span>
                                     <span className="text-zinc-400">
-                                      {String(selectedEvent.status || "").toUpperCase()}
-                                      {selectedEvent.final_status !== "ready" ? " · PARTIAL BRIEFING" : " · FINAL"}
+                                      {String(echoFocusedEvent.status || "").toUpperCase()}
+                                      {echoFocusedEvent.final_status !== "ready" ? " · PARTIAL BRIEFING" : " · FINAL"}
                                     </span>
                                   </div>
                                   <div className="space-y-1.5">
-                                    {selectedEvent.segments.map((seg: any, idx: number) => (
+                                    {echoFocusedEvent.segments.map((seg: any, idx: number) => (
                                       <div
                                         key={seg?.index ?? seg?.segment_id ?? idx}
                                         className="flex items-center justify-between gap-3 text-xs bg-black/30 p-2 rounded border border-white/5"
@@ -1672,9 +2578,9 @@ export function EchoShowModal({
                               )}
 
                               {/* Top Terms */}
-                              {Array.isArray(selectedEvent.top_terms) && selectedEvent.top_terms.length > 0 && (
+                              {Array.isArray(echoFocusedEvent.top_terms) && echoFocusedEvent.top_terms.length > 0 && (
                                 <div className="flex flex-wrap gap-1.5 pt-1">
-                                  {selectedEvent.top_terms.map((term: string, idx: number) => (
+                                  {echoFocusedEvent.top_terms.map((term: string, idx: number) => (
                                     <span
                                       key={idx}
                                       className="px-2 py-0.5 rounded bg-cyan-950/40 border border-cyan-500/20 text-cyan-300 font-mono text-[9px]"
@@ -1684,18 +2590,37 @@ export function EchoShowModal({
                                   ))}
                                 </div>
                               )}
-                            </div>
-                          ) : (
-                            <div className="text-center py-12 text-zinc-500 font-mono text-sm">
-                              No event sessions recorded yet.
+
+                              {/* Return to Event Sessions Folder */}
+                              <div className="pt-3 border-t border-white/10 flex items-center justify-between">
+                                <button
+                                  onClick={() => setEchoSelectedSessionId(null)}
+                                  className="px-3.5 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-zinc-200 font-mono text-[10px] uppercase font-bold tracking-wider cursor-pointer flex items-center gap-1.5"
+                                >
+                                  <span>←</span>
+                                  <span>Return to Event Sessions Directory</span>
+                                </button>
+                                <button
+                                  onClick={() =>
+                                    speakAlexaReassurance(
+                                      `Event summary for ${echoFocusedEvent.final_title || echoFocusedEvent.title || "Academic Lecture"}: ${echoFocusedEvent.segments?.length || 0} recorded segments recorded into memory.`
+                                    )
+                                  }
+                                  className="px-3 py-1 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-400/40 text-cyan-300 font-mono text-[10px] uppercase tracking-wider font-bold transition-colors cursor-pointer"
+                                >
+                                  🔊 Read Event Summary
+                                </button>
+                              </div>
                             </div>
                           )}
-                        </>
+                        </div>
                       )}
 
-                      {/* SUB-VIEW 2: TECHNICAL BRIEFINGS DOSSIERS */}
-                      {(topicSubView === "briefings" || events.length === 0) && (
-                        <>
+                      {/* =========================================================================
+                          VIEW MODE 2: SPECULAR FLAT FEED (ALL BRIEFINGS)
+                          ========================================================================= */}
+                      {echoTopicViewMode === "all_feed" && (
+                        <div className="space-y-4">
                           {/* Topics Pill Selector with Category Filter */}
                           {topics.length > 0 && (
                             <div className="space-y-2">
@@ -1779,34 +2704,6 @@ export function EchoShowModal({
                                 </div>
                               )}
 
-                              {/* Event parts timeline if briefing is part of an event session */}
-                              {Array.isArray((selectedTopic as any).segments) && (selectedTopic as any).segments.length > 0 && (
-                                <div className="bg-black/40 border border-white/10 rounded-xl p-3.5 space-y-2">
-                                  <div className="font-mono text-[10px] tracking-wider text-cyan-300 uppercase flex items-center justify-between">
-                                    <span>🏛️ Event parts</span>
-                                    <span className="text-zinc-400">
-                                      {String((selectedTopic as any).status || "").toUpperCase()}
-                                    </span>
-                                  </div>
-                                  <div className="space-y-1.5">
-                                    {(selectedTopic as any).segments.map((seg: any, idx: number) => (
-                                      <div
-                                        key={seg?.index ?? idx}
-                                        className="flex items-center justify-between gap-3 text-xs bg-black/30 p-2 rounded border border-white/5"
-                                      >
-                                        <span className="text-zinc-200 truncate flex items-center gap-2">
-                                          <span className="font-mono text-[10px] text-cyan-400 font-bold">
-                                            #{seg?.index ?? idx + 1}
-                                          </span>
-                                          <span className="truncate">{seg?.title || "Part " + (seg?.index ?? idx + 1)}</span>
-                                        </span>
-                                        <span className="font-mono text-[9px] text-zinc-400 shrink-0">{seg?.time_range || ""}</span>
-                                      </div>
-                                    ))}
-                                  </div>
-                                </div>
-                              )}
-
                               {/* Bullets */}
                               {Array.isArray(selectedTopic.executive_summary) && selectedTopic.executive_summary.length > 0 && (
                                 <div className="space-y-1.5">
@@ -1865,26 +2762,47 @@ export function EchoShowModal({
                               No technical research dossiers compiled yet.
                             </div>
                           )}
-                        </>
+                        </div>
                       )}
                     </div>
 
+                    {/* Bottom Status & Voice Reassurance Bar */}
                     <div className="pt-3 border-t border-white/10 flex items-center justify-between">
                       <span className="text-xs font-mono text-zinc-400">
                         Research Engine: <strong className="text-purple-400">AWS BEDROCK + DUCKDUCKGO</strong>
                       </span>
-                      {(topicSubView === "events" && selectedEvent) ? (
+                      {echoTopicViewMode === "folders" && echoFocusedTopic ? (
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => handleDownloadEchoTopic(echoFocusedTopic)}
+                            className="px-3.5 py-1.5 rounded-full bg-amber-950/80 hover:bg-amber-900 border border-amber-500/40 text-amber-300 font-mono text-xs uppercase tracking-wider font-bold transition-colors cursor-pointer flex items-center gap-1.5"
+                          >
+                            <span>💾</span>
+                            <span>Download .md</span>
+                          </button>
+                          <button
+                            onClick={() =>
+                              speakAlexaReassurance(
+                                `Briefing for ${echoFocusedTopic.topic_title}: ${echoFocusedTopic.explanatory_synthesis || (Array.isArray(echoFocusedTopic.executive_summary) ? echoFocusedTopic.executive_summary[0] : null) || "Analysis complete."}`
+                              )
+                            }
+                            className="px-4 py-1.5 rounded-full bg-purple-500/20 hover:bg-purple-500/30 border border-purple-400/40 text-purple-300 font-mono text-xs uppercase tracking-wider font-bold transition-colors cursor-pointer"
+                          >
+                            🔊 Read Dossier Aloud
+                          </button>
+                        </div>
+                      ) : echoTopicViewMode === "folders" && echoSelectedSessionId && echoFocusedEvent ? (
                         <button
                           onClick={() =>
                             speakAlexaReassurance(
-                              `Event summary for ${selectedEvent.final_title || selectedEvent.title || "Academic Lecture"}: ${selectedEvent.segments?.length || 0} recorded segments recorded into memory.`
+                              `Event summary for ${echoFocusedEvent.final_title || echoFocusedEvent.title || "Academic Lecture"}: ${echoFocusedEvent.segments?.length || 0} recorded segments recorded into memory.`
                             )
                           }
                           className="px-4 py-1.5 rounded-full bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-400/40 text-cyan-300 font-mono text-xs uppercase tracking-wider font-bold transition-colors cursor-pointer"
                         >
                           🔊 Read Event Summary
                         </button>
-                      ) : selectedTopic ? (
+                      ) : echoTopicViewMode === "all_feed" && selectedTopic ? (
                         <div className="flex items-center gap-2">
                           <button
                             onClick={() => handleDownloadEchoTopic(selectedTopic)}
@@ -1904,7 +2822,11 @@ export function EchoShowModal({
                             🔊 Read Dossier Aloud
                           </button>
                         </div>
-                      ) : null}
+                      ) : (
+                        <span className="font-mono text-[10px] text-zinc-500 uppercase tracking-wider">
+                          Autonomous Ambient Knowledge Vault
+                        </span>
+                      )}
                     </div>
                   </div>
                 )}

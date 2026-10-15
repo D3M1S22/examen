@@ -125,6 +125,50 @@ export interface DossierFolderDef {
   isEventFolder?: boolean;
 }
 
+export const DEFAULT_DOSSIER_FOLDERS: DossierFolderDef[] = [
+  {
+    id: "academic",
+    name: "Academic & Lectures",
+    icon: "🏛️",
+    accent: "amber",
+    description: "University lectures, symposiums, theoretical foundations & scientific research",
+    contextTypes: ["academic_lecture"],
+  },
+  {
+    id: "tech_stack",
+    name: "Tech Stack & Systems",
+    icon: "💻",
+    accent: "cyan",
+    description: "System architecture, distributed algorithms, AI frameworks & protocols",
+    contextTypes: ["tech_stack"],
+  },
+  {
+    id: "engineering",
+    name: "Product & Engineering",
+    icon: "🚀",
+    accent: "emerald",
+    description: "Feature specs, engineering standups, bug postmortems & incident reports",
+    contextTypes: ["feature_discussion", "bug", "system_incident"],
+  },
+  {
+    id: "business",
+    name: "Strategy & Business",
+    icon: "💼",
+    accent: "purple",
+    description: "Executive debriefs, roadmap planning, stakeholder meetings & leadership syncs",
+    contextTypes: ["general_meeting"],
+  },
+  {
+    id: "event_sessions",
+    name: "Event Sessions & Symposia",
+    icon: "⚡",
+    accent: "blue",
+    description: "Deep Topic Event Engine multi-part macro recordings with live synthesis",
+    contextTypes: [],
+    isEventFolder: true,
+  },
+];
+
 export interface DossierBreadcrumbItem {
   id: string;
   label: string;

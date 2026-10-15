@@ -5,6 +5,7 @@ import {
   EventSummary,
   DossierFolderDef,
   DossierBreadcrumbItem,
+  DEFAULT_DOSSIER_FOLDERS,
 } from "@/types/schemas";
 import { ScreenHeader } from "../ui/ScreenHeader";
 import { StatusBadge } from "../ui/StatusBadge";
@@ -43,49 +44,7 @@ const KIND_BADGES: Record<string, { label: string; cls: string }> = {
   standalone: { label: "STANDALONE", cls: "text-zinc-300 border-white/10 bg-[#1c1f26]" },
 };
 
-const DEFAULT_FOLDERS: DossierFolderDef[] = [
-  {
-    id: "academic",
-    name: "Academic & Lectures",
-    icon: "🏛️",
-    accent: "amber",
-    description: "University lectures, symposiums, theoretical foundations & scientific research",
-    contextTypes: ["academic_lecture"],
-  },
-  {
-    id: "tech_stack",
-    name: "Tech Stack & Systems",
-    icon: "💻",
-    accent: "cyan",
-    description: "System architecture, distributed algorithms, AI frameworks & protocols",
-    contextTypes: ["tech_stack"],
-  },
-  {
-    id: "engineering",
-    name: "Product & Engineering",
-    icon: "🚀",
-    accent: "emerald",
-    description: "Feature specs, engineering standups, bug postmortems & incident reports",
-    contextTypes: ["feature_discussion", "bug", "system_incident"],
-  },
-  {
-    id: "business",
-    name: "Strategy & Business",
-    icon: "💼",
-    accent: "purple",
-    description: "Executive debriefs, roadmap planning, stakeholder meetings & leadership syncs",
-    contextTypes: ["general_meeting"],
-  },
-  {
-    id: "event_sessions",
-    name: "Event Sessions & Symposia",
-    icon: "⚡",
-    accent: "blue",
-    description: "Deep Topic Event Engine multi-part macro recordings with live synthesis",
-    contextTypes: [],
-    isEventFolder: true,
-  },
-];
+const DEFAULT_FOLDERS: DossierFolderDef[] = DEFAULT_DOSSIER_FOLDERS;
 
 export function TopicDossiers({
   topicsData,
