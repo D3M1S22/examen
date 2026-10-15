@@ -84,7 +84,7 @@ export function StatusDock({
   const plannedTotal = statusData?.stats?.planned_tasks_total ?? 0;
   const totalContacts = statusData?.stats?.total_contacts ?? 0;
 
-  const showButton = isAreaHovered || isDockOpen || isPinned;
+  const showButton = !isPinned && (isAreaHovered || isDockOpen);
 
   return (
     <aside
@@ -93,15 +93,17 @@ export function StatusDock({
       onMouseLeave={handleMouseLeaveArea}
       className="fixed left-0 top-1/2 -translate-y-1/2 z-[90] flex items-center select-none"
     >
-      {/* Edge Sensor Hit Zone (Generous invisible hover detection strip along left edge) */}
-      <div
-        onMouseEnter={handleMouseEnterArea}
-        className="absolute left-0 top-1/2 -translate-y-1/2 w-6 sm:w-8 h-80 -z-10 cursor-pointer"
-        aria-hidden="true"
-      />
+      {/* Edge Sensor Hit Zone (Generous invisible hover detection strip along left edge, active only when not pinned) */}
+      {!isPinned && (
+        <div
+          onMouseEnter={handleMouseEnterArea}
+          className="absolute left-0 top-1/2 -translate-y-1/2 w-6 sm:w-8 h-80 -z-10 cursor-pointer"
+          aria-hidden="true"
+        />
+      )}
 
-      {/* Subtle edge tab when hidden (Visual hint before hovering) */}
-      {!showButton && (
+      {/* Subtle edge tab when hidden (Visual hint before hovering, hidden when pinned) */}
+      {!showButton && !isPinned && (
         <div
           onMouseEnter={handleMouseEnterButton}
           className="w-1.5 h-16 rounded-r-full bg-cyan-500/40 hover:bg-cyan-400 transition-all cursor-pointer shadow-[0_0_10px_rgba(34,211,238,0.6)]"
@@ -109,44 +111,48 @@ export function StatusDock({
         />
       )}
 
-      {/* Hover Trigger Reveal Button (Revealed on hover, auto-opens dock when touched) */}
-      <div
-        className={`transition-all duration-300 ease-out flex items-center ${
-          showButton
-            ? "opacity-100 translate-x-0 pointer-events-auto"
-            : "opacity-0 -translate-x-full pointer-events-none"
-        }`}
-      >
-        <button
-          onClick={handleToggleDock}
-          onMouseEnter={handleMouseEnterButton}
-          aria-expanded={isDockOpen}
-          aria-label={isDockOpen ? "Collapse System Dock" : "Expand System Status Dock"}
-          title={isDockOpen ? "Click to toggle/pin dock" : "Hover to reveal Status Dock"}
-          className={`flex items-center gap-1.5 px-2.5 py-3.5 rounded-r-2xl bg-zinc-950/95 backdrop-blur-2xl border-y border-r transition-all duration-200 shadow-[0_12px_40px_rgba(0,0,0,0.95)] cursor-pointer group/btn ${
-            isDockOpen
-              ? "border-cyan-400/50 text-cyan-300 bg-cyan-950/60"
-              : "border-white/20 text-zinc-300 hover:text-cyan-300 hover:border-cyan-500/50"
+      {/* Hover Trigger Reveal Button (Revealed on hover, auto-opens dock when touched, completely hidden when dock is pinned) */}
+      {!isPinned && (
+        <div
+          className={`transition-all duration-300 ease-out flex items-center ${
+            showButton
+              ? "opacity-100 translate-x-0 pointer-events-auto"
+              : "opacity-0 -translate-x-full pointer-events-none"
           }`}
         >
-          <span className="text-xs">⚡</span>
-          <span className="[writing-mode:vertical-rl] font-mono text-[9px] uppercase tracking-widest font-bold">
-            {isPinned ? "PINNED" : isDockOpen ? "DOCK" : "STATUS"}
-          </span>
-          <span
-            className={`text-xs text-cyan-400 transition-transform duration-200 ${
-              isDockOpen ? "rotate-180" : ""
+          <button
+            onClick={handleToggleDock}
+            onMouseEnter={handleMouseEnterButton}
+            aria-expanded={isDockOpen}
+            aria-label={isDockOpen ? "Collapse System Dock" : "Expand System Status Dock"}
+            title={isDockOpen ? "Click to toggle/pin dock" : "Hover to reveal Status Dock"}
+            className={`flex items-center gap-1.5 px-2.5 py-3.5 rounded-r-2xl bg-zinc-950/95 backdrop-blur-2xl border-y border-r transition-all duration-200 shadow-[0_12px_40px_rgba(0,0,0,0.95)] cursor-pointer group/btn ${
+              isDockOpen
+                ? "border-cyan-400/50 text-cyan-300 bg-cyan-950/60"
+                : "border-white/20 text-zinc-300 hover:text-cyan-300 hover:border-cyan-500/50"
             }`}
           >
-            ›
-          </span>
-        </button>
-      </div>
+            <span className="text-xs">⚡</span>
+            <span className="[writing-mode:vertical-rl] font-mono text-[9px] uppercase tracking-widest font-bold">
+              {isDockOpen ? "DOCK" : "STATUS"}
+            </span>
+            <span
+              className={`text-xs text-cyan-400 transition-transform duration-200 ${
+                isDockOpen ? "rotate-180" : ""
+              }`}
+            >
+              ›
+            </span>
+          </button>
+        </div>
+      )}
 
       {/* MacBook Pro Styled Floating Glass Dock (Opens when button is hovered, clicked, or pinned) */}
       <div
         onMouseEnter={handleMouseEnterArea}
-        className={`transition-all duration-300 ease-out ml-2 sm:ml-3 ${
+        className={`transition-all duration-300 ease-out ${
+          isPinned ? "ml-3 sm:ml-4" : "ml-2 sm:ml-3"
+        } ${
           isDockOpen || isPinned
             ? "opacity-100 translate-x-0 scale-100 pointer-events-auto"
             : "opacity-0 -translate-x-12 scale-95 pointer-events-none"
@@ -156,9 +162,18 @@ export function StatusDock({
           {/* Dock Header & Pin/Unpin Toggle */}
           <div className="flex items-center justify-between w-full px-1">
             <button
-              onClick={() => setIsPinned(!isPinned)}
-              title={isPinned ? "Unpin dock (auto-hides on mouse leave)" : "Pin dock open permanently"}
-              className={`w-7 h-7 rounded-lg text-[10px] font-mono flex items-center justify-center transition-colors ${
+              onClick={() => {
+                if (isPinned) {
+                  setIsPinned(false);
+                  setIsDockOpen(true);
+                  setIsAreaHovered(true);
+                } else {
+                  setIsPinned(true);
+                  setIsDockOpen(true);
+                }
+              }}
+              title={isPinned ? "Unpin dock (auto-hides on mouse leave)" : "Pin dock open permanently (hides trigger button)"}
+              className={`w-7 h-7 rounded-lg text-[10px] font-mono flex items-center justify-center transition-colors cursor-pointer ${
                 isPinned
                   ? "bg-cyan-500/20 text-cyan-300 border border-cyan-400/40"
                   : "bg-white/5 text-zinc-400 hover:text-white border border-white/10"
