@@ -115,6 +115,25 @@ export interface BriefingReport {
   segment_id?: string | null;
 }
 
+export interface DossierFolderDef {
+  id: string;
+  name: string;
+  icon: string;
+  accent: "amber" | "cyan" | "emerald" | "purple" | "blue" | "zinc";
+  description: string;
+  contextTypes: string[];
+  isEventFolder?: boolean;
+}
+
+export interface DossierBreadcrumbItem {
+  id: string;
+  label: string;
+  icon?: string;
+  path?: string;
+  count?: number;
+  isCurrent?: boolean;
+}
+
 export interface MicroEventRef {
   event_type: "action" | "social_contact" | "task_scheduled" | "social_commitment";
   record_id: string;
