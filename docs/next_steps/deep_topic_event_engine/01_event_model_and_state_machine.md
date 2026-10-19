@@ -105,7 +105,7 @@ The engine uses **ordered, explainable rules**, not a weighted score. A score is
 | Signal | Source | Strength | Role |
 |---|---|---|---|
 | **Utterance time gap** | `chunk.timestamp` (receive time or `spoken_at`, see [05](05_ingestion_and_pipeline_integration.md)) | Strong | Drives R1/R5. |
-| **GPS displacement** | `update-location` → `LocationTelemetry` | Strong, **one-directional** | Moving away ⇒ close (R6). Staying put proves nothing: rooms in the same building are below GPS resolution. |
+| **GPS displacement** | `update-location` → `LocationTelemetry` | Strong, **one-directional** | Moving away ⇒ close (R6). Staying put proves nothing: rooms in the same building are below GPS resolution. ⚠️ The Apple Watch emits no `update-location` (2026-10-19), so R6 is inactive live until locations are polled ([10](../../10_bee_cli_reference.md) C2). |
 | **Topic similarity** | Topic profile vs. micro-window | Strong when the window is sufficient, weak on a single chunk | The only signal separating back-to-back events in the same place (R7/R9). Decides resume vs. split (R4/R7). |
 | **Explicit cues** | Regex + gatekeeper hint | Medium | Pause/close cues (R2); resume cues lower the resume threshold; opening cues lower the split threshold. |
 | **Bee conversation boundary** | `new-conversation` / `update-conversation` events | Weak–medium | A new Bee conversation while `PAUSED` slightly biases toward split. Bee `title`/`short_summary` enriches the topic profile. |

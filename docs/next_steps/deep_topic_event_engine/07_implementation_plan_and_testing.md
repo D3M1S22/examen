@@ -145,8 +145,8 @@ Runner: `scripts/simulate_mock_conversations.py --event-mode --virtual-clock` pr
 | # | Question | Owner / how to resolve |
 |---|---|---|
 | 1 | ~~Which Bedrock embedding models are enabled?~~ **Resolved 2026-10-13:** Titan Text Embeddings V2, Cohere Embed Multilingual / v4, Nova Multimodal and others are active on-demand in `us-east-1` | — |
-| 2 | Does the live `bee stream` payload carry any time field (`spoken_at`, `created_at`)? What exactly do `new-conversation` / `update-conversation` look like in `--json` mode? | Capture samples with a real device |
-| 3 | How does Bee split a lecture with a break into conversations (silence threshold)? | Same capture session; informs the weight of the Bee-boundary signal |
+| 2 | ~~Does the live `bee stream` payload carry any time field?~~ **Resolved 2026-10-19:** yes, `utterance.spoken_at` (ISO UTC). `new-conversation` / `update-conversation` still to be captured | [10](../../10_bee_cli_reference.md) §7 |
+| 3 | ~~How does Bee split a lecture with a break into conversations?~~ **Resolved 2026-10-19:** Bee closes a conversation after **~6 min of silence** (`end_time` = last `spoken_at` + ~377 s). With `T_soft = 5 min`, any pause longer than ~6 min also produces a new Bee conversation, which is a consistent boundary signal | [10](../../10_bee_cli_reference.md) §5 |
 | 4 | ~~Final `T_soft` / `T_hard` defaults?~~ **Decided 2026-10-13:** `T_soft = 5 min`, `T_hard = 30 min` (revisit after real-device tests) | — |
 | 5 | Privacy: retention of raw `session_chunks` after the final briefing exists (keep / truncate after N days)? | Team decision; add `EVENT_CHUNK_RETENTION_DAYS` |
 | 6 | Should the final briefing be regenerated if a concluded event is manually merged days later? | Default yes (doc 03 §7); confirm UX |

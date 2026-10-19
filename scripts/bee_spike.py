@@ -24,6 +24,7 @@ import asyncio
 import hashlib
 import json
 import re
+import secrets
 import statistics
 import subprocess
 import sys
@@ -151,7 +152,7 @@ async def _capture_raw_sse(out_raw: Path, out_events: Path, port: int, types: Op
     """Ground truth: raw SSE frames (event names, comment pings) through `bee proxy`."""
     import httpx
 
-    proxy = await asyncio.create_subprocess_exec(*bee_cmd("proxy", "--port", str(port), "--idle-timeout", "0"),
+    proxy = await asyncio.create_subprocess_exec(*bee_cmd("proxy", "--port", str(port), "--idle-timeout", "255"),
                                                  stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
     try:
         while True:
@@ -165,15 +166,8 @@ async def _capture_raw_sse(out_raw: Path, out_events: Path, port: int, types: Op
         async with httpx.AsyncClient(timeout=httpx.Timeout(None)) as client:
             async with client.stream("GET", url, headers={"Accept": "text/event-stream"}) as response:
                 print(f"{datetime.now():%H:%M:%S} [sse] HTTP {response.status_code}")
-                lines = response.aiter_lines()
-                while not stop.is_set():
-                    try:
-                        line = await asyncio.wait_for(lines.__anext__(), timeout=1.0)
-                    except asyncio.TimeoutError:
-                        continue
-                    except StopAsyncIteration:
-                        print(f"{datetime.now():%H:%M:%S} [sse] stream ended")
-                        break
+                # No wait_for around the iterator: cancelling __anext__ closes the httpx stream
+                async for line in response.aiter_lines():
                     received = now_ms()
                     append_jsonl(out_raw, {"received_at_ms": received, "raw": line})
                     if line.startswith(":"):
@@ -190,10 +184,13 @@ async def _capture_raw_sse(out_raw: Path, out_events: Path, port: int, types: Op
                             text = ((data or {}).get("utterance") or {}).get("text") if isinstance(data, dict) else None
                             print(f"{datetime.now():%H:%M:%S} [sse] {current.get('event')} {(text or '')[:70]}")
                         current = {}
+                    elif line.startswith("retry:"):
+                        continue
                     elif ":" in line:
                         field, value = line.split(":", 1)
                         value = value[1:] if value.startswith(" ") else value
                         current[field] = current[field] + "\n" + value if field == "data" and field in current else value
+                print(f"{datetime.now():%H:%M:%S} [sse] stream ended by the server")
     finally:
         if proxy.returncode is None:
             proxy.terminate()
@@ -218,6 +215,9 @@ async def _capture(args) -> None:
                 print(f"capture task failed: {task.exception()!r}")
     finally:
         stop.set()
+        _, pending = await asyncio.wait(tasks, timeout=3)
+        for task in pending:
+            task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
     print(f"Done. Next: python scripts/bee_spike.py history --hours 2 --session {out.parent}")
 
@@ -281,7 +281,7 @@ def cmd_history(args) -> None:
     report = {"fetched_at": iso(now_ms()), "hours": args.hours, "conversations": summaries,
               "list_order": {"start_time_desc": monotonic("start_ms"), "created_at_desc": monotonic("created_ms"),
                              "first_ids": [o["id"] for o in order[:10]]}}
-    (out / "history_summary.json").write_text(json.dumps(report, indent=2, ensure_ascii=False))
+    (out / ("history_summary.json" if order else "history_summary_ids.json")).write_text(json.dumps(report, indent=2, ensure_ascii=False))
     print(f"\n{len(summaries)} conversations saved in {out}")
     print(f"list ordering: newest-first by start_time={report['list_order']['start_time_desc']} "
           f"by created_at={report['list_order']['created_at_desc']}")
@@ -434,8 +434,12 @@ def cmd_analyze(args) -> None:
         if conv_uuid in uuid_to_conv:
             uuid_ok += 1
             pool = [r for r in pool if r["conv"] is uuid_to_conv[conv_uuid]] or pool
-        best = next((r for r in pool if r["norm"] == text), None)
-        kind = "exact"
+        live_id = utt.get("id") or p.get("id")
+        best = next((r for r in rest_rt if live_id is not None and str(r["u"].get("id")) == str(live_id)), None)
+        kind = "id"
+        if best is None:
+            best = next((r for r in pool if r["norm"] == text), None)
+            kind = "exact"
         if best is None and pool:
             best = max(pool, key=lambda r: token_jaccard(r["norm"], text))
             kind = "fuzzy" if token_jaccard(best["norm"], text) >= 0.6 else None
@@ -443,7 +447,6 @@ def cmd_analyze(args) -> None:
             matches.append({"text": text[:60], "matched": False})
             continue
         u = best["u"]
-        live_id = utt.get("id") or p.get("id")
         if live_id is not None and str(live_id) == str(u.get("id")):
             id_equal += 1
         spoken, end = epoch_ms(u.get("spoken_at") or u.get("start")), epoch_ms(u.get("end"))
@@ -456,17 +459,29 @@ def cmd_analyze(args) -> None:
     report["V2"] = {"live_utterances": len(live), "matched": sum(1 for m in matches if m["matched"]),
                     "live_id_equals_rest_realtime_id": id_equal, "conversation_uuid_resolved": uuid_ok,
                     "samples": matches[:20]}
-    report["V5"] = {"received_minus_spoken_s": stats(lags_spoken), "received_minus_end_s": stats(lags_end)}
+    live_lags = []
+    for item in live:
+        spoken_live = (item["payload"].get("utterance") or {}).get("spoken_at")
+        if spoken_live:
+            try:
+                ts = datetime.fromisoformat(str(spoken_live).replace("Z", "+00:00")).timestamp() * 1000
+            except ValueError:
+                ts = epoch_ms(spoken_live)
+            if ts:
+                live_lags.append((item["received_at_ms"] - ts) / 1000)
+    report["V5"] = {"received_minus_live_spoken_at_s": stats(live_lags),
+                    "received_minus_rest_spoken_at_s": stats(lags_spoken), "received_minus_end_s": stats(lags_end)}
     md += ["## V2 — Live utterance id vs REST realtime utterance id",
            f"- Live utterances: {len(live)}, matched in REST realtime: {report['V2']['matched']}, "
            f"id equal: {id_equal}, conversation_uuid resolved via REST uuid: {uuid_ok}", "",
            "## V5 — Lag live receipt vs REST times (seconds)",
-           f"- received − spoken_at: {report['V5']['received_minus_spoken_s']}",
+           f"- received − live `utterance.spoken_at`: {report['V5']['received_minus_live_spoken_at_s']}",
+           f"- received − REST spoken_at: {report['V5']['received_minus_rest_spoken_at_s']}",
            f"- received − end: {report['V5']['received_minus_end_s']}",
            "- Suggested `BACKFILL_MATCH_WINDOW_SECONDS`: max lag + margin", ""]
 
     # V3: list ordering
-    summary_path = hist / "history_summary.json"
+    summary_path = hist / "history_summary.json"  # written by a listing run (not --ids)
     order = json.loads(summary_path.read_text())["list_order"] if summary_path.exists() else {}
     report["V3"] = order
     md += ["## V3 — `GET /v1/conversations` ordering", f"- {order or 'no history capture'}",
@@ -525,7 +540,8 @@ def _redact_words(text: str, salt: str) -> str:
 def cmd_fixture(args) -> None:
     detail = json.loads(Path(args.source).read_text())
     conv = detail.get("conversation") if isinstance(detail.get("conversation"), dict) else detail
-    salt = hashlib.sha1(str(conv.get("id")).encode()).hexdigest()
+    salt = secrets.token_hex(16)  # never stored: tokens cannot be reversed with a dictionary
+    people: Dict[str, str] = {}
     for key in ("title", "short_summary", "summary"):
         if conv.get(key):
             conv[key] = f"[redacted {key}]"
@@ -536,6 +552,11 @@ def cmd_fixture(args) -> None:
         for t in conv.get("transcriptions") or []:
             for u in t.get("utterances") or []:
                 u["text"] = _redact_words(u.get("text") or "", salt)
+    for t in conv.get("transcriptions") or []:
+        for u in t.get("utterances") or []:
+            speaker = u.get("speaker")
+            if speaker and speaker != "Unknown" and not str(speaker).startswith("speaker_"):
+                u["speaker"] = people.setdefault(speaker, f"person_{len(people) + 1}")
     leftovers = sorted(k for k, v in conv.items() if isinstance(v, str)
                        and k not in {"uuid", "state", "device_type", "title", "short_summary", "summary"})
     FIXTURE_DIR.mkdir(parents=True, exist_ok=True)

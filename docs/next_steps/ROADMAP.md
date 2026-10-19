@@ -1,7 +1,7 @@
 # 🗺️ EXAMEN Evolution Roadmap & Execution Plan
 
 > **Document Status:** Active Execution Plan & Project Tracking Board  
-> **Source Documents:** [00_overview.md](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/docs/next_steps/00_overview.md) to [06_social_web_enrichment.md](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/docs/next_steps/06_social_web_enrichment.md)  
+> **Source Documents:** [00_overview.md](00_overview.md) to [06_social_web_enrichment.md](06_social_web_enrichment.md)  
 > **Target Branch:** `Next_steps` / `main`  
 > **Current Baseline:** v1.4.0 (272/272 Pytest suites passing 100% green, Deep Topic Event Engine + Next.js event timeline live)
 
@@ -61,7 +61,7 @@
 > **Goal:** Enhance reasoning depth and capture actionable intent from spoken dialogue without depending on raw BLE streaming changes.
 
 #### 🎯 Milestone 1.1: Contextual Deep Topic Explanatory Synthesis
-* **Reference Spec:** [`01_deep_topic_contextual_synthesis.md`](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/docs/next_steps/01_deep_topic_contextual_synthesis.md)
+* **Reference Spec:** [`01_deep_topic_contextual_synthesis.md`](01_deep_topic_contextual_synthesis.md)
 * **Status:** ✅ **COMPLETED**
 * **Rationale:** Current briefings produce generic bullet points. We need a dense, pedagogical explanatory narrative that bridges dialogue concepts with authoritative web research.
 * **Work Breakdown:**
@@ -78,7 +78,7 @@
      * Unit tests, integration tests, and UI asset checks passing 100% across test suites (`tests/test_storage.py`, `tests/test_pipeline_nodes.py`, `tests/test_mcp_server.py`).
 
 #### 🎯 Milestone 1.2: Ambient Scheduled Tasks from Spoken Voice
-* **Reference Spec:** [`04_ambient_scheduled_tasks.md`](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/docs/next_steps/04_ambient_scheduled_tasks.md)
+* **Reference Spec:** [`04_ambient_scheduled_tasks.md`](04_ambient_scheduled_tasks.md)
 * **Status:** ✅ **COMPLETED**
 * **Rationale:** Spoken future intentions (*"I must call Dr. Smith at 3 PM"*, *"Remind me to turn off irrigation in an hour"*) were previously dropped as `noop` to protect `VerifiedAction`. They are now captured as actionable planned tasks.
 * **Work Breakdown:**
@@ -103,7 +103,7 @@
      * 100/100 tests passing with 0 errors across all test suites (`tests/test_gatekeeper.py`, `tests/test_pipeline_nodes.py`, `tests/test_langgraph_pipeline.py`, `tests/test_mcp_server.py`, `tests/test_storage.py`).
 
 #### 🎯 Milestone 1.3: Structured Bilateral Social Commitments
-* **Reference Spec:** [`05_structured_social_commitments.md`](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/docs/next_steps/05_structured_social_commitments.md)
+* **Reference Spec:** [`05_structured_social_commitments.md`](05_structured_social_commitments.md)
 * **Status:** ✅ **COMPLETED**
 * **Rationale:** Current commitments are raw string arrays without debtor clarity (*who owes whom?*) or due dates. Upgraded to structured bilateral promises with automatic agenda provisioning, closed-loop reconciliation, FastMCP tools, and interactive Web UI management.
 * **Work Breakdown:**
@@ -132,7 +132,7 @@
 > **Goal:** Autonomously enrich captured contacts from public web sources and deliver premium Echo Show visual experiences.
 
 #### 🎯 Milestone 2.1: Autonomous Social Web Profiler
-* **Reference Spec:** [`06_social_web_enrichment.md`](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/docs/next_steps/06_social_web_enrichment.md)
+* **Reference Spec:** [`06_social_web_enrichment.md`](06_social_web_enrichment.md)
 * **Status:** ✅ **COMPLETED**
 * **Rationale:** During professional meetings and conferences, newly encountered peers often need authoritative background context without the user awkwardly typing into a phone. EXAMEN autonomously builds an executive dossier using public web intelligence while enforcing strict privacy and disambiguation guardrails.
 * **Work Breakdown:**
@@ -159,7 +159,7 @@
      * Comprehensive unit and integration test coverage across `tests/test_storage.py`, `tests/test_pipeline_nodes.py`, `tests/test_mcp_server.py`.
 
 #### 🎯 Milestone 2.2: Echo Show & Web UI Multi-Modal Card Upgrades
-* **Reference Spec:** [`01_deep_topic_contextual_synthesis.md`](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/docs/next_steps/01_deep_topic_contextual_synthesis.md), [`05_structured_social_commitments.md`](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/docs/next_steps/05_structured_social_commitments.md), [`06_social_web_enrichment.md`](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/docs/next_steps/06_social_web_enrichment.md), [`docs/03_alexa_mcp_serving.md`](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/docs/03_alexa_mcp_serving.md)
+* **Reference Spec:** [`01_deep_topic_contextual_synthesis.md`](01_deep_topic_contextual_synthesis.md), [`05_structured_social_commitments.md`](05_structured_social_commitments.md), [`06_social_web_enrichment.md`](06_social_web_enrichment.md), [`docs/03_alexa_mcp_serving.md`](../03_alexa_mcp_serving.md)
 * **Status:** ✅ **COMPLETED**
 * **Rationale:** Delivers executive-grade visual experiences across both desktop browsers and Alexa+ Echo Show smart screens (Ext-Apps touch canvas). Standardized multi-modal JSON templates across FastMCP tools and introduced a dedicated simulated Echo Show hardware previewer, bilateral commitments management board, and full executive dossier modals.
 * **Work Breakdown:**
@@ -193,7 +193,7 @@
 > **Goal:** Handle long continuous meetings and streaming wearable nuances (pronouns, GPS, speaker diarization).
 
 #### 🎯 Milestone 3.1: Context Ring Buffer & Multimodal Telemetry
-* **Reference Spec:** [`02_gatekeeper_context_and_multimodal_telemetry.md`](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/docs/next_steps/02_gatekeeper_context_and_multimodal_telemetry.md)
+* **Reference Spec:** [`02_gatekeeper_context_and_multimodal_telemetry.md`](02_gatekeeper_context_and_multimodal_telemetry.md)
 * **Status:** ✅ **COMPLETED**
 * **Rationale:** Spoken ambient dialogue from wearable microphones often splits critical context across conversational turns (e.g. "Did you lock the door?" followed by "Yes, I just did"). Implemented a low-overhead FIFO Context Ring Buffer ($N=4$ chunks) with hybrid anaphora gatekeeper evaluation, multimodal GPS telemetry ingestion with semantic zone inference, and retrospective speaker diarization patching.
 * **Work Breakdown:**
@@ -219,13 +219,14 @@
   6. [x] **Streaming Orchestrator SSE Integration (`src/ingestion/orchestrator.py`, `src/ingestion/stream_convo.py`)**:
      * Ingests Bee `update-location` SSE events, updates `latest_telemetry`, and binds spatial metadata to subsequent chunks.
      * Ingests `update-utterance` events, patching late-arriving speaker tags in ring buffer and SQLite store.
+     * ⚠️ **2026-10-19 device test:** `update-utterance` does not exist and the Apple Watch emits no `update-location`. Real speaker identity comes from `tagged-utterance` and locations from `bee locations current`: see [10_bee_cli_reference.md](../10_bee_cli_reference.md) §10 (C2, C5, C6).
      * Forwards rolling dialogue history to downstream LangGraph nodes upon Gatekeeper qualification.
   7. [x] **Testing & Verification**:
      * Created comprehensive test suite `tests/test_ring_buffer.py` (17/17 tests passing).
      * 100% green verification: 134/134 tests passing across the repository.
 
 #### 🎯 Milestone 3.2: Session Merging & Micro-Event Decoupling
-* **Reference Spec:** [`03_session_merging_and_micro_event_splitting.md`](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/docs/next_steps/03_session_merging_and_micro_event_splitting.md)
+* **Reference Spec:** [`03_session_merging_and_micro_event_splitting.md`](03_session_merging_and_micro_event_splitting.md)
 * **Status:** ✅ **COMPLETED**
 * **Rationale:** Decouples macro conversation continuity (30-60 min meetings/lectures) from instantaneous micro-incidents (verifying actions, meeting contacts, scheduling tasks). Prevents redundant external search API hammer on every 15-30s audio chunk while ensuring micro-records are immediately extracted, foreign-key linked, and integrated into a holistic session dossier upon boundary detection.
 * **Work Breakdown:**

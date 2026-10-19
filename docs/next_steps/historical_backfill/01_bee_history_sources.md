@@ -116,7 +116,10 @@ Paging stops once a page's oldest `start_time ?? created_at` is older than `sinc
 
 ## 6. Open verifications (Phase 0 spike)
 
-These must be captured with the physical device before Phase 3 and recorded in [FRICTION_LOG.md](../../../FRICTION_LOG.md):
+These must be captured with the physical device before Phase 3 and recorded in [FRICTION_LOG.md](../../../FRICTION_LOG.md).
+
+> **Answered on 2026-10-19:** see [06_phase0_device_spike.md](06_phase0_device_spike.md) §5. Several assumptions of this document do not hold for real data (no `uuid` in the detail, relative `start`/`end`, no realtime transcription after completion, `CAPTURING`/`COMPLETED` states).
+
 
 | # | Question | Why it matters | How |
 |---|---|---|---|

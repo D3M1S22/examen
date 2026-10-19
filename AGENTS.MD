@@ -34,7 +34,9 @@ amazon_challenge/
 │   ├── 04_hackathon_strategy_demo.md       # 3-Minute pitch script, judging rubric & roadmap
 │   ├── 05_tech_stack_resources.md          # Tech stack breakdown & submodule references
 │   ├── 06_aws_cloud_deployment_architecture.md # Bedrock AgentCore, Memory & AWS infrastructure
-│   └── 07_repository_structure_modules.md  # Detailed monorepo layout & deployment mapping
+│   ├── 07_repository_structure_modules.md  # Detailed monorepo layout & deployment mapping
+│   ├── 08_real_telemetry_and_bee_hardware_spec.md # Telemetry & Bee hardware integration
+│   └── 10_bee_cli_reference.md             # Observed bee-cli/API contract (source of truth for Bee data)
 ├── resources/                              # Dedicated Git submodules (Reference Only)
 │   ├── agentcore-samples/                  # Reference for Bedrock AgentCore + LangGraph
 │   └── bee-cli/                            # Reference for Bee Wearable SSE streaming API
@@ -176,10 +178,11 @@ bee login                                                     # approve in the B
 python scripts/bee_spike.py check                             # Phase 0 spike tool, raw data in .bee-spike/
 ```
 Runbook and results: `docs/next_steps/historical_backfill/06_phase0_device_spike.md`.
+**Before touching any code that reads Bee data, read `docs/10_bee_cli_reference.md`**: real payloads differ from the official docs (no speaker in `new-utterance`, ISO `spoken_at`, relative `start`/`end`, no `update-utterance`, no `update-location` from the Apple Watch).
 
-### Running the Synthetic Conversational Feeder (For Demos & Testing)
+### Running the Synthetic Conversation Scenarios (For Demos & Testing)
 ```bash
-.venv/bin/python -m src.ingestion.mock_feeder
+.venv/bin/python scripts/simulate_mock_conversations.py --help   # scenarios from resources/mock_conversations.json
 ```
 
 ---
@@ -216,5 +219,6 @@ Whenever you encounter a non-obvious bug, dependency incompatibility, or tricky 
    * ✅ Implemented Peace of Mind Hero banner, Daily Routines Checklist with live scheduling, Social Rolodex cards, Topic Dossiers viewer, and Ambient Audio Stream Simulator.
    * ✅ 85 unit & integration tests passing (100% test suite).
 4. **Ingestion & Demo Bridge (`src/ingestion/`):**
-   * Build `mock_feeder.py` simulating hackathon demo scenarios.
-   * Live Bee Wearable hardware integration via `stream_convo.py`.
+   * ✅ Demo scenarios via `scripts/simulate_mock_conversations.py` and `scripts/replay_event_scenarios.py`.
+   * ✅ Live stream verified with a real account (2026-10-19, Apple Watch): `docs/10_bee_cli_reference.md`.
+   * Conformance fixes pending: `docs/10_bee_cli_reference.md` §10 (C1–C16) and backfill items I1–I9.

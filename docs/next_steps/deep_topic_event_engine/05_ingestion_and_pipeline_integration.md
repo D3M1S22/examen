@@ -31,6 +31,7 @@ Every time-based rule (R1, R3, R5) is meaningless if it measures pipeline latenc
 **Best-known utterance time**, in priority order:
 
 1. `spoken_at` from the Bee payload, **if present**. The documented `new-utterance` payload has no time fields ([Bee realtime docs](https://docs.bee.computer/docs/realtime)), but the REST transcript API exposes `spoken_at` / `start` in epoch ms ([conversations/index.ts](../../../resources/bee-cli/sources/resources/conversations/index.ts)). Parse it defensively in case the live stream carries it.
+   **Verified 2026-10-19:** every live `new-utterance` carries `utterance.spoken_at` as an ISO UTC string (second precision), already parsed by `normalize_bee_time`. Live lag is 1.6–44 s, so `spoken_at` is the effective chunk time ([10](../../10_bee_cli_reference.md) §7.4).
 2. `received_at`: wall-clock time captured **in `BeeClient.stream_events`** at the moment the line is read from the `bee stream --json` subprocess. This is before the gatekeeper and before any queueing.
 3. `datetime.now()` as a last resort (simulate API without an explicit timestamp).
 
@@ -100,7 +101,9 @@ async def event_tick_loop(self):
 | `update-conversation` (`title`, `short_summary`) | Append to `topic_profile.bee_titles`; candidate event title |
 | `update-conversation-summary` | Same as above |
 
-> **Open verification:** with `bee stream --json` the CLI prints only the raw SSE `data` without the event name ([stream/index.ts:349-351](../../../resources/bee-cli/sources/commands/stream/index.ts)), while `stream_convo.py` dispatches on `data["type"] or data["event"]`. A teammate confirmed that utterances arrive, so the live payload evidently carries a type field. Capture real samples of the conversation events before relying on them, and fall back to structural detection (`"utterance" in data`, `"conversation" in data`) if needed.
+> **Verified 2026-10-19:** real `--json` payloads carry `"type"`. `update-conversation-summary` is flat (`{type, conversation_id, short_summary}`); `new-conversation` / `update-conversation` were not observed yet. REST conversations have no `title`, and Bee closes a conversation after ~6 min of silence. See [10](../../10_bee_cli_reference.md) §5, §7.3.
+>
+> **Original note:** with `bee stream --json` the CLI prints only the raw SSE `data` without the event name ([stream/index.ts:349-351](../../../resources/bee-cli/sources/commands/stream/index.ts)), while `stream_convo.py` dispatches on `data["type"] or data["event"]`. A teammate confirmed that utterances arrive, so the live payload evidently carries a type field. Capture real samples of the conversation events before relying on them, and fall back to structural detection (`"utterance" in data`, `"conversation" in data`) if needed.
 
 ---
 

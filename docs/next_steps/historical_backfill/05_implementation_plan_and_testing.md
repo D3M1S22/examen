@@ -8,7 +8,7 @@
 
 | Phase | Status | Code | Tests |
 |---|---|---|---|
-| 0 Verification spike | ⏳ **Pending** (physical device). Environment and tooling ready: [06_phase0_device_spike.md](06_phase0_device_spike.md) | [bee_spike.py](../../../scripts/bee_spike.py) | — |
+| 0 Verification spike | ✅ **Done 2026-10-19** (Apple Watch capture). Results and follow-ups I1–I8: [06_phase0_device_spike.md](06_phase0_device_spike.md) §5 | [bee_spike.py](../../../scripts/bee_spike.py) | — |
 | 1 Coverage & ledger | ✅ Implemented | [coverage.py](../../../src/ingestion/coverage.py), [orchestrator.py](../../../src/ingestion/orchestrator.py), [stream_convo.py](../../../src/ingestion/stream_convo.py), [sqlite_store.py](../../../src/core/storage/sqlite_store.py) | `tests/test_backfill.py` (T-COV) |
 | 2 History source & planner | ✅ Implemented (CLI transport) | [bee_history.py](../../../src/ingestion/bee_history.py), [backfill.py](../../../src/ingestion/backfill.py) `BackfillPlanner` | T-DED, T-RDY |
 | 3 Replay executor | ✅ Implemented | `ReplayExecutor`, [event_engine.py](../../../src/ingestion/event_engine.py) (`ingest_source`/`run_id` scope, `advance_to`, `release_open_event`, `log_transition`), [persist.py](../../../src/pipeline/nodes/persist.py), [time_utils.py](../../../src/core/time_utils.py) | T-ISO, T-IDEM, T-TMP, T-CAN |

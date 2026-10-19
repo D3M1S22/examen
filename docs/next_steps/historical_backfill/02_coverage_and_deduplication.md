@@ -82,6 +82,8 @@ Every utterance that reaches `process_incoming_utterance` ([orchestrator.py](../
 
 ### 3.2 Live conversation id mapping
 
+> **2026-10-19:** the REST detail has no `uuid` (V1). The map can be filled from `new-utterance-chunks` (numeric `conversation_id` + utterance ids) and, for history, from `bee daily find <date>` (`conversations[].{id, conversation_uuid}`). See [10](../../10_bee_cli_reference.md) §8.
+
 The live stream knows `conversation_uuid`. `new-conversation` events carry both `id` and `uuid`, and the Event Engine already builds this map in memory (`EventEngine._bee_conv_ids`, [event_engine.py](../../../src/ingestion/event_engine.py)). The orchestrator persists it into `bee_conversation_map(uuid, id, first_seen_at)` so the planner can tell which REST conversations live has seen at all. If V1 ([01](01_bee_history_sources.md) §6) confirms that the REST detail returns `uuid`, the map is also filled from history.
 
 ### 3.3 Failed live utterances

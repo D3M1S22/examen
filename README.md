@@ -156,6 +156,7 @@ Detailed technical, architectural, and operational documentation is organized ac
 * 📄 [06_aws_cloud_deployment_architecture.md](docs/06_aws_cloud_deployment_architecture.md): AWS Cloud deployment architecture (AgentCore Runtime, AgentCore Memory, S3, DynamoDB, Alexa+ MCP, CloudFront).
 * 📄 [07_repository_structure_modules.md](docs/07_repository_structure_modules.md): Detailed repository layout, modular monorepo mapping by deployment target, and developer quickstart.
 * 📄 [08_real_telemetry_and_bee_hardware_spec.md](docs/08_real_telemetry_and_bee_hardware_spec.md): Real hardware telemetry integration, Bee Wearable CLI capabilities, latency tracking architecture, and sector-by-sector frontend data contracts.
+* 🐝 [10_bee_cli_reference.md](docs/10_bee_cli_reference.md): Observed bee-cli / Bee API contract (commands, payloads, timestamps, stream events, conversation lifecycle, locations) and the conformance audit of the EXAMEN code.
 * 🚀 [ROADMAP.md](docs/next_steps/ROADMAP.md): Evolution Roadmap, pipeline refinements status dashboard, and execution plan for Next Steps.
 * 🧠 [deep_topic_event_engine/](docs/next_steps/deep_topic_event_engine/00_overview.md): Deep Topic Event Engine specification, state machine, topic continuity calibration, synthesis scheduling, serving/UI and test plan.
 * ⏪ [historical_backfill/](docs/next_steps/historical_backfill/00_overview.md): Historical Transcript Backfill specification: coverage ledger, gap detection, live/backfill de-duplication, virtual-clock replay, auto catch-up and the History Sync UI.
@@ -181,13 +182,15 @@ In strict accordance with the non-modifying model directive, the current LLM mod
 - [x] **Cross-Origin Streaming (CORS):** Full CORS support enabled on FastMCP Starlette app and `/api/events` SSE endpoint for local port 3000 / 8000 seamless connectivity.
 - [x] **Ambient Simulator Multi-Key Ingestion:** Support for both `raw_transcript` and `transcript_chunk` across all endpoints and pipeline entrypoints.
 
-### 2. Bee Wearable Hardware & Edge Ingestion (Awaiting Physical Device Link)
+### 2. Bee Wearable Hardware & Edge Ingestion (Verified with a real account via Apple Watch, 2026-10-19)
 - [x] **Precompiled Standalone Binary Resolution:** Native fallback to `resources/bee-cli/dist/platforms/mac-arm64/bee` (or linux/windows) removing dependency on global `bun`/`node` on host.
-- [ ] **Live Audio Stream Linking:** Run `stream_convo.py` / `BeeStreamOrchestrator` when physical Bee Wearable is actively broadcasting via paired mobile companion.
-- [ ] **Capture real `bee stream --json` samples:** confirm the event-type field, any utterance time field (`spoken_at`) and the `new-conversation` / `update-conversation` payloads consumed by the event engine (see FRICTION_LOG 2026-10-13).
+- [x] **Capture real `bee stream --json` samples:** event `type` field present, `utterance.spoken_at` (ISO) present, undocumented `tagged-utterance` / `new-utterance-chunks` events, 30 s SSE pings dropped by `--json`. Full contract: [docs/10_bee_cli_reference.md](docs/10_bee_cli_reference.md).
+- [ ] **Live Audio Stream Linking with the physical Bee wearable:** verified with the Apple Watch app only; re-run `scripts/bee_spike.py` with the wearable (locations, `device_type`, `update-location`).
+- [ ] **Bee data conformance fixes** ([docs/10_bee_cli_reference.md](docs/10_bee_cli_reference.md) §10): live location polling (C2–C4), speaker identity from `tagged-utterance` (C5, C16), stream liveness without pings (C9), no `bee logout` on dashboard logout (C11).
+- [ ] **Capture `new-conversation` / `update-conversation`:** start a capture before speaking.
 - [ ] **Re-calibrate topic similarity on real lectures:** `python scripts/replay_event_scenarios.py --calibrate` after adding recorded scenarios (the Titan V2 same/different gap is narrow: 0.36 / 0.43).
 - [ ] **Webhook Gateway Ingestion:** Transition from local subprocess polling to Bee Cloud webhook callback ingestion (`bee stream --webhook-endpoint <URL>`).
-- [ ] **Hardware Battery & RSSI Telemetry Bridge:** Track upstream Bee Wearable API updates for battery level and Bluetooth RSSI exposure.
+- [ ] **Hardware Battery & RSSI Telemetry Bridge:** not exposed by `bee-cli` or the API (verified 2026-10-19); track upstream updates.
 
 ### 3. Future Model Calls & Backend Optimizations (Deferred per Directive)
 - [ ] **Multilingual Gatekeeper Prompt Refinement:** Add explicit Italian few-shot anchors (*"ho staccato il ferro"*, *"gas spento"*, *"chiuso la porta"*) to `src/ingestion/gatekeeper.py` to maximize zero-shot domestic safety recall.

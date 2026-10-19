@@ -92,3 +92,23 @@ Whenever a friction point or roadblock is encountered during development, docume
   2. `bee stream --json` drops the SSE `event:` name and the SSE parser ignores comment pings, so the exact wire format can only be observed through `bee proxy` + a raw HTTP client.
 * **Workaround / Resolution:** Build only the host target into the launcher path (`bun build ./sources/main.ts --compile --target=bun-linux-x64 --outfile ./dist/platforms/linux-x64/bee`) and symlink it into `~/.local/bin`. `scripts/bee_spike.py capture` records `bee stream --json` and the raw `/v1/stream` frames through `bee proxy` in parallel.
 * **Platform Feedback:** Make `bun run build` output to the launcher path for the host platform (or let `bin/bee.js` fall back to `dist/bee`), and add a `--raw` / `--json-envelope` mode to `bee stream` that keeps event names and pings.
+
+### [2026-10-19] - Bee CLI / Real stream & history payloads (device spike, Apple Watch)
+* **Context:** Phase 0 verification of the historical backfill with a real Bee account captured through the Apple Watch app (`docs/next_steps/historical_backfill/06_phase0_device_spike.md` §5).
+* **Friction Encountered:**
+  1. Real payloads differ from the documented ones: `new-utterance` has a `type` field, no `speaker`, ISO `spoken_at`, and `start`/`end` in **seconds relative to the conversation**. REST utterances use the same relative `start`/`end`, with epoch-ms `spoken_at`.
+  2. Undocumented events: `tagged-utterance` (speaker identification by person, with a score) and `new-utterance-chunks` (Bee semantic chunks, the only event carrying the numeric `conversation_id` next to utterance ids). The REST detail has no `uuid`, so the stream is the only bridge between `conversation_uuid` and the REST id.
+  3. Conversation states are `CAPTURING` / `COMPLETED`. Once completed, the REST detail returns only the final transcription with new utterance ids. The realtime transcription, whose ids equal the live ones, is no longer returned, although `utterances_count` still counts both.
+  4. The server sends `: ping` every 30 s, but `bee stream --json` drops SSE comments, so consumers see no line at all during silence and cannot tell a quiet stream from a dead one.
+  5. Device type is reported as `"unknown"` for the Apple Watch, and no `update-location` events are emitted.
+* **Workaround / Resolution:** Recorded with `scripts/bee_spike.py` (raw SSE through `bee proxy` next to `bee stream --json`). Implementation follow-ups I1–I8 are listed in the runbook §5.2: liveness without pings, relative-time spans, ledger-based dedup instead of REST realtime matching, speaker identity from `tagged-utterance`, uuid ↔ id from `new-utterance-chunks`.
+* **Platform Feedback:** Document every SSE event type with its real schema (including `tagged-utterance` and `new-utterance-chunks`), forward pings (or a `{"type":"ping"}` line) in `--json` mode, return `uuid` in the conversation detail, keep the realtime transcription (or a mapping realtime id → final id) after completion, document that `start`/`end` are relative seconds, and report the Apple Watch as a `device_type`.
+
+### [2026-10-19] - Bee CLI / Locations, speaker identity and uuid mapping (code audit)
+* **Context:** Checking the whole EXAMEN code base (not only the backfill) against the payloads observed with the real account (`docs/10_bee_cli_reference.md` §10).
+* **Friction Encountered:**
+  1. The Apple Watch app emits no `update-location` SSE event, so a client that relies on the stream gets no location at all. Locations exist only as REST resources (`locations current/recent/clusters`, `primary_location`), as postal addresses without accuracy.
+  2. `update-utterance` (documented in early specs) does not exist; speaker identity arrives through the undocumented `tagged-utterance`, keyed by person first name, for ~22 % of utterances. REST transcripts label speakers by first name or `"Unknown"`, never `speaker_N`.
+  3. The conversation uuid used by the stream is missing from `conversations get`, but present in `daily find` (`conversations[].conversation_uuid`).
+* **Workaround / Resolution:** Documented the observed contract and the conformance gaps C1–C16 (location polling, `tagged-utterance` handling, speaker-role mapping in live and backfill, liveness, logout side effect).
+* **Platform Feedback:** Emit `update-location` from every capture device (or document which ones do), include an accuracy field, document `tagged-utterance` and its coverage, and expose `uuid` consistently on every conversation resource.

@@ -1,8 +1,8 @@
 # 📡 Gatekeeper Context Window & Multimodal Telemetry
 
 > **Document Status:** Architectural Specification  
-> **Source Task:** [Next_steps.txt](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/Next_steps.txt) — Item 2  
-> **Related Components:** [orchestrator.py](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/src/ingestion/orchestrator.py), [stream_convo.py](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/src/ingestion/stream_convo.py), [gatekeeper.py](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/src/pipeline/nodes/gatekeeper.py), [schemas.py](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/src/core/schemas.py)
+> **Source Task:** `Next_steps.txt` (original task list, not in the repository) — Item 2  
+> **Related Components:** [orchestrator.py](../../src/ingestion/orchestrator.py), [stream_convo.py](../../src/ingestion/stream_convo.py), [gatekeeper.py](../../src/ingestion/gatekeeper.py), [schemas.py](../../src/core/schemas.py)
 
 ---
 
@@ -16,6 +16,8 @@ In ambient wearable audio streaming (such as from the **Bee Wearable** device), 
    If Chunk $t$ is evaluated in complete isolation, the model does not know *what* was promised, *who* requested it, or what "it" refers to.
 2. **Spatial Blindness:** Spoken sentences like "I just locked up and turned off the stove" gain immense verification validity when paired with wearable GPS telemetry indicating the user was at `Home` or is departing their residential coordinates.
 3. **Asynchronous Speaker Diarization:** The Bee streaming backend emits `new-utterance` text events near real-time, but diarization labels (`speaker_0`, `speaker_1`, etc.) often arrive with a 2–5 second latency or through delayed `update-conversation` SSE events once server-side voice embeddings converge.
+
+> **Reality check (2026-10-19, [10_bee_cli_reference.md](../10_bee_cli_reference.md) §7.3):** the real stream has no `speaker_N` labels and no `update-utterance` event. `new-utterance` carries no speaker at all; identity arrives ~1 s later as `tagged-utterance` (`person_first_name`, `person_id`, `speaker_score`), for about 22 % of utterances. The wearer is recognised by comparing `person_first_name` with `bee me`. See audit items C5/C6.
 
 ---
 
@@ -104,6 +106,8 @@ class ContextRingBuffer:
 
 The Bee Wearable emits periodic location telemetry over Server-Sent Events (SSE).
 
+> **Reality check (2026-10-19, [10_bee_cli_reference.md](../10_bee_cli_reference.md) §6):** with the Apple Watch app **no `update-location` event was emitted** during a 35-minute conversation, and no Bee source exposes `horizontal_accuracy`. Locations are available from `bee locations current --json` (last fix + `is_recent`) and from each conversation's `primary_location`; `address` is a postal address, not a place name. Live chunks therefore have no location today (audit items C2–C4).
+
 ### 1. Ingestion of `update-location` Events
 
 From `resources/bee-cli`, the SSE payload structure is:
@@ -124,7 +128,7 @@ From `resources/bee-cli`, the SSE payload structure is:
 
 ### 2. Schema Evolution for State & Context
 
-We extend [ExamenState](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/src/core/schemas.py) and `IngestionPayload` to carry geospatial telemetry:
+We extend [ExamenState](../../src/core/schemas.py) and `IngestionPayload` to carry geospatial telemetry:
 
 ```python
 class LocationTelemetry(BaseModel):
@@ -158,6 +162,8 @@ t = 450ms  SSE 'new-utterance': { "text": "I will deliver the slides by 5 PM" }
            (Speaker is UNKNOWN or 'speaker_pending')
 t = 2800ms SSE 'update-utterance': { "utterance_id": 104, "speaker": "speaker_1" }
 ```
+
+> **Observed instead:** `t ≈ +1 s` `tagged-utterance`: `{ "utterance_id": 104, "person_id": 7, "person_first_name": "Marco", "speaker_score": 0.8 }`. The dual-phase strategy below still applies, but it must be driven by `tagged-utterance`.
 
 ### Dual-Phase Diarization Strategy
 
