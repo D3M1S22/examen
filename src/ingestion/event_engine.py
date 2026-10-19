@@ -1804,7 +1804,23 @@ def build_continuity_from_settings() -> Optional[TopicSimilarity]:
     return TopicSimilarity(cfg) if cfg else None
 
 
+_tenant_engines: Dict[str, EventEngine] = {}
+_tenant_runtimes: Dict[str, "EventEngineRuntime"] = {}
+
+
 def get_event_engine() -> EventEngine:
+    """The event engine of the current tenant (one per user), or the legacy singleton."""
+    from src.core.storage import get_storage_store
+    from src.core.tenancy import get_tenant_id
+
+    tenant = get_tenant_id()
+    if tenant is not None:
+        engine = _tenant_engines.get(tenant)
+        if engine is None:
+            # Bind the user's store now: timers and synthesis may run outside the request context
+            engine = EventEngine(store=get_storage_store(), continuity=build_continuity_from_settings())
+            _tenant_engines[tenant] = engine
+        return engine
     global _engine
     if _engine is None:
         _engine = EventEngine(continuity=build_continuity_from_settings())
@@ -1812,7 +1828,29 @@ def get_event_engine() -> EventEngine:
 
 
 def get_event_engine_runtime() -> EventEngineRuntime:
+    from src.core.tenancy import get_tenant_id
+
+    tenant = get_tenant_id()
+    if tenant is not None:
+        runtime = _tenant_runtimes.get(tenant)
+        if runtime is None:
+            runtime = EventEngineRuntime(get_event_engine())
+            _tenant_runtimes[tenant] = runtime
+        return runtime
     global _runtime
     if _runtime is None:
         _runtime = EventEngineRuntime(get_event_engine())
     return _runtime
+
+
+def drop_tenant_event_engine(user_id: str) -> None:
+    """Stops and forgets a user's engine runtime (account deletion)."""
+    runtime = _tenant_runtimes.pop(user_id, None)
+    _tenant_engines.pop(user_id, None)
+    if runtime is not None:
+        stop = getattr(runtime, "stop", None)
+        if callable(stop):
+            try:
+                stop()
+            except Exception:
+                pass

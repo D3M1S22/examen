@@ -2034,6 +2034,25 @@ class SQLiteContextStore(AbstractContextStore):
                 cursor.execute(f"DELETE FROM {table}")
             conn.commit()
 
+    def export_all(self) -> Dict[str, List[Dict[str, Any]]]:
+        """GDPR Art. 15 / 20 export: all rows of every data table (FTS index tables are skipped)."""
+        out: Dict[str, List[Dict[str, Any]]] = {}
+        with self._get_connection() as conn:
+            conn.row_factory = sqlite3.Row
+            names = [r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+            ).fetchall()]
+            fts = {r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND sql LIKE '%VIRTUAL TABLE%'"
+            ).fetchall()}
+            skip = {n for n in names if any(n == f or n.startswith(f + "_") for f in fts)}
+            for name in names:
+                if name in skip:
+                    continue
+                rows = conn.execute(f'SELECT * FROM "{name}"').fetchall()
+                out[name] = [{k: row[k] for k in row.keys()} for row in rows]
+        return out
+
     def close(self) -> None:
         """Close connection pools or resources if applicable."""
         pass

@@ -331,17 +331,21 @@ export interface ExamenState {
 }
 
 export interface BeePairingInfo {
-  status?: "already_connected" | "pairing_requested" | "disconnected" | string;
+  // idle | starting | pending (link/QR shown) | connected | expired | failed
+  status?: "idle" | "starting" | "pending" | "connected" | "expired" | "failed" | string;
   connected?: boolean;
   account?: string | null;
   pairing_url?: string | null;
-  request_id?: string | null;
+  expires_in_seconds?: number | null;
+  error?: string | null;
   message?: string;
 }
 
+// View model of the signed-in account (built from /api/auth/session by utils/auth.ts toUiUser)
 export interface DemoUser {
   user_id: string;
   handle: string;
+  email?: string | null;
   avatar_seed?: string;
   created_at: string;
   last_active?: string;

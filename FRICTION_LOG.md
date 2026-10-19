@@ -120,3 +120,18 @@ Whenever a friction point or roadblock is encountered during development, docume
   2. Running the test suite while logged in to Bee logged the developer out: the auth endpoint tests (`bee-disconnect`, GDPR purge) call the real `bee logout` on the host.
 * **Workaround / Resolution:** The private proxy runs on 127.0.0.1 (first free port from 8787, parsed from `Proxy listening on …`). `tests/conftest.py` replaces the Bee binary with a failing stub for every test.
 * **Platform Feedback:** Honour `--idle-timeout` on `--socket` proxies, and document the per-connection idle behaviour for long-lived SSE through `bee proxy`.
+
+### [2026-10-20] - Bee CLI / One host, many Bee accounts (multi-user pairing)
+* **Context:** Letting every EXAMEN account pair its own Bee by QR code, with one ingestion orchestrator per user (`docs/13_multi_user_accounts.md`).
+* **Friction Encountered:**
+  1. bee-cli stores the token in the OS keychain under a fixed key (`bee-cli` / `token:<env>`). `BEE_CONFIG_DIR` only affects the file fallback, so two users on one host silently overwrite each other's login.
+  2. `bee login --no-wait` prints the pairing link and exits; running it again only re-prints the link. Nothing ever completes the pairing in that mode, so a server cannot use it to finish a login in the background.
+  3. The pairing link is the only output: no machine-readable `--json` for `login`, so the link must be parsed from human text (`Authentication link: …`).
+* **Workaround / Resolution:** Every `bee` call made for a user runs with `BEE_FORCE_FILE_STORE=1` and a per-user `BEE_CONFIG_DIR` (mode 700). The server spawns a blocking `bee login` per user, parses the link for a QR code and waits for the process to exit.
+* **Platform Feedback:** Scope keychain entries by config dir (or add `--config-dir` that applies to the keychain too), let `bee login --no-wait` resume and finish a saved pairing, and add `bee login --json` that prints `{pairing_url, expires_at}`.
+
+### [2026-10-20] - MCP Python SDK / `421 Misdirected Request` behind a reverse proxy
+* **Context:** Calling `/mcp` through a host name (homelab `examen.deggio.local`, later AWS) and from tests.
+* **Friction Encountered:** `FastMCP(...)` enables DNS-rebinding protection with an allow-list of `localhost` / `127.0.0.1` only, so any other `Host` header gets `421 Invalid Host header`, with only a warning in the logs.
+* **Workaround / Resolution:** `MCP_ALLOWED_HOSTS` builds a `TransportSecuritySettings` allow-list (`"*"` disables the check).
+* **Platform Feedback:** Mention the default allow-list prominently in the FastMCP deployment docs and include the rejected host in the HTTP response body.

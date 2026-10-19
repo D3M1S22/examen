@@ -8,7 +8,7 @@ is a person's first name or "Unknown". Both are compared with the account owner'
 
 import logging
 import time
-from typing import Literal, Optional
+from typing import Dict, Literal, Optional
 
 from src.core.config import settings
 
@@ -59,10 +59,27 @@ class WearerIdentity:
 
 
 _identity: Optional[WearerIdentity] = None
+_tenant_identities: Dict[str, WearerIdentity] = {}
 
 
 def get_wearer_identity() -> WearerIdentity:
+    """The wearer of the current tenant's Bee (read from their own `bee me`), or the legacy singleton.
+
+    ``BEE_WEARER_NAME`` is a host-wide override, so it only applies in single-user mode."""
+    from src.core.tenancy import get_tenant_id
+
+    tenant = get_tenant_id()
+    if tenant is not None:
+        identity = _tenant_identities.get(tenant)
+        if identity is None:
+            identity = WearerIdentity(first_name="")
+            _tenant_identities[tenant] = identity
+        return identity
     global _identity
     if _identity is None:
         _identity = WearerIdentity()
     return _identity
+
+
+def drop_tenant_identity(user_id: str) -> None:
+    _tenant_identities.pop(user_id, None)

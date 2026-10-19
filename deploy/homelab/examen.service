@@ -13,10 +13,13 @@ WorkingDirectory=/opt/examen
 # MCP_HOST / MCP_PORT and the AWS credentials come from /opt/examen/.env (read by pydantic-settings)
 Environment=PYTHONUNBUFFERED=1
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
+# Accounts (auth.db) and per-user folders (examen.db + private Bee login), outside the synced code tree
+Environment=EXAMEN_DATA_DIR=/var/lib/examen/data
 ExecStart=/opt/examen/.venv/bin/python -m src.serving.mcp_server
 Restart=on-failure
 RestartSec=5
-# The Bee token lives in /var/lib/examen/.bee (the service user's home); data in /opt/examen/examen.db
+# Multi-user: each user's Bee token and data live in /var/lib/examen/data/users/<id>/ (mode 700).
+# AUTH_ENABLED=false keeps the single-user layout: token in /var/lib/examen/.bee, data in /opt/examen/examen.db
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full

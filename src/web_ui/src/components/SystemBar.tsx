@@ -243,7 +243,7 @@ export function SystemBar({
 
                   <button
                     onClick={() => {
-                      exportUserDataJson(currentUser, statusData);
+                      exportUserDataJson().catch((err) => console.warn("Export failed:", err));
                       setUserMenuOpen(false);
                     }}
                     className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg hover:bg-white/5 text-zinc-300 hover:text-white text-xs font-sans transition-colors"
@@ -258,16 +258,15 @@ export function SystemBar({
                   {onPurgeData && (
                     <button
                       onClick={() => {
-                        if (confirm("GDPR Art. 17: Are you sure you want to permanently erase all stored telemetry and session data?")) {
-                          onPurgeData();
-                          setUserMenuOpen(false);
-                        }
+                        // Opens the account modal: deletion asks for the password there
+                        onPurgeData();
+                        setUserMenuOpen(false);
                       }}
                       className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg hover:bg-red-950/40 text-red-400 hover:text-red-300 text-xs font-sans transition-colors"
                     >
                       <span className="flex items-center gap-2">
                         <span>🗑️</span>
-                        <span>Erase All Data (Right to be Forgotten)</span>
+                        <span>Delete Account &amp; All Data</span>
                       </span>
                       <span className="font-mono text-[9px] text-red-500/70">Art. 17</span>
                     </button>

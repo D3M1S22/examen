@@ -29,11 +29,96 @@ import { LoginModal } from "@/components/ui/LoginModal";
 import { BackfillModal } from "@/components/ui/BackfillModal";
 import { formatDuration, mergeProgress } from "@/utils/backfill";
 import { getApiBaseUrl } from "@/utils/api";
-import { getLocalUser, logoutUser, disconnectBee, purgeUserData } from "@/utils/auth";
+import { installCredentialedFetch, UNAUTHORIZED_EVENT } from "@/utils/api";
+import {
+  AuthConfig,
+  SessionInfo,
+  disconnectBee,
+  fetchAuthConfig,
+  fetchSession,
+  logoutUser,
+  toUiUser,
+} from "@/utils/auth";
+import { AuthScreen } from "@/components/ui/AuthScreen";
 
 const fetcher = (url: string) => fetch(`${getApiBaseUrl()}${url}`).then((res) => res.json());
 
-export default function Dashboard() {
+/**
+ * Root page: resolves the session first. With accounts enabled, nothing is fetched from the API until
+ * the user signs in; the dashboard is then mounted for that user only (its SWR cache and SSE stream
+ * are dropped on sign-out because the component unmounts).
+ */
+export default function Home() {
+  const [config, setConfig] = useState<AuthConfig | null>(null);
+  const [session, setSession] = useState<SessionInfo | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  const reloadSession = useCallback(async () => {
+    try {
+      const s = await fetchSession();
+      setSession(s);
+      setLoadError(null);
+    } catch (err: any) {
+      setLoadError(err?.message || "Cannot reach the EXAMEN server.");
+    }
+  }, []);
+
+  useEffect(() => {
+    installCredentialedFetch();
+    fetchAuthConfig().then(setConfig).catch(() => undefined);
+    reloadSession();
+    const onUnauthorized = () => reloadSession();
+    window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
+    return () => window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
+  }, [reloadSession]);
+
+  if (!session) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center text-zinc-400 font-mono text-xs">
+        {loadError ? (
+          <button onClick={reloadSession} className="underline underline-offset-4">{loadError} Retry</button>
+        ) : (
+          "Loading…"
+        )}
+      </div>
+    );
+  }
+  if (session.auth_enabled && !session.authenticated) {
+    return <AuthScreen config={config} onAuthenticated={reloadSession} />;
+  }
+  if (session.auth_enabled && session.consent_required) {
+    return (
+      <AuthScreen
+        config={config}
+        consentOnly
+        onAuthenticated={reloadSession}
+        onSignOut={async () => {
+          await logoutUser();
+          reloadSession();
+        }}
+      />
+    );
+  }
+  return (
+    <Dashboard
+      key={session.user?.id || "local"}
+      session={session}
+      onSessionChanged={reloadSession}
+      onSignedOut={() => setSession({ auth_enabled: true, authenticated: false, user: null })}
+    />
+  );
+}
+
+function Dashboard({
+  session,
+  onSessionChanged,
+  onSignedOut,
+}: {
+  session: SessionInfo;
+  onSessionChanged: () => void;
+  onSignedOut: () => void;
+}) {
+  const authEnabled = session.auth_enabled;
   const [activeTab, setActiveTab] = useState("overview");
   const [echoModalInitialTab, setEchoModalInitialTab] = useState("overview");
   const [currentTime, setCurrentTime] = useState("");
@@ -43,7 +128,8 @@ export default function Dashboard() {
   const [showGlobalEchoModal, setShowGlobalEchoModal] = useState(false);
   const [showLoginModal, setShowLoginModal] = useState(false);
   const [loginModalConnectBee, setLoginModalConnectBee] = useState(false);
-  const [currentUser, setCurrentUser] = useState<DemoUser | null>(null);
+  const [currentUser, setCurrentUser] = useState<DemoUser | null>(toUiUser(session));
+  const [accountSection, setAccountSection] = useState<"bee" | "account" | "privacy" | undefined>(undefined);
   const [sseConnected, setSseConnected] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [updatedTabs, setUpdatedTabs] = useState<Record<string, number>>({});
@@ -59,13 +145,10 @@ export default function Dashboard() {
     setShowGlobalEchoModal(true);
   }, []);
 
-  // Initialize local user session on mount
+  // The signed-in account (and its Bee link) comes from the server session
   useEffect(() => {
-    const user = getLocalUser();
-    if (user) {
-      setCurrentUser(user);
-    }
-  }, []);
+    setCurrentUser(toUiUser(session));
+  }, [session]);
 
   // SWR Data Fetching
   const { data: statusData, mutate: mutateStatus } = useSWR("/api/status", fetcher, { refreshInterval: 10000 });
@@ -173,7 +256,8 @@ export default function Dashboard() {
     if (typeof window === "undefined" || !("EventSource" in window)) return;
     try {
       const baseUrl = getApiBaseUrl();
-      const es = new EventSource(`${baseUrl}/api/events`);
+      // withCredentials: the session cookie selects this user's private event stream
+      const es = new EventSource(`${baseUrl}/api/events`, { withCredentials: true });
 
       es.onopen = () => {
         setSseConnected(true);
@@ -331,50 +415,26 @@ export default function Dashboard() {
   }, [mutateActions, mutateRoutines, mutateSocial, mutateTopics, mutateStatus, refreshEvents, markTabUpdated, notifyEcho, showToast]);
 
   // Auth & GDPR Handlers
-  const handleLoginSuccess = (user: DemoUser) => {
-    setCurrentUser(user);
-    showToast(`Welcome, ${user.handle}! Demo session initialized.`);
+  // Account & Bee modal changed something (Bee paired, name changed...): reload the session
+  const handleLoginSuccess = (_user: DemoUser) => {
+    onSessionChanged();
     mutateStatus();
-    notifyEcho({
-      title: "Authenticated User Session",
-      message: `Logged in as ${user.handle}. Privacy parameters calibrated.`,
-      category: "system",
-      targetTab: "overview",
-    });
   };
 
   const handleLogout = async () => {
-    await logoutUser(currentUser?.user_id);
-    setCurrentUser(null);
-    showToast("Logged out successfully. Session credentials cleared.");
-    mutateStatus();
-    notifyEcho({
-      title: "Session Terminated",
-      message: "User logged out. Device credentials purged.",
-      category: "system",
-      targetTab: "overview",
-    });
+    await logoutUser();
+    onSignedOut();
   };
 
+  // Account deletion needs the password: open the Privacy section of the account modal
   const handlePurgeData = async () => {
-    await purgeUserData(currentUser?.user_id);
-    setCurrentUser(null);
-    showToast("All user session telemetry permanently erased under GDPR Art. 17.");
-    mutateStatus();
-    mutateActions();
-    mutateRoutines();
-    mutateSocial();
-    mutateTopics();
-    notifyEcho({
-      title: "GDPR Right to be Forgotten",
-      message: "All personal session telemetry erased.",
-      category: "system",
-      targetTab: "overview",
-    });
+    setAccountSection("privacy");
+    setLoginModalConnectBee(false);
+    setShowLoginModal(true);
   };
 
   const handleDisconnectBee = async () => {
-    const success = await disconnectBee(currentUser?.user_id);
+    const success = await disconnectBee();
     if (success && currentUser) {
       setCurrentUser({
         ...currentUser,
@@ -394,6 +454,7 @@ export default function Dashboard() {
   };
 
   const handleOpenBeePairing = () => {
+    setAccountSection("bee");
     setLoginModalConnectBee(true);
     setShowLoginModal(true);
   };
@@ -686,6 +747,7 @@ export default function Dashboard() {
         engineStatus={engineStatus}
         currentUser={currentUser}
         onOpenLoginModal={() => {
+          setAccountSection(undefined);
           setLoginModalConnectBee(false);
           setShowLoginModal(true);
         }}
@@ -716,6 +778,9 @@ export default function Dashboard() {
         currentUser={currentUser}
         initialConnectBee={loginModalConnectBee}
         onLogout={handleLogout}
+        initialSection={accountSection}
+        authEnabled={authEnabled}
+        onAccountDeleted={onSignedOut}
       />
 
       {/* Left-Side Auto-Hiding Floating Status Dock (MacBook Pro Style) */}
@@ -749,6 +814,7 @@ export default function Dashboard() {
           statusData={statusData}
           currentUser={currentUser}
           onOpenLoginModal={() => {
+            setAccountSection(undefined);
             setLoginModalConnectBee(false);
             setShowLoginModal(true);
           }}

@@ -222,7 +222,7 @@ def api(monkeypatch):
     monkeypatch.setattr(runtime, "ensure_started", lambda: True)
     monkeypatch.setattr(engine_mod, "_engine", eng)
     monkeypatch.setattr(engine_mod, "_runtime", runtime)
-    monkeypatch.setattr(server_mod, "_engine_listener_registered", False)
+    monkeypatch.setattr(server_mod, "_engine_listener_registered", set())
     monkeypatch.setattr(server_mod, "agent_invocation", lambda payload: {"status": "ok", "categories": payload.get("categories")})
 
     async def _classify(transcript, active_tasks=None, prior_context=None):

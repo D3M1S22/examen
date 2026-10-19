@@ -1,289 +1,192 @@
+// Accounts, sessions and Bee pairing (docs/13_multi_user_accounts.md).
+//
+// The session lives in an HttpOnly cookie set by the server: nothing about the user (no email, no
+// token, no profile) is stored in localStorage. Every API call is sent with credentials
+// (see installCredentialedFetch in utils/api.ts), so each request only ever sees the signed-in
+// user's own data.
+
 import { DemoUser, BeePairingInfo } from "@/types/schemas";
 import { getApiBaseUrl } from "@/utils/api";
 
-const STORAGE_LEGACY_KEY = "examen_demo_user_session";
-const STORAGE_USERS_DIRECTORY = "examen_demo_users_directory";
-const STORAGE_ACTIVE_USER_ID = "examen_demo_active_user_id";
+export interface AccountUser {
+  id: string | null;
+  email: string | null;
+  display_name?: string | null;
+  created_at?: string;
+  last_login_at?: string | null;
+  privacy_consent_version?: string | null;
+  privacy_consent_at?: string | null;
+}
 
-/**
- * Returns all saved demo user profiles from local storage.
- * Enforces GDPR compliance: zero sensitive PII is stored.
- */
-export const getSavedUsers = (): DemoUser[] => {
-  if (typeof window === "undefined") return [];
-  try {
-    const raw = localStorage.getItem(STORAGE_USERS_DIRECTORY);
-    let users: DemoUser[] = raw ? JSON.parse(raw) : [];
+export interface SessionInfo {
+  auth_enabled: boolean;
+  authenticated: boolean;
+  user: AccountUser | null;
+  consent_required?: boolean;
+  privacy_notice_version?: string;
+  bee_device?: any;
+  bee?: { pairing?: BeePairingInfo; linked?: boolean | null };
+}
 
-    // Migrate legacy session if present and not in directory
-    const legacyRaw = localStorage.getItem(STORAGE_LEGACY_KEY);
-    if (legacyRaw) {
-      try {
-        const legacyUser: DemoUser = JSON.parse(legacyRaw);
-        if (legacyUser?.user_id && !users.some((u) => u.user_id === legacyUser.user_id)) {
-          users.push(legacyUser);
-          localStorage.setItem(STORAGE_USERS_DIRECTORY, JSON.stringify(users));
-        }
-      } catch {
-        // ignore legacy parse error
-      }
-    }
-    return users;
-  } catch (err) {
-    console.warn("Failed to read saved demo users:", err);
-    return [];
+export interface AuthConfig {
+  auth_enabled: boolean;
+  min_password_length: number;
+  privacy_notice_version: string;
+}
+
+export interface ApiTokenInfo {
+  id: string;
+  name: string;
+  prefix: string;
+  created_at: string;
+  last_used_at?: string | null;
+  token?: string; // only right after creation
+}
+
+export class ApiError extends Error {
+  status: number;
+  code?: string;
+  constructor(message: string, status: number, code?: string) {
+    super(message);
+    this.status = status;
+    this.code = code;
   }
-};
+}
 
-/**
- * Saves or updates a demo user in the local directory.
- */
-export const saveUserToDirectory = (user: DemoUser): void => {
-  if (typeof window === "undefined" || !user?.user_id) return;
+async function call<T = any>(path: string, init: RequestInit = {}): Promise<T> {
+  const res = await fetch(`${getApiBaseUrl()}${path}`, {
+    ...init,
+    credentials: "include",
+    headers: { "Content-Type": "application/json", ...(init.headers || {}) },
+  });
+  let data: any = null;
   try {
-    const users = getSavedUsers();
-    const idx = users.findIndex((u) => u.user_id === user.user_id);
-    if (idx >= 0) {
-      users[idx] = { ...users[idx], ...user, last_active: new Date().toISOString() };
-    } else {
-      users.push({ ...user, last_active: new Date().toISOString() });
-    }
-    localStorage.setItem(STORAGE_USERS_DIRECTORY, JSON.stringify(users));
-  } catch (err) {
-    console.warn("Failed to save user to directory:", err);
-  }
-};
-
-/**
- * Removes a user profile completely from the local directory (GDPR Art. 17).
- */
-export const removeUserFromDirectory = (userId: string): void => {
-  if (typeof window === "undefined" || !userId) return;
-  try {
-    const users = getSavedUsers().filter((u) => u.user_id !== userId);
-    localStorage.setItem(STORAGE_USERS_DIRECTORY, JSON.stringify(users));
-    if (localStorage.getItem(STORAGE_ACTIVE_USER_ID) === userId) {
-      localStorage.removeItem(STORAGE_ACTIVE_USER_ID);
-    }
-    localStorage.removeItem(STORAGE_LEGACY_KEY);
-  } catch (err) {
-    console.warn("Failed to remove user from directory:", err);
-  }
-};
-
-/**
- * Retrieves the currently active user session, or null if unauthenticated.
- */
-export const getLocalUser = (): DemoUser | null => {
-  if (typeof window === "undefined") return null;
-  try {
-    const activeId = localStorage.getItem(STORAGE_ACTIVE_USER_ID);
-    const users = getSavedUsers();
-    if (activeId) {
-      const found = users.find((u) => u.user_id === activeId);
-      if (found) return found;
-    }
-    // Fallback to legacy single session key if available
-    const legacyRaw = localStorage.getItem(STORAGE_LEGACY_KEY);
-    if (legacyRaw) {
-      return JSON.parse(legacyRaw) as DemoUser;
-    }
-    return null;
+    data = await res.json();
   } catch {
-    return null;
+    data = null;
   }
-};
-
-/**
- * Saves and sets the active demo user session.
- */
-export const saveLocalUser = (user: DemoUser): void => {
-  if (typeof window === "undefined" || !user?.user_id) return;
-  try {
-    saveUserToDirectory(user);
-    localStorage.setItem(STORAGE_ACTIVE_USER_ID, user.user_id);
-    // Maintain legacy key for any backward compatibility
-    localStorage.setItem(STORAGE_LEGACY_KEY, JSON.stringify(user));
-  } catch (err) {
-    console.warn("Failed to persist user session:", err);
-  }
-};
-
-/**
- * Clears the active session (logging out) without deleting the saved profile.
- */
-export const clearLocalUser = (): void => {
-  if (typeof window === "undefined") return;
-  try {
-    localStorage.removeItem(STORAGE_ACTIVE_USER_ID);
-    localStorage.removeItem(STORAGE_LEGACY_KEY);
-  } catch (err) {
-    console.warn("Failed to clear active user session:", err);
-  }
-};
-
-/**
- * Logs in with a handle or existing user ID.
- * Saved per user in the demo user management system.
- */
-export const loginUser = async (
-  handle: string,
-  connectBee: boolean = false,
-  existingUserId?: string
-): Promise<{ success: boolean; user: DemoUser; bee_pairing?: BeePairingInfo }> => {
-  const baseUrl = getApiBaseUrl();
-  const payload = {
-    handle: handle.trim(),
-    connect_bee: connectBee,
-    user_id: existingUserId || undefined,
-  };
-
-  const res = await fetch(`${baseUrl}/api/auth/login`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-
   if (!res.ok) {
-    throw new Error(`Login failed with status ${res.status}`);
+    throw new ApiError(data?.message || data?.error || `Request failed (${res.status})`, res.status, data?.error);
   }
+  return data as T;
+}
 
-  const data = await res.json();
-  if (data.user) {
-    saveLocalUser(data.user);
-  }
-  return data;
-};
+const post = <T = any>(path: string, body?: any) =>
+  call<T>(path, { method: "POST", body: body === undefined ? undefined : JSON.stringify(body) });
 
-/**
- * Fetches the list of saved demo users from the backend directory.
- */
-export const fetchBackendUsers = async (): Promise<DemoUser[]> => {
-  const baseUrl = getApiBaseUrl();
-  try {
-    const res = await fetch(`${baseUrl}/api/auth/users`);
-    if (res.ok) {
-      const data = await res.json();
-      if (Array.isArray(data.users)) {
-        data.users.forEach((u: DemoUser) => saveUserToDirectory(u));
-        return getSavedUsers();
-      }
-    }
-  } catch (err) {
-    console.warn("Failed to fetch backend users:", err);
-  }
-  return getSavedUsers();
-};
+// ---------------------------------------------------------------------------
+// Session
+// ---------------------------------------------------------------------------
 
-/**
- * Generates or refreshes the Bee Wearable pairing URL by calling the Bee CLI.
- */
-export const fetchBeeLink = async (
-  userId?: string
-): Promise<{ success: boolean; bee_pairing: BeePairingInfo }> => {
-  const baseUrl = getApiBaseUrl();
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (userId) headers["x-user-id"] = userId;
+export const fetchAuthConfig = () => call<AuthConfig>("/api/auth/config");
 
-  const res = await fetch(`${baseUrl}/api/auth/bee-link`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ user_id: userId }),
+export const fetchSession = () => call<SessionInfo>("/api/auth/session");
+
+export const registerAccount = (input: {
+  email: string;
+  password: string;
+  display_name?: string;
+  privacy_consent: boolean;
+}) => post<{ authenticated: boolean; user: AccountUser }>("/api/auth/register", input);
+
+export const loginAccount = (email: string, password: string) =>
+  post<{ authenticated: boolean; user: AccountUser; consent_required?: boolean }>("/api/auth/login", {
+    email,
+    password,
   });
 
-  if (!res.ok) {
-    throw new Error(`Failed to generate Bee link: ${res.status}`);
-  }
-
-  return res.json();
-};
-
-/**
- * Disconnects the Bee Wearable AI device and clears pairing credentials.
- */
-export const disconnectBee = async (userId?: string): Promise<boolean> => {
-  const baseUrl = getApiBaseUrl();
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (userId) headers["x-user-id"] = userId;
-
-  const res = await fetch(`${baseUrl}/api/auth/bee-disconnect`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ user_id: userId }),
-  });
-
-  if (res.ok) {
-    const user = getLocalUser();
-    if (user) {
-      user.bee_connected = false;
-      user.bee_account = null;
-      user.bee_pairing = null;
-      saveLocalUser(user);
-    }
-    return true;
-  }
-  return false;
-};
-
-/**
- * Logs out the active user session and removes login.
- */
-export const logoutUser = async (userId?: string): Promise<void> => {
-  const baseUrl = getApiBaseUrl();
+/** Signs out of this browser. The Bee keeps listening for the user (disconnect it explicitly). */
+export const logoutUser = async (): Promise<void> => {
   try {
-    await fetch(`${baseUrl}/api/auth/logout`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ user_id: userId, disconnect_bee: true }),
-    });
+    await post("/api/auth/logout");
   } catch (err) {
     console.warn("Logout request error:", err);
-  } finally {
-    clearLocalUser();
   }
 };
 
-/**
- * GDPR Art. 17 Right to Erasure: purges all stored user data locally and remotely.
- */
-export const purgeUserData = async (userId?: string): Promise<void> => {
-  const baseUrl = getApiBaseUrl();
-  try {
-    await fetch(`${baseUrl}/api/auth/gdpr-purge`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ user_id: userId }),
-    });
-  } catch (err) {
-    console.warn("Purge request error:", err);
-  } finally {
-    if (userId) {
-      removeUserFromDirectory(userId);
-    } else {
-      clearLocalUser();
-    }
-  }
-};
+export const acceptPrivacyNotice = () =>
+  call<{ user: AccountUser }>("/api/account", { method: "PATCH", body: JSON.stringify({ privacy_consent: true }) });
 
-/**
- * GDPR Art. 20 Data Portability: downloads the user's telemetry snapshot as JSON.
- */
-export const exportUserDataJson = (user: DemoUser, telemetryData?: any): void => {
-  if (typeof window === "undefined") return;
-  const exportPayload = {
-    export_metadata: {
-      framework: "EU General Data Protection Regulation (GDPR) Art. 20 - Data Portability",
-      exported_at: new Date().toISOString(),
-      system: "EXAMEN Ambient Intelligence Platform",
-    },
-    user_profile: user,
-    ambient_telemetry_snapshot: telemetryData || null,
+/** Maps the signed-in account to the view model the dashboard components already use. */
+export const toUiUser = (session: SessionInfo | null): DemoUser | null => {
+  if (!session?.authenticated || !session.user) return null;
+  const u = session.user;
+  const pairing = session.bee?.pairing;
+  const linked = !!session.bee?.linked || !!session.bee_device?.account;
+  return {
+    user_id: u.id || "local",
+    handle: u.display_name || u.email || "Local user",
+    email: u.email,
+    avatar_seed: u.id || "local",
+    created_at: u.created_at || new Date().toISOString(),
+    last_active: u.last_login_at || undefined,
+    gdpr_compliant: true,
+    privacy_framework: "EU GDPR",
+    data_retention: "until account deletion",
+    bee_connected: linked,
+    bee_account: session.bee_device?.account || pairing?.account || null,
+    bee_pairing: pairing || null,
   };
+};
 
-  const dataStr =
-    "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(exportPayload, null, 2));
-  const dlAnchorElem = document.createElement("a");
-  dlAnchorElem.setAttribute("href", dataStr);
-  dlAnchorElem.setAttribute("download", `examen-gdpr-export-${user.user_id || "demo"}.json`);
-  dlAnchorElem.click();
+// ---------------------------------------------------------------------------
+// Account (GDPR)
+// ---------------------------------------------------------------------------
+
+export const fetchAccount = () =>
+  call<{ user: AccountUser; tokens: ApiTokenInfo[]; bee: any; privacy_notice_version: string }>("/api/account");
+
+export const updateDisplayName = (display_name: string) =>
+  call<{ user: AccountUser }>("/api/account", { method: "PATCH", body: JSON.stringify({ display_name }) });
+
+export const changePassword = (current_password: string, new_password: string) =>
+  post<{ success: boolean; other_sessions_signed_out: number }>("/api/account/password", {
+    current_password,
+    new_password,
+  });
+
+/** GDPR Art. 17: permanently deletes the account, the Bee login and every stored record. */
+export const deleteAccount = (password: string) =>
+  call<{ success: boolean }>("/api/account", { method: "DELETE", body: JSON.stringify({ password }) });
+
+/** GDPR Art. 15 / 20: downloads every record the server holds about the user. */
+export const exportUserDataJson = async (_user?: DemoUser | null, _unused?: any): Promise<void> => {
+  if (typeof window === "undefined") return;
+  const res = await fetch(`${getApiBaseUrl()}/api/account/export`, { credentials: "include" });
+  if (!res.ok) throw new ApiError(`Export failed (${res.status})`, res.status);
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `examen-export-${new Date().toISOString().slice(0, 10)}.json`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+};
+
+export const listApiTokens = () => call<{ tokens: ApiTokenInfo[] }>("/api/account/tokens");
+
+export const createApiToken = (name: string) =>
+  post<{ token: ApiTokenInfo; message: string }>("/api/account/tokens", { name });
+
+export const revokeApiToken = (id: string) =>
+  call<{ success: boolean }>(`/api/account/tokens/${encodeURIComponent(id)}`, { method: "DELETE" });
+
+// ---------------------------------------------------------------------------
+// Bee pairing (per user)
+// ---------------------------------------------------------------------------
+
+export const startBeePairing = () => post<{ bee_pairing: BeePairingInfo }>("/api/bee/pair");
+
+export const getBeePairing = () => call<{ bee_pairing: BeePairingInfo }>("/api/bee/pair");
+
+export const cancelBeePairing = () => call<{ bee_pairing: BeePairingInfo }>("/api/bee/pair", { method: "DELETE" });
+
+/** Removes this user's Bee login and stops their ambient ingestion. Stored data is kept. */
+export const disconnectBee = async (): Promise<boolean> => {
+  try {
+    const res = await post<{ success: boolean }>("/api/bee/disconnect");
+    return !!res.success;
+  } catch {
+    return false;
+  }
 };

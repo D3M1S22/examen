@@ -44,6 +44,7 @@ rsync -az --delete \
   --exclude 'resources/bee-cli/' --exclude 'resources/agentcore-samples/' \
   --exclude 'src/web_ui/node_modules/' --exclude 'src/web_ui/.next/' \
   --exclude '__pycache__/' --exclude '.pytest_cache/' --exclude '*.db' --exclude 'examen.db.*' \
+  --exclude '/data/' \
   ./ "$HOST:/opt/examen/"
 
 if [ "${SYNC_ENV:-0}" = 1 ]; then

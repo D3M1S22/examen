@@ -23,3 +23,19 @@ def _no_real_bee_cli(monkeypatch):
     # Fresh wearer identity per test (the singleton caches `bee me`)
     monkeypatch.setattr(bee_identity, "_identity", None)
     yield
+
+
+@pytest.fixture(autouse=True)
+def _single_user_mode(monkeypatch, tmp_path):
+    """Existing tests exercise the single-user code paths (no login). Multi-user tests
+    (tests/test_accounts.py) turn AUTH_ENABLED on themselves. Account data never touches ./data."""
+    from src.core.auth import reset_auth_store
+    from src.core.auth.rate_limit import login_limiter
+    from src.core.config import settings
+
+    monkeypatch.setattr(settings, "auth_enabled", False)
+    monkeypatch.setattr(settings, "examen_data_dir", str(tmp_path / "examen-data"))
+    reset_auth_store(None)
+    login_limiter.reset()
+    yield
+    reset_auth_store(None)

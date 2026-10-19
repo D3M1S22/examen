@@ -112,7 +112,7 @@ The engine underwent a rigorous 25-scenario live evaluation against **NVIDIA Nem
 # 1. Setup virtual environment
 source .venv/bin/activate
 
-# 2. Run complete test suite (272 unit & integration tests, 100% pass)
+# 2. Run the test suite
 pytest
 
 # 3. Build the Next.js dashboard (static export served by the MCP server) — Bun is the package manager
@@ -120,6 +120,8 @@ pytest
 
 # 4. Launch Unified FastMCP Server & Echo Show Web Dashboard (port = MCP_PORT, default 8000)
 python -m src.serving.mcp_server
+#    Open the dashboard, create an account (email + password), then Account → Bee device →
+#    "Connect my Bee" and scan the QR code. Each account has its own data and its own Bee.
 
 # Optional: replay the event-engine scenarios / calibrate topic similarity thresholds
 python scripts/replay_event_scenarios.py --calibrate
@@ -130,7 +132,8 @@ python scripts/replay_event_scenarios.py --calibrate
 > **Event engine demo:** in the dashboard open *Ambient Simulator → Deep Topic Event Engine*, pick a scenario (e.g. "Single lecture interrupted by a coffee break"), press **Play scenario**, then **Close events** and open *Topic Dossiers → Events*. `EVENT_PROFILE=demo` compresses the timers (20 s / 90 s) for live typing.
 
 - **Web Dashboard & Echo Show Ext-App:** Open [http://localhost:8000/](http://localhost:8000/) or [http://localhost:8000/ext-app/](http://localhost:8000/ext-app/) to monitor verified Peace of Mind actions, daily routine checklists, social rolodex cards, and run ambient audio simulations.
-- **Alexa+ MCP Endpoint:** Connect any MCP-compliant assistant to `http://localhost:8000/mcp`.
+- **Alexa+ MCP Endpoint:** Connect any MCP-compliant assistant to `http://localhost:8000/mcp` with a personal access token (*Account → Alexa+ / MCP access tokens*) sent as `Authorization: Bearer exm_…`.
+- **Accounts:** multi-user with per-user data, per-user Bee pairing and GDPR export/erasure — see [13_multi_user_accounts.md](docs/13_multi_user_accounts.md). `AUTH_ENABLED=false` restores the single-user mode.
 
 ---
 
@@ -157,6 +160,7 @@ Detailed technical, architectural, and operational documentation is organized ac
 * 📄 [07_repository_structure_modules.md](docs/07_repository_structure_modules.md): Detailed repository layout, modular monorepo mapping by deployment target, and developer quickstart.
 * 📄 [08_real_telemetry_and_bee_hardware_spec.md](docs/08_real_telemetry_and_bee_hardware_spec.md): Real hardware telemetry integration, Bee Wearable CLI capabilities, latency tracking architecture, and sector-by-sector frontend data contracts.
 * 🏠 [11_homelab_test_deployment.md](docs/11_homelab_test_deployment.md): Single-LXC test deployment on the homelab (before AWS): service layout, redeploy script, Bee login on the server.
+* 👥 [13_multi_user_accounts.md](docs/13_multi_user_accounts.md): Accounts (email + password, GDPR), per-user data folders, per-user Bee QR pairing and orchestrators, MCP access tokens, operator CLI.
 * 🐝 [10_bee_cli_reference.md](docs/10_bee_cli_reference.md): Observed bee-cli / Bee API contract (commands, payloads, timestamps, stream events, conversation lifecycle, locations) and the conformance audit of the EXAMEN code.
 * 🚀 [ROADMAP.md](docs/next_steps/ROADMAP.md): Evolution Roadmap, pipeline refinements status dashboard, and execution plan for Next Steps.
 * 🧠 [deep_topic_event_engine/](docs/next_steps/deep_topic_event_engine/00_overview.md): Deep Topic Event Engine specification, state machine, topic continuity calibration, synthesis scheduling, serving/UI and test plan.

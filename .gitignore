@@ -44,3 +44,6 @@ src/web_ui/package-lock.json
 src/web_ui/yarn.lock
 src/web_ui/pnpm-lock.yaml
 *.tsbuildinfo
+
+# Multi-user data: auth.db and per-user folders (databases, Bee logins) — never commit
+/data/

@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Tuple
 
 from src.core.config import settings
+from src.core.tenancy import bee_subprocess_env
 from src.ingestion.debug import Debug
 
 # Consecutive proxy failures after which the stream falls back to `bee stream --json`
@@ -216,9 +217,10 @@ class BeeProxy(Debug):
     """Private `bee proxy` subprocess on 127.0.0.1: injects the Bee token for raw /v1 HTTP calls."""
 
     def __init__(self, build_cmd: Callable[[List[str]], List[str]], port: Optional[int] = None,
-                 debug_mode: str = "none"):
+                 debug_mode: str = "none", env: Optional[Dict[str, str]] = None):
         super().__init__(debug_mode=debug_mode, sector_name="BEE")
         self.build_cmd = build_cmd
+        self.env = env
         self.port = settings.bee_proxy_port if port is None else port
         self.address: Optional[str] = None
         self.process: Optional[asyncio.subprocess.Process] = None
@@ -238,7 +240,7 @@ class BeeProxy(Debug):
             args += ["--port", str(self.port)]  # otherwise the first free port from 8787
         cmd = self.build_cmd(args)
         self.process = await asyncio.create_subprocess_exec(
-            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT, env=self.env
         )
         output: List[str] = []
         try:
@@ -292,7 +294,9 @@ class BeeClient(Debug):
         self.process = None
         self.transport = (transport or settings.bee_stream_transport or "proxy").strip().lower()
         self.active_transport: Optional[str] = None
-        self.proxy = BeeProxy(self._build_cmd, debug_mode=debug_mode)
+        # Per-user bee-cli login (BEE_CONFIG_DIR + file store); None = the host's default login
+        self.env: Optional[Dict[str, str]] = bee_subprocess_env()
+        self.proxy = BeeProxy(self._build_cmd, debug_mode=debug_mode, env=self.env)
         # Seams for tests: httpx transport used to reach the private proxy, reconnect back-off sleep
         self.http_transport_factory: Callable[[str], Any] = default_http_transport
         self._sleep: Callable[[float], Any] = asyncio.sleep
@@ -309,7 +313,7 @@ class BeeClient(Debug):
         cmd = self._build_cmd(list(subcmd_args) + ["--json"])
         try:
             process = await asyncio.create_subprocess_exec(
-                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=self.env
             )
             stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
         except asyncio.TimeoutError:
@@ -427,6 +431,7 @@ class BeeClient(Debug):
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             limit=1024 * 1024 * 10,
+            env=self.env,
         )
         # `bee stream --json` prints nothing during silence (pings are dropped): while the process is
         # running the connection is assumed alive, and a synthetic tick keeps coverage moving.

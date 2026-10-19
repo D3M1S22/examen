@@ -809,128 +809,26 @@ class TestServerRestApiAndWebUi:
         assert data_unverified["status"] == "unverified"
 
 
-class TestAuthAndGdprEndpoints:
-    """Tests for GDPR-compliant user management and Bee pairing endpoints."""
+class TestLegacySingleUserSession:
+    """With AUTH_ENABLED=false (the default in this suite) the dashboard needs no login.
+    Multi-user accounts are covered by tests/test_accounts.py."""
 
-    def test_auth_session_unauthenticated(self, client):
+    def test_session_is_local_user(self, client):
         res = client.get("/api/auth/session")
         assert res.status_code == 200
         data = res.json()
-        assert data["authenticated"] is False
-        assert data["user"] is None
+        assert data["auth_enabled"] is False
+        assert data["authenticated"] is True
         assert "bee_device" in data
-        assert "gdpr_mode" in data
 
-    def test_auth_login_lifecycle(self, client):
-        # 1. Login with demo handle
-        payload = {"handle": "Alex • Demo Lead", "connect_bee": False}
-        res = client.post("/api/auth/login", json=payload)
+    def test_account_routes_disabled(self, client):
+        assert client.get("/api/account").status_code == 404
+        assert client.post("/api/auth/register", json={}).status_code == 404
+
+    def test_bee_disconnect_legacy(self, client):
+        res = client.post("/api/bee/disconnect")
         assert res.status_code == 200
-        data = res.json()
-        assert data["success"] is True
-        user = data["user"]
-        assert user["handle"] == "Alex • Demo Lead"
-        assert user["user_id"].startswith("usr_")
-        assert user["gdpr_compliant"] is True
-
-        user_id = user["user_id"]
-
-        # 2. Check session with X-User-Id header
-        res_sess = client.get("/api/auth/session", headers={"x-user-id": user_id})
-        assert res_sess.status_code == 200
-        sess_data = res_sess.json()
-        assert sess_data["authenticated"] is True
-        assert sess_data["user"]["user_id"] == user_id
-
-        # 3. Bee link endpoint
-        res_link = client.get("/api/auth/bee-link", headers={"x-user-id": user_id})
-        assert res_link.status_code == 200
-        link_data = res_link.json()
-        assert link_data["success"] is True
-        assert "bee_pairing" in link_data
-
-        # 4. Disconnect Bee
-        res_disc = client.post("/api/auth/bee-disconnect", headers={"x-user-id": user_id})
-        assert res_disc.status_code == 200
-        assert res_disc.json()["success"] is True
-
-        # 5. Logout
-        res_logout = client.post("/api/auth/logout", json={"user_id": user_id, "disconnect_bee": False})
-        assert res_logout.status_code == 200
-        assert res_logout.json()["success"] is True
-
-        # 6. Session now unauthenticated
-        res_after = client.get("/api/auth/session", headers={"x-user-id": user_id})
-        assert res_after.json()["authenticated"] is False
-
-    def test_auth_login_sanitizes_pii(self, client):
-        # Email should be stripped of domain to avoid PII storage under GDPR Art. 5(1)(c)
-        res = client.post("/api/auth/login", json={"handle": "john.doe@example.com"})
-        assert res.status_code == 200
-        data = res.json()
-        assert "@" not in data["user"]["handle"]
-        assert data["user"]["handle"] == "john.doe"
-
-    def test_auth_gdpr_purge(self, client):
-        res = client.post("/api/auth/login", json={"handle": "EphemeralUser"})
-        user_id = res.json()["user"]["user_id"]
-
-        # Purge data
-        res_purge = client.delete(f"/api/auth/gdpr-purge?user_id={user_id}")
-        assert res_purge.status_code == 200
-        assert res_purge.json()["purged"] is True
-
-        # Session gone
-        res_check = client.get("/api/auth/session", headers={"x-user-id": user_id})
-        assert res_check.json()["authenticated"] is False
-
-    def test_auth_users_management(self, client):
-        # 1. Register two different demo users
-        res1 = client.post("/api/auth/login", json={"handle": "User One • Architect"})
-        assert res1.status_code == 200
-        uid1 = res1.json()["user"]["user_id"]
-
-        res2 = client.post("/api/auth/login", json={"handle": "User Two • Lead"})
-        assert res2.status_code == 200
-        uid2 = res2.json()["user"]["user_id"]
-        assert uid1 != uid2
-
-        # 2. Query users endpoint
-        res_users = client.get("/api/auth/users")
-        assert res_users.status_code == 200
-        data = res_users.json()
-        assert data["success"] is True
-        assert data["count"] >= 2
-        uids = [u["user_id"] for u in data["users"]]
-        assert uid1 in uids
-        assert uid2 in uids
-
-        # 3. Clean up
-        client.post("/api/auth/gdpr-purge", json={"user_id": uid1})
-        client.post("/api/auth/gdpr-purge", json={"user_id": uid2})
-
-    def test_auth_json_body_user_id(self, client):
-        res = client.post("/api/auth/login", json={"handle": "JsonBodyTester"})
-        uid = res.json()["user"]["user_id"]
-
-        # Test bee-link with user_id in JSON body
-        res_link = client.post("/api/auth/bee-link", json={"user_id": uid})
-        assert res_link.status_code == 200
-        assert res_link.json()["success"] is True
-
-        # Test bee-disconnect with user_id in JSON body
-        res_disc = client.post("/api/auth/bee-disconnect", json={"user_id": uid})
-        assert res_disc.status_code == 200
-        assert res_disc.json()["success"] is True
-
-        # Purge
-        client.post("/api/auth/gdpr-purge", json={"user_id": uid})
-
-
-
-
-
-
+        assert res.json()["connected"] is False
 
 
 class _StaticSynthesizer:
@@ -969,7 +867,7 @@ class TestEventEngineEndpoints:
         # Jobs are drained explicitly in tests (no background worker racing the assertions)
         monkeypatch.setattr(runtime, "ensure_started", lambda: True)
         monkeypatch.setattr(engine_mod, "_runtime", runtime)
-        monkeypatch.setattr(server_mod, "_engine_listener_registered", False)
+        monkeypatch.setattr(server_mod, "_engine_listener_registered", set())
 
         async def _classify(transcript, active_tasks=None, prior_context=None):
             return ChunkClassification(categories=["deep_topic"], confidence=0.9, summary_hint="raft")

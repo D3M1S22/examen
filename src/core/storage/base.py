@@ -325,6 +325,10 @@ class AbstractContextStore(ABC):
     def purge_ingestion_history(self) -> None:
         raise NotImplementedError
 
+    def export_all(self) -> Dict[str, List[Dict[str, Any]]]:
+        """GDPR Art. 15 / 20: every record of this store as JSON-serialisable rows, by table."""
+        raise NotImplementedError
+
     @abstractmethod
     def close(self) -> None:
         """Close database connection / resources."""

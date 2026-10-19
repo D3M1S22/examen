@@ -193,6 +193,7 @@ class CliBeeHistorySource:
         cmd = self.client._build_cmd(args)
         process = await asyncio.create_subprocess_exec(
             *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            env=getattr(self.client, "env", None),
         )
         try:
             stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=self.timeout_seconds)

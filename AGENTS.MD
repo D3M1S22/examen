@@ -122,6 +122,12 @@ Whenever you inspect, modify, or extend this codebase, you **must adhere strictl
 * Always interact with storage via the `AbstractContextStore` interface in `src/core/storage/base.py` and obtain instances through `src/core/storage.get_storage_store()`.
 * Never hardcode direct SQLite SQL queries outside `src/core/storage/sqlite_store.py`.
 
+### F2. Tenancy (multi-user)
+* Every user is a tenant (`src/core/tenancy.py`, `docs/13_multi_user_accounts.md`). Request handlers and MCP tools already run inside the caller's tenant; background work for a user must be started inside `tenant_scope(user_id)`.
+* Never cache per-user objects in module globals: follow the pattern of `get_event_engine()` / `get_backfill_service()` (one instance per tenant, legacy singleton when there is none).
+* Every `bee` subprocess must pass `env=bee_subprocess_env()` (per-user `BEE_CONFIG_DIR` + file store). Never call `bee logout` for the host.
+* `broadcast_event` targets the current tenant; pass `tenant=` explicitly from callbacks that may run elsewhere.
+
 ### F. FastMCP Version Constraint
 * Always ensure `mcp>=1.10.0,<2.0.0` is respected. Version `2.0.0` introduces breaking changes to `mcp.server.fastmcp` which breaks AWS Bedrock AgentCore Runtime compatibility.
 

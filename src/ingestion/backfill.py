@@ -1188,10 +1188,31 @@ class BackfillService:
 
 
 _service: Optional[BackfillService] = None
+_tenant_services: Dict[str, BackfillService] = {}
 
 
 def get_backfill_service() -> BackfillService:
+    """The backfill service of the current tenant (one per user), or the legacy singleton."""
+    from src.core.tenancy import get_tenant_id
+
+    tenant = get_tenant_id()
+    if tenant is not None:
+        service = _tenant_services.get(tenant)
+        if service is None:
+            service = BackfillService()
+            _tenant_services[tenant] = service
+        return service
     global _service
     if _service is None:
         _service = BackfillService()
     return _service
+
+
+def drop_tenant_backfill_service(user_id: str) -> None:
+    service = _tenant_services.pop(user_id, None)
+    stop = getattr(service, "stop", None)
+    if callable(stop):
+        try:
+            stop()
+        except Exception:
+            pass

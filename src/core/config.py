@@ -140,6 +140,28 @@ class Settings(BaseSettings):
     mcp_port: int = Field(default=8000, alias="MCP_PORT")
     mcp_streamable_http: bool = Field(default=True, alias="MCP_STREAMABLE_HTTP")
 
+    # Multi-user accounts (docs/13_multi_user_accounts.md)
+    # false = legacy single-user mode: no login, SQLITE_DB_PATH and the host's bee-cli login
+    auth_enabled: bool = Field(default=True, alias="AUTH_ENABLED")
+    # Root of auth.db and of the per-user folders (users/<user_id>/examen.db, users/<user_id>/bee/)
+    examen_data_dir: str = Field(default="data", alias="EXAMEN_DATA_DIR")
+    auth_session_ttl_hours: float = Field(default=24.0 * 14, alias="AUTH_SESSION_TTL_HOURS")
+    # auto = Secure cookie when the request arrived over HTTPS (directly or via X-Forwarded-Proto)
+    auth_cookie_secure: Literal["auto", "true", "false"] = Field(default="auto", alias="AUTH_COOKIE_SECURE")
+    auth_min_password_length: int = Field(default=10, alias="AUTH_MIN_PASSWORD_LENGTH")
+    auth_max_login_failures: int = Field(default=5, alias="AUTH_MAX_LOGIN_FAILURES")
+    auth_lockout_minutes: float = Field(default=15.0, alias="AUTH_LOCKOUT_MINUTES")
+    # Version of the privacy notice users accept at registration (bump it to ask again)
+    privacy_notice_version: str = Field(default="2026-10-20", alias="PRIVACY_NOTICE_VERSION")
+    # Comma-separated browser origins allowed to call the API with cookies (the dashboard's own
+    # origin is always allowed). Example: http://localhost:3000
+    cors_allowed_origins: str = Field(default="http://localhost:3000,http://127.0.0.1:3000", alias="CORS_ALLOWED_ORIGINS")
+    # Host headers accepted on /mcp (DNS-rebinding protection). Add your public hostname, e.g.
+    # examen.example.com or examen.deggio.local:* ("*" disables the check).
+    mcp_allowed_hosts: str = Field(default="localhost:*,127.0.0.1:*,localhost,127.0.0.1", alias="MCP_ALLOWED_HOSTS")
+    # Start every paired user's ingestion at server start (ambient listening without the dashboard open)
+    auto_start_user_orchestrators: bool = Field(default=True, alias="AUTO_START_USER_ORCHESTRATORS")
+
     @property
     def has_aws_credentials(self) -> bool:
         if self.aws_access_key_id and self.aws_secret_access_key:

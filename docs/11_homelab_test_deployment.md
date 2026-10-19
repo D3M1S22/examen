@@ -39,20 +39,20 @@ Note: `scripts/build_ui.sh` may rewrite `src/web_ui/bun.lock` with an older Bun;
 
 ---
 
-## 3. Bee login on the server
+## 3. Accounts and Bee login on the server
 
-The token is per host and per user, so the server needs its own login:
+Since 2026-10-20 the instance is multi-user ([13_multi_user_accounts.md](13_multi_user_accounts.md)): each person creates an account in the dashboard and pairs **their own** Bee from *Account → Bee device* by scanning a QR code. Tokens and data live under `/var/lib/examen/data/users/<id>/` (`EXAMEN_DATA_DIR`, set in the systemd unit); nobody logs in to Bee from the shell any more. The redeploy script never touches `/data/` and the old single-user token in `/var/lib/examen/.bee/` is no longer used.
 
 ```bash
-ssh root@192.168.1.192 'cd /var/lib/examen && sudo -u examen -H bee login --no-wait'   # prints a link (valid ~5 min)
-# approve the link in the Bee app, then:
-ssh root@192.168.1.192 'cd /var/lib/examen && sudo -u examen -H bee status'
-ssh root@192.168.1.192 'systemctl restart examen'
+# Move the data collected before accounts existed into the owner's account (once):
+ssh root@192.168.1.192 'cd /opt/examen && sudo -u examen -H EXAMEN_DATA_DIR=/var/lib/examen/data \
+  .venv/bin/python scripts/manage_users.py claim-legacy-db --email <owner email> --db /opt/examen/examen.db'
+# Password reset (no email service yet):
+ssh -t root@192.168.1.192 'cd /opt/examen && sudo -u examen -H EXAMEN_DATA_DIR=/var/lib/examen/data \
+  .venv/bin/python scripts/manage_users.py reset-password --email <email>'
 ```
 
-Until the login is done, `/api/status` reports `bee_device.status = DISCONNECTED` and the stream keeps retrying.
-
----
+Add the LAN host name to `MCP_ALLOWED_HOSTS` in `/opt/examen/.env` (`examen.deggio.local,examen.deggio.local:*`), otherwise `/mcp` answers `421` behind Nginx Proxy Manager. With `AUTH_ENABLED=false` the old single-user behaviour (one shell `bee login` for the host) still applies.
 
 ## 4. Operations
 
@@ -69,6 +69,5 @@ Through MCP from an agent: `get_lxc_service_logs(vmid=147, service_name="examen"
 
 ## 5. Known limitations of the test instance
 
-- Plain HTTP on the LAN (like the other `*.deggio.local` services): no TLS, no authentication on the dashboard or `/mcp`. Do not expose it publicly; the AWS deployment adds CloudFront/TLS.
-- Logging out of the dashboard runs `bee logout` on the server (by design, [10](10_bee_cli_reference.md) C11): log in again as in §3.
-- One Bee account per instance.
+- Plain HTTP on the LAN (like the other `*.deggio.local` services): no TLS, so session cookies and MCP tokens travel in clear text on the LAN. Do not expose it publicly; the AWS deployment adds CloudFront/TLS.
+- Each paired user runs their own `bee proxy` + stream: watch memory on the 2 GB container.
