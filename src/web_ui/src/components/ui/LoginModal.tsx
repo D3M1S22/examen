@@ -15,6 +15,8 @@ import {
   resetUserPassword,
   revokeToken,
   setUserStatus,
+  signup,
+  signupFormError,
   startBeePairing,
   unlinkBee,
 } from "@/utils/auth";
@@ -22,8 +24,11 @@ import {
 interface LoginModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onLoginSuccess: (user: SessionUser) => void;
+  /** `created` is true right after a self-registration (the page keeps the account panel open). */
+  onLoginSuccess: (user: SessionUser, created?: boolean) => void;
   currentUser?: SessionUser | null;
+  /** Signed out: offer the "Create account" tab (server `AUTH_ALLOW_SIGNUP`). */
+  signupEnabled?: boolean;
   initialConnectBee?: boolean;
   onLogout?: () => void;
   /** Signed out: the sign-in form cannot be dismissed. */
@@ -48,52 +53,106 @@ const STATE_BADGE: Record<string, string> = {
   unlinked: "bg-zinc-900 border-white/10 text-zinc-400",
 };
 
-function SignInForm({ onLoginSuccess }: { onLoginSuccess: (user: SessionUser) => void }) {
+type AuthMode = "signin" | "signup";
+
+const labelClass = "block text-xs font-mono font-semibold uppercase tracking-wider text-zinc-300";
+
+function AuthForm({ mode, signupEnabled, onModeChange, onLoginSuccess }: {
+  mode: AuthMode;
+  signupEnabled: boolean;
+  onModeChange: (mode: AuthMode) => void;
+  onLoginSuccess: (user: SessionUser, created?: boolean) => void;
+}) {
   const [username, setUsername] = useState("");
+  const [displayName, setDisplayName] = useState("");
   const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const registering = mode === "signup" && signupEnabled;
+  const formError = registering ? signupFormError(username, password, confirm) : null;
+
+  const switchMode = (next: AuthMode) => {
+    setError(null);
+    setConfirm("");
+    onModeChange(next);
+  };
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError(null);
     try {
-      onLoginSuccess(await login(username, password));
+      if (registering) {
+        onLoginSuccess(await signup(username, password, displayName), true);
+      } else {
+        onLoginSuccess(await login(username, password));
+      }
     } catch (err: any) {
-      setError(err?.message || "Sign-in failed");
+      setError(err?.message || (registering ? "Registration failed" : "Sign-in failed"));
     } finally {
       setLoading(false);
     }
   };
 
+  const tabClass = (active: boolean) =>
+    `flex-1 py-2 rounded-lg font-mono text-xs transition-colors cursor-pointer ${
+      active ? "bg-cyan-500/15 border border-cyan-400/40 text-cyan-200" : "text-zinc-400 hover:text-zinc-200"
+    }`;
+
   return (
     <form onSubmit={submit} className="space-y-4">
+      {signupEnabled && (
+        <div role="tablist" className="flex gap-1 p-1 rounded-xl bg-black/40 border border-white/10">
+          <button type="button" role="tab" aria-selected={!registering} className={tabClass(!registering)}
+            onClick={() => switchMode("signin")}>Sign in</button>
+          <button type="button" role="tab" aria-selected={registering} className={tabClass(registering)}
+            onClick={() => switchMode("signup")}>Create account</button>
+        </div>
+      )}
       {error && (
         <div className="p-3 rounded-xl bg-red-950/60 border border-red-500/40 text-red-300 font-mono text-xs">⚠️ {error}</div>
       )}
       <div className="space-y-2">
-        <label htmlFor="login-username" className="block text-xs font-mono font-semibold uppercase tracking-wider text-zinc-300">
-          Username
-        </label>
+        <label htmlFor="login-username" className={labelClass}>Username</label>
         <input id="login-username" autoComplete="username" value={username} onChange={(e) => setUsername(e.target.value)}
           required className={inputClass} />
       </div>
+      {registering && (
+        <div className="space-y-2">
+          <label htmlFor="signup-display-name" className={labelClass}>
+            Display name <span className="normal-case font-normal text-zinc-500">(optional)</span>
+          </label>
+          <input id="signup-display-name" autoComplete="name" value={displayName} maxLength={60}
+            onChange={(e) => setDisplayName(e.target.value)} className={inputClass} />
+        </div>
+      )}
       <div className="space-y-2">
-        <label htmlFor="login-password" className="block text-xs font-mono font-semibold uppercase tracking-wider text-zinc-300">
-          Password
-        </label>
-        <input id="login-password" type="password" autoComplete="current-password" value={password}
-          onChange={(e) => setPassword(e.target.value)} required className={inputClass} />
+        <label htmlFor="login-password" className={labelClass}>Password</label>
+        <input id="login-password" type="password" autoComplete={registering ? "new-password" : "current-password"}
+          value={password} onChange={(e) => setPassword(e.target.value)} required className={inputClass} />
       </div>
+      {registering && (
+        <div className="space-y-2">
+          <label htmlFor="signup-confirm" className={labelClass}>Confirm password</label>
+          <input id="signup-confirm" type="password" autoComplete="new-password" value={confirm}
+            onChange={(e) => setConfirm(e.target.value)} required className={inputClass} />
+        </div>
+      )}
       <p className="text-[11px] text-zinc-400 leading-relaxed">
-        Each EXAMEN account links its own Bee device. Your data is never visible to other users. Accounts are
-        created by an administrator.
+        {registering
+          ? "At least 12 characters. Your account starts empty: link your own Bee device next. Your data is never visible to other users."
+          : signupEnabled
+            ? "Each EXAMEN account links its own Bee device. Your data is never visible to other users."
+            : "Each EXAMEN account links its own Bee device. Your data is never visible to other users. Accounts are created by an administrator."}
       </p>
+      {registering && formError && (username || password || confirm) && (
+        <p className="text-[11px] font-mono text-amber-300">{formError}</p>
+      )}
       <div className="flex justify-end">
-        <button type="submit" disabled={loading || !username || !password} className={primaryClass}>
+        <button type="submit" disabled={loading || !username || !password || Boolean(formError)} className={primaryClass}>
           {loading && <span className="animate-spin text-xs">↻</span>}
-          <span>Sign in</span>
+          <span>{registering ? "Create account" : "Sign in"}</span>
         </button>
       </div>
     </form>
@@ -339,7 +398,9 @@ export function LoginModal({
   onLogout,
   mandatory = false,
   onSessionChanged,
+  signupEnabled = false,
 }: LoginModalProps) {
+  const [authMode, setAuthMode] = useState<AuthMode>("signin");
   const refreshSession = useCallback(async () => {
     const user = await fetchSession();
     onSessionChanged?.(user);
@@ -355,7 +416,9 @@ export function LoginModal({
           <div className="flex items-center gap-2.5">
             <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-pulse shadow-[0_0_8px_rgba(34,211,238,0.8)]" />
             <h2 id="login-modal-title" className="font-sans text-base font-semibold text-white tracking-wide">
-              {currentUser ? `Account · ${currentUser.handle}` : "Sign in to EXAMEN"}
+              {currentUser
+                ? `Account · ${currentUser.handle}`
+                : authMode === "signup" && signupEnabled ? "Create your EXAMEN account" : "Sign in to EXAMEN"}
             </h2>
           </div>
           {!mandatory && (
@@ -368,7 +431,8 @@ export function LoginModal({
 
         <div className="p-6 space-y-5">
           {!currentUser ? (
-            <SignInForm onLoginSuccess={onLoginSuccess} />
+            <AuthForm mode={authMode} signupEnabled={signupEnabled} onModeChange={setAuthMode}
+              onLoginSuccess={onLoginSuccess} />
           ) : (
             <>
               <BeeLinkSection initialLink={currentUser.bee_link} autoStart={initialConnectBee} onChanged={refreshSession} />

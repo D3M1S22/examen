@@ -137,6 +137,10 @@ class SystemStore:
         with self._connect() as conn:
             return conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
 
+    def count_admins(self) -> int:
+        with self._connect() as conn:
+            return conn.execute("SELECT COUNT(*) FROM users WHERE is_admin = 1").fetchone()[0]
+
     def update_user(self, user_id: str, **fields: Any) -> None:
         cols = [k for k in fields if k in _USER_FIELDS]
         if not cols:

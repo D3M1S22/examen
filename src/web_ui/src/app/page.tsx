@@ -29,7 +29,7 @@ import { LoginModal } from "@/components/ui/LoginModal";
 import { BackfillModal } from "@/components/ui/BackfillModal";
 import { formatDuration, mergeProgress } from "@/utils/backfill";
 import { getApiBaseUrl } from "@/utils/api";
-import { AUTH_EXPIRED_EVENT, eraseAccount, fetchSession, installAuthFetch, logout, unlinkBee } from "@/utils/auth";
+import { AUTH_EXPIRED_EVENT, eraseAccount, fetchSession, fetchSessionState, installAuthFetch, logout, unlinkBee } from "@/utils/auth";
 
 const fetcher = (url: string) => fetch(`${getApiBaseUrl()}${url}`).then((res) => res.json());
 
@@ -46,6 +46,7 @@ export default function Dashboard() {
   const [currentUser, setCurrentUser] = useState<SessionUser | null>(null);
   // Multi-user: the dashboard loads data only once the session cookie is verified
   const [sessionChecked, setSessionChecked] = useState(false);
+  const [signupEnabled, setSignupEnabled] = useState(false);
   const [sseConnected, setSseConnected] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [updatedTabs, setUpdatedTabs] = useState<Record<string, number>>({});
@@ -64,8 +65,11 @@ export default function Dashboard() {
   // Verify the server session on mount; any 401 later brings the sign-in form back
   useEffect(() => {
     installAuthFetch();
-    fetchSession()
-      .then((user) => setCurrentUser(user))
+    fetchSessionState()
+      .then(({ user, signupEnabled }) => {
+        setCurrentUser(user);
+        setSignupEnabled(signupEnabled);
+      })
       .finally(() => setSessionChecked(true));
     const onExpired = () => setCurrentUser(null);
     window.addEventListener(AUTH_EXPIRED_EVENT, onExpired);
@@ -699,10 +703,13 @@ export default function Dashboard() {
         isOpen={showLoginModal || (sessionChecked && !currentUser)}
         mandatory={!currentUser}
         onClose={() => setShowLoginModal(false)}
-        onLoginSuccess={(user) => {
+        onLoginSuccess={(user, created) => {
           handleLoginSuccess(user);
-          setShowLoginModal(false);
+          // A new account lands on its account panel to link its own Bee
+          setLoginModalConnectBee(false);
+          setShowLoginModal(Boolean(created));
         }}
+        signupEnabled={signupEnabled}
         currentUser={currentUser}
         initialConnectBee={loginModalConnectBee}
         onLogout={handleLogout}

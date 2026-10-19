@@ -48,7 +48,7 @@ The goal is for several people, each with their **own Bee account**, to use the 
 |---|---|---|---|---|
 | **D1** | Tenancy unit | **One EXAMEN user ↔ at most one Bee account**, and vice versa | Shared households/teams | [02](02_identity_and_bee_accounts.md) §1 |
 | **D2** | Data isolation | **Scoped store per user**: the store is obtained already bound to a user (`StoreRegistry.for_user`). SQLite: one database file per user. DynamoDB: `user_id` partition key | `user_id` column in every table and every query (59 store methods, easy to forget a filter) | [03](03_tenant_isolation_and_runtime.md) §2 |
-| **D3** | Authentication (homelab/local) | **Local accounts**: username + password (Argon2id), server-side session in an `HttpOnly`, `SameSite=Lax` cookie | Magic link by e-mail (needs SMTP), passkeys (more work), reverse-proxy auth | [02](02_identity_and_bee_accounts.md) §2 |
+| **D3** | Authentication (homelab/local) | **Local accounts**: username + password (Argon2id), server-side session in an `HttpOnly`, `SameSite=Lax` cookie. Users **register themselves** on the sign-in page (`AUTH_ALLOW_SIGNUP`); the bootstrap admin manages accounts (2026-10-20) | Magic link by e-mail (needs SMTP), passkeys (more work), reverse-proxy auth | [02](02_identity_and_bee_accounts.md) §2 |
 | **D4** | Authentication (AWS) | **Amazon Cognito** user pool behind the same `AuthProvider` interface (JWT validation); Cognito is also the OAuth server for Alexa account linking | Auth0 / custom OAuth | [04](04_serving_api_ui_aws.md) §5 |
 | **D5** | MCP / Alexa+ | Local: **personal access tokens** (`Authorization: Bearer`) per user. AWS: **OAuth 2.0 account linking** (Cognito) | Single shared token | [04](04_serving_api_ui_aws.md) §3 |
 | **D6** | Bee credentials | One `BEE_CONFIG_DIR` per user with `BEE_FORCE_FILE_STORE=1` (local). AWS: token in **Secrets Manager**, materialised into a private tmpfs dir by the ingestion worker | Sharing `~/.bee` (impossible: one token per directory) | [02](02_identity_and_bee_accounts.md) §4 |
@@ -69,7 +69,8 @@ The goal is for several people, each with their **own Bee account**, to use the 
 
 **Non-goals (this iteration)**
 - Sharing data between users (households, shared contacts, delegated access).
-- Role-based admin UI beyond a minimal `admin` flag (user creation and Bee status overview).
+- Role-based admin UI beyond a minimal `admin` flag (account management and Bee status overview).
+- E-mail verification or password recovery by e-mail (no SMTP on the homelab: the admin resets passwords).
 - Billing or quotas per user beyond simple budget guards.
 - Several Bee accounts for one EXAMEN user.
 

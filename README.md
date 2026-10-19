@@ -119,8 +119,9 @@ pytest
 ./scripts/build_ui.sh            # = cd src/web_ui && bun install && bun run build
 
 # 4. Launch Unified FastMCP Server & Echo Show Web Dashboard (port = MCP_PORT, default 8000)
-#    Multi-user: EXAMEN_BOOTSTRAP_ADMIN=<name> in .env creates the first admin (one-time password in the log);
-#    each user signs in and links their own Bee account from "Account" in the dashboard.
+#    Multi-user: EXAMEN_BOOTSTRAP_ADMIN=<name> in .env creates the admin (one-time password in the log);
+#    everyone else registers on the sign-in page ("Create account", AUTH_ALLOW_SIGNUP) and links their own
+#    Bee account from "Account" in the dashboard.
 python -m src.serving.mcp_server
 
 # Optional: replay the event-engine scenarios / calibrate topic similarity thresholds

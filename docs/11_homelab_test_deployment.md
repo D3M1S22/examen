@@ -51,8 +51,8 @@ The reverse proxy disables buffering (`proxy_buffering off`, 1 h read timeout), 
 
 Every person signs in with their own EXAMEN account and links **their own** Bee account from the dashboard ([multi_user/](next_steps/multi_user/00_overview.md)):
 
-1. The first start with an empty user table creates the admin named by `EXAMEN_BOOTSTRAP_ADMIN` in `/opt/examen/.env`. Without `EXAMEN_BOOTSTRAP_ADMIN_PASSWORD`, a one-time password is printed once: `journalctl -u examen | grep "Bootstrap admin"`.
-2. The admin creates the other accounts in *Account → Accounts (admin)*; each new user gets a one-time password.
+1. While no admin exists, start-up creates the admin named by `EXAMEN_BOOTSTRAP_ADMIN` in `/opt/examen/.env`. Without `EXAMEN_BOOTSTRAP_ADMIN_PASSWORD`, a one-time password is printed once: `journalctl -u examen | grep "Bootstrap admin"`.
+2. Everyone else registers from the sign-in page (*Create account*). The admin sees every account in *Account → Accounts (admin)*, can disable it, reset its password or create accounts by hand. `AUTH_ALLOW_SIGNUP=false` in `.env` closes registration. Until the instance is served over HTTPS (open question Q3 of [multi_user/05](next_steps/multi_user/05_implementation_plan_and_testing.md)), keep registration to the trusted LAN.
 3. Each user opens *Account → Your Bee account → Connect Bee*, opens the link and approves it in the Bee app; the dashboard polls until the link is `linked` and starts that user's live ingestion.
 4. MCP clients (Alexa+ dev skill, Claude Desktop, …) use a personal access token from *Account → MCP access tokens* (`Authorization: Bearer exm_pat_…`).
 
@@ -87,7 +87,7 @@ Through MCP from an agent: `get_lxc_service_logs(vmid=147, service_name="examen"
 Done once, when the `sessions` work reaches `main` (the server tracks `main`):
 
 1. `ssh root@192.168.1.192 'systemctl stop examen-update.timer examen'`.
-2. Add `EXAMEN_BOOTSTRAP_ADMIN=<username>` (and optionally `EXAMEN_BOOTSTRAP_ADMIN_PASSWORD`) to `/opt/examen/.env`.
+2. Add `EXAMEN_BOOTSTRAP_ADMIN=<username>` (and optionally `EXAMEN_BOOTSTRAP_ADMIN_PASSWORD`) to `/opt/examen/.env`, plus `AUTH_ALLOW_SIGNUP=true|false` (default `true`: anyone on the LAN can register).
 3. `ssh root@192.168.1.192 'EXAMEN_HEALTH_URL=http://127.0.0.1:8000/api/health examen-update --force'`: pulls `main`, installs `argon2-cffi`, rebuilds the dashboard, installs the new unit (`EXAMEN_DATA_DIR=/var/lib/examen/data`), restarts and checks `/api/health`.
 4. Optional, to keep the single-tenant data and Bee token: `systemctl stop examen && cd /opt/examen && sudo -u examen -H EXAMEN_DATA_DIR=/var/lib/examen/data .venv/bin/python scripts/migrate_to_multi_user.py --owner <username> --db /opt/examen/examen.db --bee-dir /var/lib/examen/.bee && systemctl start examen`, then *Connect Bee* once to verify the migrated token.
 5. `systemctl start examen-update.timer`.

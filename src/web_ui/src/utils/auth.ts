@@ -65,6 +65,13 @@ interface SessionResponse {
     created_at: string;
   } | null;
   bee_link: BeeLinkInfo | null;
+  /** Whether the sign-in page offers "Create account" (server `AUTH_ALLOW_SIGNUP`). */
+  signup_enabled?: boolean;
+}
+
+export interface SessionState {
+  user: SessionUser | null;
+  signupEnabled: boolean;
 }
 
 export const toSessionUser = (data: SessionResponse): SessionUser | null => {
@@ -82,11 +89,18 @@ export const toSessionUser = (data: SessionResponse): SessionUser | null => {
   };
 };
 
-export const fetchSession = async (): Promise<SessionUser | null> => {
+export const toSessionState = (data: SessionResponse): SessionState => ({
+  user: toSessionUser(data),
+  signupEnabled: Boolean(data.signup_enabled),
+});
+
+export const fetchSessionState = async (): Promise<SessionState> => {
   const res = await fetch(api("/api/auth/session"));
-  if (!res.ok) return null;
-  return toSessionUser(await res.json());
+  if (!res.ok) return { user: null, signupEnabled: false };
+  return toSessionState(await res.json());
 };
+
+export const fetchSession = async (): Promise<SessionUser | null> => (await fetchSessionState()).user;
 
 export const login = async (username: string, password: string): Promise<SessionUser> => {
   const data = await jsonRequest<SessionResponse & { success: boolean }>("/api/auth/login", "POST", {
@@ -99,6 +113,29 @@ export const login = async (username: string, password: string): Promise<Session
 };
 
 /** Ends this browser session only: the Bee link and live ingestion keep running. */
+/** Self-registration: the server creates a non-admin account and sets the session cookie. */
+export const signup = async (username: string, password: string, displayName?: string): Promise<SessionUser> => {
+  const data = await jsonRequest<SessionResponse & { success: boolean }>("/api/auth/signup", "POST", {
+    username: username.trim(),
+    password,
+    display_name: displayName?.trim() || undefined,
+  });
+  const user = toSessionUser({ ...data, authenticated: true });
+  if (!user) throw new Error("Registration failed");
+  return user;
+};
+
+/** Client-side mirror of the server rules (src/serving/auth.py); the server stays authoritative. */
+export const USERNAME_PATTERN = /^[A-Za-z0-9._-]{3,32}$/;
+export const MIN_PASSWORD_LENGTH = 12;
+
+export const signupFormError = (username: string, password: string, confirm: string): string | null => {
+  if (!USERNAME_PATTERN.test(username.trim())) return "Username: 3-32 letters, digits, '.', '_' or '-'";
+  if (password.length < MIN_PASSWORD_LENGTH) return `Password must be at least ${MIN_PASSWORD_LENGTH} characters`;
+  if (password !== confirm) return "Passwords do not match";
+  return null;
+};
+
 export const logout = async (): Promise<void> => {
   await jsonRequest("/api/auth/logout", "POST").catch(() => undefined);
 };

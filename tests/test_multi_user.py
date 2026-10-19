@@ -114,7 +114,97 @@ def test_bootstrap_admin(monkeypatch):
     monkeypatch.setattr(settings, "examen_bootstrap_admin", "owner")
     password = get_auth_provider().ensure_bootstrap_admin()
     assert password and get_system_store().get_user_by_username("owner").is_admin
-    assert get_auth_provider().ensure_bootstrap_admin() is None  # only on an empty user table
+    assert get_auth_provider().ensure_bootstrap_admin() is None  # an admin exists already
+
+
+def test_bootstrap_admin_after_self_registration(monkeypatch):
+    from src.core.config import settings
+    from src.serving.auth import get_auth_provider
+
+    create_test_user(USER_A, "alice")  # signed up before EXAMEN_BOOTSTRAP_ADMIN was set
+    create_test_user(USER_B, "admin")  # a registered user holding the admin name
+    monkeypatch.setattr(settings, "examen_bootstrap_admin", "admin")
+    assert get_auth_provider().ensure_bootstrap_admin() is None
+    assert get_system_store().get_user(USER_B).is_admin is False  # never promoted
+    monkeypatch.setattr(settings, "examen_bootstrap_admin", "owner")
+    assert get_auth_provider().ensure_bootstrap_admin()
+    assert get_system_store().get_user_by_username("owner").is_admin
+    assert get_system_store().count_admins() == 1
+
+
+# ---------------------------------------------------------------------------
+# T-MU-14: self-registration
+# ---------------------------------------------------------------------------
+
+def signup(client, username, password=TEST_PASSWORD, **extra):
+    return client.post("/api/auth/signup", json={"username": username, "password": password, **extra},
+                       headers=CSRF_HEADERS)
+
+
+def test_signup_creates_a_signed_in_non_admin_account(app):
+    anon = TestClient(app)
+    assert anon.get("/api/auth/session").json()["signup_enabled"] is True
+    c = TestClient(app)
+    res = signup(c, "dave", display_name="Dave", is_admin=True)
+    assert res.status_code == 201 and "examen_session" in res.cookies
+    assert res.json()["user"]["is_admin"] is False
+    assert res.json()["bee_link"]["state"] == "unlinked"
+    session = c.get("/api/auth/session", headers=CSRF_HEADERS).json()
+    assert session["authenticated"] and session["user"]["username"] == "dave"
+    assert session["user"]["display_name"] == "Dave"
+    c.headers.update(CSRF_HEADERS)
+    assert c.get("/api/admin/users").status_code == 403
+    # Own empty store: another user's data stays invisible
+    alice = client_for(app, USER_A, "alice")
+    alice.post("/api/routines", json={"title": "Take the medicine"})
+    assert c.get("/api/routines").json()["tasks"] == []
+    # The new account signs in again with its password
+    assert TestClient(app).post("/api/auth/login", json={"username": "dave", "password": TEST_PASSWORD}).status_code == 200
+
+
+def test_signup_validation(app):
+    c = TestClient(app)
+    assert signup(c, "dave").status_code == 201
+    taken = signup(TestClient(app), "DAVE")
+    assert taken.status_code == 409 and taken.json()["error"] == "username_taken"
+    assert signup(TestClient(app), "erin", password="short").json()["error"] == "weak_password"
+    assert signup(TestClient(app), "x").json()["error"] == "invalid_username"
+    assert signup(TestClient(app), "no spaces allowed").status_code == 400
+
+
+def test_signup_can_be_disabled(app, monkeypatch):
+    from src.core.config import settings
+
+    monkeypatch.setattr(settings, "auth_allow_signup", False)
+    assert TestClient(app).get("/api/auth/session").json()["signup_enabled"] is False
+    res = signup(TestClient(app), "dave")
+    assert res.status_code == 403 and res.json()["error"] == "signup_disabled"
+    assert get_system_store().get_user_by_username("dave") is None
+
+
+def test_signup_rate_limit_per_ip(app):
+    for i in range(5):
+        assert signup(TestClient(app), f"user{i}").status_code == 201
+    res = signup(TestClient(app), "user5")
+    assert res.status_code == 429
+    assert get_system_store().get_user_by_username("user5") is None
+
+
+def test_signup_with_a_session_cookie_needs_the_csrf_header(app):
+    c = client_for(app, USER_A, "alice")
+    del c.headers["x-requested-with"]
+    assert c.post("/api/auth/signup", json={"username": "dave", "password": TEST_PASSWORD}).status_code == 403
+
+
+def test_admin_disables_a_registered_user(app):
+    admin = client_for(app, USER_A, "alice", is_admin=True)
+    c = TestClient(app)
+    dave_id = signup(c, "dave").json()["user"]["user_id"]
+    listed = {u["username"]: u for u in admin.get("/api/admin/users").json()["users"]}
+    assert listed["dave"]["is_admin"] is False
+    assert admin.post(f"/api/admin/users/{dave_id}/status", json={"status": "disabled"}).status_code == 200
+    assert c.get("/api/status", headers=CSRF_HEADERS).status_code == 401  # its session is revoked
+    assert TestClient(app).post("/api/auth/login", json={"username": "dave", "password": TEST_PASSWORD}).status_code == 401
 
 
 # ---------------------------------------------------------------------------

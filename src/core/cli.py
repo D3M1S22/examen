@@ -25,7 +25,7 @@ def cli_user_context(username: Optional[str] = None) -> Iterator[UserContext]:
     user = get_system_store().get_user_by_username(name)
     if user is None:
         raise SystemExit(f"No EXAMEN user named {name!r} in {settings.examen_data_dir}: "
-                         "create it from the dashboard (Account → Accounts) or set EXAMEN_BOOTSTRAP_ADMIN")
+                         "sign up on the dashboard (or ask an admin) or set EXAMEN_BOOTSTRAP_ADMIN")
     with acting_as(system_context(user.user_id)) as ctx:
         yield ctx
 

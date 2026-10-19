@@ -185,11 +185,31 @@ async def api_auth_login(request: Request) -> JSONResponse:
         )
     except AuthError as e:
         return _auth_error(e)
+    return _signed_in_response(user, token)
+
+
+@mcp.custom_route("/api/auth/signup", methods=["POST"])
+async def api_auth_signup(request: Request) -> JSONResponse:
+    """Self-registration (``AUTH_ALLOW_SIGNUP``): creates a non-admin account and signs it in."""
+    body = await _json_body(request)
+    try:
+        user, token = await asyncio.to_thread(
+            get_auth_provider().signup, str(body.get("username") or ""), str(body.get("password") or ""),
+            display_name=str(body.get("display_name") or ""),
+            ip=_client_ip(request), user_agent=request.headers.get("user-agent", ""),
+        )
+    except AuthError as e:
+        return _auth_error(e)
+    return _signed_in_response(user, token, status_code=201)
+
+
+def _signed_in_response(user: UserAccount, token: str, status_code: int = 200) -> JSONResponse:
+    """Sign-in / sign-up reply: the user, their Bee link and the HttpOnly session cookie."""
     response = JSONResponse({
         "success": True,
         "user": _user_payload(user),
         "bee_link": public_link(get_system_store().get_bee_link(user.user_id)),
-    })
+    }, status_code=status_code)
     response.set_cookie(
         SESSION_COOKIE, token, max_age=int(settings.auth_session_days * 86400), httponly=True,
         samesite="lax", secure=settings.auth_cookie_secure, path="/",
@@ -211,6 +231,7 @@ async def api_auth_session(request: Request) -> JSONResponse:
         "auth_method": ctx.auth_method,
         "bee_link": public_link(get_system_store().get_bee_link(ctx.user_id)),
         "bee_device": _bee_device_telemetry(),
+        "signup_enabled": settings.auth_allow_signup,
     })
 
 

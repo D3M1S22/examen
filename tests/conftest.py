@@ -44,6 +44,10 @@ def _isolated_multi_user(tmp_path, monkeypatch):
 
     data_dir = tmp_path / "examen-data"
     monkeypatch.setattr(settings, "examen_data_dir", str(data_dir))
+    # The developer's .env must not change auth behaviour under test
+    monkeypatch.setattr(settings, "auth_allow_signup", True)
+    monkeypatch.setattr(settings, "examen_bootstrap_admin", None)
+    monkeypatch.setattr(settings, "examen_bootstrap_admin_password", None)
     storage_mod.reset_store_registry(storage_mod.StoreRegistry(str(data_dir)))
     monkeypatch.setattr(engine_mod, "_engines", {})
     monkeypatch.setattr(engine_mod, "_runtimes", {})

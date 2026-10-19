@@ -29,6 +29,7 @@ Tests: [tests/test_multi_user.py](../../../tests/test_multi_user.py) (T-MU-1…1
 | Per-user daily LLM budget (Q5) | Not enforced; global `MAX_CONCURRENT_LLM_CALLS` semaphore and the existing per-run backfill budget | Kept small for v1 |
 | Bee token migrated by the script | Link state `invalid` until the owner opens *Connect Bee* (or `GET /api/bee/link`), which verifies it with `bee me` | The script runs offline and must not call Bee |
 | Test seam | `storage._store_instance` pins one store for every user | Lets the pre-multi-user tests run unchanged; never set in production |
+| Accounts created by an admin only (02 §2.2, Q2) | Self-registration `POST /api/auth/signup` (on by default) + admin-created accounts; bootstrap admin created while no admin exists | Requested on 2026-10-20: classic sign in / sign up page, admin kept |
 
 ## 1. Phases
 
@@ -102,6 +103,7 @@ All tests are offline: fake Bee subprocesses (as in `tests/test_bee_stream.py`),
 | T-MU-11 | Auth | Wrong password, rate limit, expired / revoked session, CSRF header missing |
 | T-MU-12 | Migration | Old `examen.db` → owner's store with identical row counts; second run is a no-op |
 | T-MU-13 | Wearer identity | A's tags with A's first name → `user`; the same name in B's stream → `contact` unless it is B's name |
+| T-MU-14 | Self-registration | Sign-up → signed-in non-admin with an empty store; duplicate (any case) → `409`; weak password / bad username → `400`; `AUTH_ALLOW_SIGNUP=false` → `403`; 6th sign-up from one IP in an hour → `429`; the bootstrap admin is created while no admin exists and never promotes a registered namesake; an admin can disable a registered user |
 
 ---
 
@@ -121,7 +123,7 @@ All tests are offline: fake Bee subprocesses (as in `tests/test_bee_stream.py`),
 | # | Question | Default if unanswered |
 |---|---|---|
 | Q1 | Is a second Bee account available for MU-V4 and the acceptance test? | Test the second user with the simulator only |
-| Q2 | Who creates accounts: admin only, or invitation links? | Admin only |
+| Q2 | Who creates accounts: admin only, or invitation links? | **Resolved (2026-10-20):** self-registration from the sign-in page (`AUTH_ALLOW_SIGNUP`, default on) plus the bootstrap admin, who keeps managing accounts |
 | Q3 | HTTPS on the homelab before inviting other people (NPM custom certificate for `*.deggio.local`)? | Trusted LAN only, no external users |
 | Q4 | Password reset without e-mail: admin-issued one-time password? | Yes |
 | Q5 | Per-user daily LLM budget | `BACKFILL_MAX_ESTIMATED_COST_USD` per user per day; live ingestion unlimited |

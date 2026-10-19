@@ -10,7 +10,7 @@
 
 A Starlette middleware in front of every route ([mcp_server.py](../../../src/serving/mcp_server.py) `create_app`):
 
-1. Skips `/api/auth/login`, `/api/health`, static assets and the OAuth protected-resource metadata.
+1. Skips `/api/auth/login`, `/api/auth/signup`, `/api/auth/session`, `/api/health`, static assets and the OAuth protected-resource metadata.
 2. Calls `AuthProvider.authenticate(request)` (cookie or `Authorization: Bearer`).
 3. Rejects with `401` when no `UserContext` is found, and with `403` for `disabled` users.
 4. Sets `request.state.user` and `current_user_ctx` ([03](03_tenant_isolation_and_runtime.md) §1).
@@ -21,7 +21,8 @@ A Starlette middleware in front of every route ([mcp_server.py](../../../src/ser
 | Route | Change |
 |---|---|
 | `/api/auth/login` | `{username, password}` → sets `examen_session`; returns `{user}` (no Bee pairing side effect) |
-| `/api/auth/logout`, `/api/auth/session` | Session-only (D8); `session` returns `{user, bee_link}` |
+| `/api/auth/signup` | New, public: `{username, password, display_name?}` → non-admin account, sets `examen_session`, `201`; gated by `AUTH_ALLOW_SIGNUP`, 5 per IP per hour ([02](02_identity_and_bee_accounts.md) §2.2) |
+| `/api/auth/logout`, `/api/auth/session` | Session-only (D8); `session` returns `{user, bee_link, signup_enabled}` |
 | `/api/auth/users` | Removed → `GET/POST /api/admin/users`, `POST /api/admin/users/{id}/disable` (admin) |
 | `/api/auth/bee-link`, `/api/auth/bee-disconnect` | Replaced by `GET/POST /api/bee/link`, `POST /api/bee/unlink` ([02](02_identity_and_bee_accounts.md) §4.2) |
 | `/api/auth/gdpr-purge` | Replaced by `POST /api/account/erase` (re-auth) |
@@ -53,7 +54,7 @@ Each of the 12 tools resolves `UserContext` from the token and uses that user's 
 
 | Area | Change |
 |---|---|
-| Login | `LoginModal` becomes a real sign-in form (username + password) in front of the app; the `localStorage` profile directory ([auth.ts](../../../src/web_ui/src/utils/auth.ts)) and the "switch profile" list are removed |
+| Login | `LoginModal` becomes a real sign-in page in front of the app, with *Sign in* / *Create account* tabs (the second only when `signup_enabled`); a new account lands on its account panel to link its Bee; the `localStorage` profile directory ([auth.ts](../../../src/web_ui/src/utils/auth.ts)) and the "switch profile" list are removed |
 | API client | `fetch(..., {credentials: "include"})` plus the CSRF header; a `401` redirects to sign-in |
 | Bee card | "Connect Bee" shows the real pairing link + QR, polls `GET /api/bee/link`, displays `linked` / `invalid` / last error; "Disconnect Bee" is a separate, confirmed action |
 | Account page | Personal access tokens (create / revoke), log out everywhere, erase my data |

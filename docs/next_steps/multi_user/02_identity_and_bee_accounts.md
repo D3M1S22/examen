@@ -74,15 +74,16 @@ class AuthProvider(Protocol):
 | Provider | Where | Mechanism |
 |---|---|---|
 | `LocalAuthProvider` | local dev, homelab | `POST /api/auth/login {username, password}` → Argon2id verify → random 32-byte session id in an `examen_session` cookie (`HttpOnly`, `SameSite=Lax`, `Secure` when served over HTTPS, `Path=/`). Bearer personal access tokens for `/mcp` |
-| `CognitoAuthProvider` | AWS | Hosted UI / OAuth code flow; the backend validates the Cognito JWT (JWKS cache) from a cookie (dashboard) or `Authorization: Bearer` (Alexa, MCP clients) and maps `sub` → `users.external_sub` |
+| `CognitoAuthProvider` | AWS | Hosted UI / OAuth code flow; the backend validates the Cognito JWT (JWKS cache) from a cookie (dashboard) or `Authorization: Bearer` (Alexa, MCP clients) and maps `sub` → `users.external_sub`. Self-registration becomes Cognito self sign-up (`/api/auth/signup` is not used) |
 
 Selected by `AUTH_PROVIDER=local|cognito`. Both resolve to the same `UserContext`.
 
 ### 2.2 Accounts
 
-- **Bootstrap:** on first start with an empty `users` table, `EXAMEN_BOOTSTRAP_ADMIN=<username>` creates an admin and prints a one-time password to the log (or reads `EXAMEN_BOOTSTRAP_ADMIN_PASSWORD`). Local dev uses the same path; there is no unauthenticated mode (D10).
-- **Further users:** created by an admin (`POST /api/admin/users`) with a one-time initial password, or by invitation link. Open self-registration is off (`AUTH_ALLOW_SIGNUP=false`).
-- **Password policy:** ≥ 12 characters; Argon2id (`argon2-cffi`); login rate limit 5 attempts / 15 min per username and per IP.
+- **Bootstrap admin:** at start-up, while **no admin exists**, `EXAMEN_BOOTSTRAP_ADMIN=<username>` creates an admin and prints a one-time password to the log (or reads `EXAMEN_BOOTSTRAP_ADMIN_PASSWORD`). If that username already belongs to a self-registered account, nothing happens and an error is logged: a registered user is never promoted, since anyone could have picked the name. The bootstrap runs before the server accepts requests, so on a fresh instance the name cannot be taken first. Local dev uses the same path; there is no unauthenticated mode (D10).
+- **Self-registration** (`AUTH_ALLOW_SIGNUP=true`, the default): the sign-in page has a *Create account* tab → `POST /api/auth/signup {username, password, display_name?}`. The new account is active, **never an admin** (any `is_admin` in the body is ignored), starts with an empty scoped store and is signed in right away (same cookie as the login, `201`). Limit: 5 accounts per IP per hour (`429`). `AUTH_ALLOW_SIGNUP=false` → `403 signup_disabled`, and the tab is hidden.
+- **Admin-created users:** an admin can still create accounts (`POST /api/admin/users`) with a one-time initial password, disable them or reset their password, including self-registered ones.
+- **Password policy:** ≥ 12 characters; Argon2id (`argon2-cffi`); login rate limit 5 attempts / 15 min per username and per IP. Usernames: 3–32 of `[A-Za-z0-9._-]`, unique case-insensitively.
 - **CSRF:** cookie-authenticated state-changing requests require the `X-Requested-With: examen` header (or a double-submit token). Bearer requests are exempt.
 
 ### 2.3 What disappears
@@ -93,7 +94,7 @@ Selected by `AUTH_PROVIDER=local|cognito`. Both resolve to the same `UserContext
 
 ## 3. Authorisation rules
 
-1. Every route except `/api/auth/login`, `/api/health` and static assets requires a `UserContext`.
+1. Every route except `/api/auth/login`, `/api/auth/signup`, `/api/auth/session`, `/api/health` and static assets requires a `UserContext`.
 2. A handler never receives a `user_id` from the client. It always uses `ctx.user_id`. Ids in paths (`/api/sessions/{id}`) are resolved **inside the user's scoped store**, so another user's id simply does not exist (`404`, never `403`, to avoid confirming existence).
 3. Admin routes (`/api/admin/*`) need `ctx.is_admin`. Admins **cannot** read other users' speech-derived data through the API; they manage accounts and Bee link status only.
 4. Background work runs with `UserContext(auth_method="system")` for the user that owns it ([03](03_tenant_isolation_and_runtime.md) §3).

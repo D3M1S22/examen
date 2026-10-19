@@ -36,9 +36,19 @@ MIN_PASSWORD_LENGTH = 12
 LOGIN_WINDOW_SECONDS = 15 * 60
 LOGIN_MAX_FAILURES_PER_USER = 5
 LOGIN_MAX_FAILURES_PER_IP = 20
+SIGNUP_WINDOW_SECONDS = 60 * 60
+SIGNUP_MAX_PER_IP = 5
+
+# Key prefix -> (max events, window in seconds) for the in-memory rate limiter
+_RATE_LIMITS = {
+    "user:": (LOGIN_MAX_FAILURES_PER_USER, LOGIN_WINDOW_SECONDS),
+    "ip:": (LOGIN_MAX_FAILURES_PER_IP, LOGIN_WINDOW_SECONDS),
+    "signup-ip:": (SIGNUP_MAX_PER_IP, SIGNUP_WINDOW_SECONDS),
+}
 
 # Paths reachable without a user (the dashboard bundle must load to show the sign-in form)
-PUBLIC_API_PATHS = {"/api/auth/login", "/api/auth/session", "/api/health"}
+SIGN_IN_PATHS = {"/api/auth/login", "/api/auth/signup"}
+PUBLIC_API_PATHS = SIGN_IN_PATHS | {"/api/auth/session", "/api/health"}
 
 _hasher = PasswordHasher()
 
@@ -66,7 +76,7 @@ class LocalAuthProvider:
     def __init__(self, store_getter=get_system_store, clock=time.time):
         self._store_getter = store_getter
         self.clock = clock
-        self._failures: Dict[str, List[float]] = {}
+        self._events: Dict[str, List[float]] = {}
         self._lock = threading.Lock()
 
     @property
@@ -107,9 +117,17 @@ class LocalAuthProvider:
         return True
 
     def ensure_bootstrap_admin(self) -> Optional[str]:
-        """First start with no users: creates ``EXAMEN_BOOTSTRAP_ADMIN``. Returns a generated password."""
+        """While no admin exists, creates ``EXAMEN_BOOTSTRAP_ADMIN``. Returns a generated password.
+
+        Self-registered users may exist before the variable is set; a registered user holding that
+        username is never promoted (anyone could have picked it).
+        """
         username = settings.examen_bootstrap_admin
-        if not username or self.store.count_users() > 0:
+        if not username or self.store.count_admins() > 0:
+            return None
+        if self.store.get_user_by_username(username.strip()):
+            logger.error(f"EXAMEN_BOOTSTRAP_ADMIN '{username}' is taken by a non-admin account: "
+                         "choose another name to create the admin")
             return None
         password = settings.examen_bootstrap_admin_password or secrets.token_urlsafe(12)
         self.create_user(username, password, is_admin=True)
@@ -125,18 +143,18 @@ class LocalAuthProvider:
         now = self.clock()
         with self._lock:
             for key in keys:
-                recent = [t for t in self._failures.get(key, []) if now - t < LOGIN_WINDOW_SECONDS]
-                self._failures[key] = recent
-                limit = LOGIN_MAX_FAILURES_PER_IP if key.startswith("ip:") else LOGIN_MAX_FAILURES_PER_USER
+                limit, window = next(v for prefix, v in _RATE_LIMITS.items() if key.startswith(prefix))
+                recent = [t for t in self._events.get(key, []) if now - t < window]
+                self._events[key] = recent
                 if len(recent) >= limit:
                     return True
         return False
 
-    def _record_failure(self, *keys: str) -> None:
+    def _record_event(self, *keys: str) -> None:
         now = self.clock()
         with self._lock:
             for key in keys:
-                self._failures.setdefault(key, []).append(now)
+                self._events.setdefault(key, []).append(now)
 
     def login(self, username: str, password: str, *, ip: str = "", user_agent: str = "") -> Tuple[UserAccount, str]:
         keys = (f"user:{(username or '').lower()}", f"ip:{ip}")
@@ -144,16 +162,34 @@ class LocalAuthProvider:
             raise AuthError("rate_limited", "Too many failed attempts, try again later", status=429)
         user = self.store.get_user_by_username((username or "").strip())
         if user is None or user.status != "active" or not self.verify_password(user.user_id, password):
-            self._record_failure(*keys)
+            self._record_event(*keys)
             if user is not None:
                 self.store.audit("login_failed", user_id=user.user_id, detail={"ip": ip})
             raise AuthError("invalid_credentials", "Invalid username or password", status=401)
+        return user, self._issue_session(user, ip=ip, user_agent=user_agent)
+
+    def signup(self, username: str, password: str, *, display_name: Optional[str] = None,
+               ip: str = "", user_agent: str = "") -> Tuple[UserAccount, str]:
+        """Self-registration (``AUTH_ALLOW_SIGNUP``): never an admin, signed in right away."""
+        if not settings.auth_allow_signup:
+            raise AuthError("signup_disabled", "Registration is closed: ask an administrator for an account",
+                            status=403)
+        key = f"signup-ip:{ip}"
+        if self._rate_limited(key):
+            raise AuthError("rate_limited", "Too many accounts created from this address, try again later",
+                            status=429)
+        user = self.create_user(username, password, display_name=(display_name or "").strip()[:60] or None)
+        self._record_event(key)
+        self.store.audit("user_signup", user_id=user.user_id, detail={"ip": ip})
+        return user, self._issue_session(user, ip=ip, user_agent=user_agent)
+
+    def _issue_session(self, user: UserAccount, *, ip: str, user_agent: str) -> str:
         token = secrets.token_urlsafe(32)
         expires = datetime.now() + timedelta(days=settings.auth_session_days)
         self.store.create_session(secret_hash(token), user.user_id, expires.isoformat(), user_agent)
         self.store.update_user(user.user_id, last_login_at=datetime.now().isoformat())
         self.store.audit("login", user_id=user.user_id, detail={"ip": ip})
-        return user, token
+        return token
 
     def authenticate_session(self, token: str) -> Optional[UserContext]:
         if not token:
@@ -283,7 +319,7 @@ class AuthMiddleware:
             ctx = provider.authenticate_session(session_token_from_scope(scope))
             if ctx is not None and method not in ("GET", "HEAD", "OPTIONS") \
                     and _header(scope, CSRF_HEADER.encode()).lower() != CSRF_VALUE:
-                if is_protected_path(path) or path == "/api/auth/login":
+                if is_protected_path(path) or path in SIGN_IN_PATHS:
                     return await _send_json(send, 403, {"error": "csrf", "message": f"Missing {CSRF_HEADER} header"})
 
         if ctx is None and method != "OPTIONS" and is_protected_path(path):
