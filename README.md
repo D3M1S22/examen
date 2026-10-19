@@ -156,6 +156,7 @@ Detailed technical, architectural, and operational documentation is organized ac
 * 📄 [06_aws_cloud_deployment_architecture.md](docs/06_aws_cloud_deployment_architecture.md): AWS Cloud deployment architecture (AgentCore Runtime, AgentCore Memory, S3, DynamoDB, Alexa+ MCP, CloudFront).
 * 📄 [07_repository_structure_modules.md](docs/07_repository_structure_modules.md): Detailed repository layout, modular monorepo mapping by deployment target, and developer quickstart.
 * 📄 [08_real_telemetry_and_bee_hardware_spec.md](docs/08_real_telemetry_and_bee_hardware_spec.md): Real hardware telemetry integration, Bee Wearable CLI capabilities, latency tracking architecture, and sector-by-sector frontend data contracts.
+* 🏠 [11_homelab_test_deployment.md](docs/11_homelab_test_deployment.md): Single-LXC test deployment on the homelab (before AWS): service layout, redeploy script, Bee login on the server.
 * 🐝 [10_bee_cli_reference.md](docs/10_bee_cli_reference.md): Observed bee-cli / Bee API contract (commands, payloads, timestamps, stream events, conversation lifecycle, locations) and the conformance audit of the EXAMEN code.
 * 🚀 [ROADMAP.md](docs/next_steps/ROADMAP.md): Evolution Roadmap, pipeline refinements status dashboard, and execution plan for Next Steps.
 * 🧠 [deep_topic_event_engine/](docs/next_steps/deep_topic_event_engine/00_overview.md): Deep Topic Event Engine specification, state machine, topic continuity calibration, synthesis scheduling, serving/UI and test plan.

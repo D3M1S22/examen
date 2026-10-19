@@ -1,0 +1,26 @@
+# EXAMEN on a single Linux host (LXC / VM): FastMCP server + dashboard + Bee live ingestion.
+# Installed by deploy/homelab/deploy.sh as /etc/systemd/system/examen.service.
+[Unit]
+Description=EXAMEN ambient knowledge engine (FastMCP, dashboard, Bee ingestion)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=examen
+Group=examen
+WorkingDirectory=/opt/examen
+# MCP_HOST / MCP_PORT and the AWS credentials come from /opt/examen/.env (read by pydantic-settings)
+Environment=PYTHONUNBUFFERED=1
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart=/opt/examen/.venv/bin/python -m src.serving.mcp_server
+Restart=on-failure
+RestartSec=5
+# The Bee token lives in /var/lib/examen/.bee (the service user's home); data in /opt/examen/examen.db
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/opt/examen /var/lib/examen
+
+[Install]
+WantedBy=multi-user.target

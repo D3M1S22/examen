@@ -229,3 +229,36 @@ def test_semantic_zone_uses_whole_words(address, zone):
     from src.core.schemas import LocationTelemetry
 
     assert LocationTelemetry(latitude=45.0, longitude=7.6, place_name=address).semantic_zone == zone
+
+
+async def test_proxy_is_retried_after_the_cli_fallback_period(monkeypatch, tmp_path):
+    from src.ingestion import stream_convo
+
+    script = tmp_path / "fake_bee_stream.py"
+    script.write_text("import json\nprint(json.dumps(%r))\n" % (NEW_UTTERANCE,))
+    client = BeeClient(transport="proxy")
+    attempts = []
+
+    async def broken_proxy():
+        attempts.append("proxy")
+        raise BeeProxyError("not logged in")
+
+    monkeypatch.setattr(client.proxy, "ensure_running", broken_proxy)
+    monkeypatch.setattr(client, "_build_cmd", lambda args: [sys.executable, str(script)])
+    clock = [1_000_000.0]
+    monkeypatch.setattr(stream_convo.time, "time", lambda: clock[0])
+
+    async def no_sleep(_):
+        return None
+
+    client._sleep = no_sleep
+    seen = 0
+    async for ev in client.stream_events():
+        if ev["event"] == "new-utterance":
+            seen += 1
+            assert len(attempts) == 3 * seen  # each CLI period starts after 3 failed proxy attempts
+            if seen == 2:
+                break
+            clock[0] += stream_convo.PROXY_RETRY_AFTER_SECONDS  # fallback period elapses
+    await client.aclose()
+    assert len(attempts) == 6

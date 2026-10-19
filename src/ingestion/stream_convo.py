@@ -19,6 +19,7 @@ import os
 import platform
 import re
 import shutil
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Tuple
@@ -28,6 +29,8 @@ from src.ingestion.debug import Debug
 
 # Consecutive proxy failures after which the stream falls back to `bee stream --json`
 PROXY_MAX_FAILURES = 3
+# While on the CLI fallback, the proxy transport is tried again after this long
+PROXY_RETRY_AFTER_SECONDS = 600.0
 PROXY_START_TIMEOUT_SECONDS = 15.0
 # Bun caps `bee proxy --idle-timeout` at 255 s; pings (30 s) keep the stream below it
 PROXY_IDLE_TIMEOUT_SECONDS = 255
@@ -459,8 +462,11 @@ class BeeClient(Debug):
         """
         retry_delay = 1
         proxy_failures = 0
+        fallback_since: Optional[float] = None
 
         while True:
+            if fallback_since is not None and time.time() - fallback_since >= PROXY_RETRY_AFTER_SECONDS:
+                proxy_failures, fallback_since = 0, None  # give the proxy another chance
             use_proxy = self.transport == "proxy" and proxy_failures < PROXY_MAX_FAILURES
             self.active_transport = "proxy" if use_proxy else "cli"
             disconnect_reason = "spawn_failed"
@@ -498,6 +504,9 @@ class BeeClient(Debug):
                     proxy_failures += 1
                 self.debug(f"Connection error: {e}")
                 disconnect_reason = f"error: {e}"
+            if use_proxy and proxy_failures >= PROXY_MAX_FAILURES and fallback_since is None:
+                fallback_since = time.time()
+                self.debug(f"Falling back to `bee stream --json` for {PROXY_RETRY_AFTER_SECONDS:g}s")
 
             await self._reap_cli_process()
             yield {"event": "stream-disconnected", "data": {"reason": disconnect_reason}}

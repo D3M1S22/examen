@@ -78,7 +78,7 @@
 
 1. `.venv/bin/pytest tests/ -q` green after every phase.
 2. Real device, ingestion only: a capture started **before** speaking (to observe `new-conversation` / `update-conversation`), replayed locally through the new parser.
-3. End-to-end with Bedrock: the scripted dialogue of [historical_backfill/06](historical_backfill/06_phase0_device_spike.md) §3.1 through `python -m src.serving.mcp_server`:
+3. End-to-end with Bedrock on the homelab test instance ([11_homelab_test_deployment.md](../11_homelab_test_deployment.md)): the scripted dialogue of [historical_backfill/06](historical_backfill/06_phase0_device_spike.md) §3.1 through `python -m src.serving.mcp_server`:
    - `STREAMING` status, heartbeat advancing every ~30 s, `has_location: true`;
    - the wearer's sentences tagged `speaker_role=user`, commitments with the right debtor;
    - a ~7-minute silence opens **no** coverage gap and the stream survives the proxy idle timeout;
