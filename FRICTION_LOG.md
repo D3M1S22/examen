@@ -84,3 +84,11 @@ Whenever a friction point or roadblock is encountered during development, docume
   4. `BeeClient.get_location` called `bee location current`, but the CLI command is `bee locations current`.
 * **Workaround / Resolution:** EXAMEN now keeps a per-utterance ingest ledger (noop included) and live coverage intervals. Live rows are matched **one-to-one** against the REST *realtime* transcription (exact hash first, fuzzy second), turned into "seen" time spans, and only final-transcription utterances outside those spans are replayed, on an isolated virtual-clock Event Engine. The CLI command was fixed.
 * **Platform Feedback:** Emit the REST utterance `id`, `spoken_at` and numeric `conversation_id` in `new-utterance`, support `Last-Event-ID` resume on `/v1/stream`, expose a `from`/`to` filter on `bee conversations list`, and document the conversation `state` values and when the final transcription replaces the realtime one.
+
+### [2026-10-19] - Bee CLI / Local build from the submodule
+* **Context:** Preparing the Phase 0 device spike (`docs/next_steps/historical_backfill/06_phase0_device_spike.md`) on a fresh Linux checkout.
+* **Friction Encountered:**
+  1. `resources/bee-cli` ships no binary: `bin/bee.js` only launches `dist/platforms/<os>-<arch>/bee`, which exists only in the npm package (`prepack` builds all five platforms). `bun run build` writes `dist/bee`, which is not where the launcher looks.
+  2. `bee stream --json` drops the SSE `event:` name and the SSE parser ignores comment pings, so the exact wire format can only be observed through `bee proxy` + a raw HTTP client.
+* **Workaround / Resolution:** Build only the host target into the launcher path (`bun build ./sources/main.ts --compile --target=bun-linux-x64 --outfile ./dist/platforms/linux-x64/bee`) and symlink it into `~/.local/bin`. `scripts/bee_spike.py capture` records `bee stream --json` and the raw `/v1/stream` frames through `bee proxy` in parallel.
+* **Platform Feedback:** Make `bun run build` output to the launcher path for the host platform (or let `bin/bee.js` fall back to `dist/bee`), and add a `--raw` / `--json-envelope` mode to `bee stream` that keeps event names and pings.

@@ -96,6 +96,7 @@ backfill run                             [## replay 813(tail), 814, 815(head) ##
 | [03_backfill_engine.md](03_backfill_engine.md) | Planner, replay executor, isolated Event Engine, temporal guards, triggers (startup / reconnect / manual), concurrency with live, cost controls |
 | [04_data_model_api_ui.md](04_data_model_api_ui.md) | Pydantic & SQLite changes, REST endpoints, SSE events, MCP tool, Next.js UI |
 | [05_implementation_plan_and_testing.md](05_implementation_plan_and_testing.md) | Phased plan, test matrix, acceptance criteria, pre-existing issues found during analysis, open questions |
+| [06_phase0_device_spike.md](06_phase0_device_spike.md) | Phase 0 runbook with the physical Bee: environment, `scripts/bee_spike.py` procedure, results table (V0–V6), settings to calibrate |
 
 ---
 

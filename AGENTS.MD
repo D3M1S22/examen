@@ -166,6 +166,17 @@ Always verify that test suites pass before concluding any task:
 # Listens on http://0.0.0.0:8000/mcp (Streamable HTTP transport)
 ```
 
+### Bee CLI & Physical Device Testing
+```bash
+git submodule update --init resources/bee-cli
+cd resources/bee-cli && bun install && \
+  bun build ./sources/main.ts --compile --target=bun-linux-x64 --outfile ./dist/platforms/linux-x64/bee
+ln -sf "$PWD/dist/platforms/linux-x64/bee" ~/.local/bin/bee   # optional: `bee` on PATH
+bee login                                                     # approve in the Bee app (Developer Mode)
+python scripts/bee_spike.py check                             # Phase 0 spike tool, raw data in .bee-spike/
+```
+Runbook and results: `docs/next_steps/historical_backfill/06_phase0_device_spike.md`.
+
 ### Running the Synthetic Conversational Feeder (For Demos & Testing)
 ```bash
 .venv/bin/python -m src.ingestion.mock_feeder

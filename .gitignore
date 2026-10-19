@@ -32,6 +32,8 @@ htmlcov/
 
 #bee
 bee-sync/
+# Raw Bee device captures (personal speech): scripts/bee_spike.py
+.bee-spike/
 
 **/node_modules/
 **/.next/
