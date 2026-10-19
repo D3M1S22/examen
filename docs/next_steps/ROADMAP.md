@@ -298,6 +298,10 @@
 * [x] **Phase 0 device verification** (2026-10-19, Apple Watch): results in [HTB 06](historical_backfill/06_phase0_device_spike.md) §5.
 * [ ] **Open:** Phase 6 optimisations (proxy transport, window screening). Status and deviations: [HTB 05 §0](historical_backfill/05_implementation_plan_and_testing.md).
 
+### Phase 7: Multi-User Support (SPECIFIED, not implemented)
+> **Goal:** several people, each with their own Bee account, on one deployment: real authentication, per-user data isolation, per-user live ingestion and backfill, per-user privacy operations.
+> **Specification:** [multi_user/](multi_user/00_overview.md) (decisions D1–D10 to confirm).
+
 ### Phase 6: Bee Data Alignment (IN PROGRESS)
 > **Goal:** make every consumer of Bee data follow the observed contract ([10_bee_cli_reference.md](../10_bee_cli_reference.md)): live location, speaker identity, stream liveness, backfill durations.
 > **Plan & status:** [07_bee_data_alignment.md](07_bee_data_alignment.md).

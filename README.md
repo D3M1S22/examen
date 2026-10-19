@@ -161,6 +161,7 @@ Detailed technical, architectural, and operational documentation is organized ac
 * 🚀 [ROADMAP.md](docs/next_steps/ROADMAP.md): Evolution Roadmap, pipeline refinements status dashboard, and execution plan for Next Steps.
 * 🧠 [deep_topic_event_engine/](docs/next_steps/deep_topic_event_engine/00_overview.md): Deep Topic Event Engine specification, state machine, topic continuity calibration, synthesis scheduling, serving/UI and test plan.
 * ⏪ [historical_backfill/](docs/next_steps/historical_backfill/00_overview.md): Historical Transcript Backfill specification: coverage ledger, gap detection, live/backfill de-duplication, virtual-clock replay, auto catch-up and the History Sync UI.
+* 👥 [multi_user/](docs/next_steps/multi_user/00_overview.md): Multi-user specification: authentication, one Bee account per user, per-user data isolation and ingestion runtime, MCP/Alexa auth, local vs AWS mapping.
 * 🐝 [07_bee_data_alignment.md](docs/next_steps/07_bee_data_alignment.md): Fix plan and status for aligning EXAMEN with the observed Bee data (location, speaker identity, stream liveness, backfill durations).
 
 ---
