@@ -4,14 +4,31 @@
 
 ---
 
-## 0. Status
+## 0. Status (2026-10-19, branch `sessions`)
 
-| Phase | Status |
-|---|---|
-| 0 Verifications | ⏳ Not started |
-| 1–6 | ⏳ Not started (specification only; decisions D1–D10 of [00](00_overview.md) §3 to confirm) |
+| Phase | Status | Code |
+|---|---|---|
+| 0 Verifications | ⏳ MU-V1…V5 need a logged-in Bee account (and a second account for V4) | — |
+| 1 Identity core | ✅ Done | [identity.py](../../../src/core/identity.py), [system_store.py](../../../src/core/storage/system_store.py), [auth.py](../../../src/serving/auth.py) |
+| 2 Scoped storage | ✅ Done | [storage/__init__.py](../../../src/core/storage/__init__.py) (`StoreRegistry`), [migrate_to_multi_user.py](../../../scripts/migrate_to_multi_user.py) |
+| 3 Per-user Bee & runtime | ✅ Done | [user_runtime.py](../../../src/serving/user_runtime.py), [bee_accounts.py](../../../src/serving/bee_accounts.py), `BeeClient(config_dir=…)`, per-user registries in `event_engine.py`, `backfill.py`, `bee_identity.py`; [limits.py](../../../src/core/limits.py) |
+| 4 Pipeline & MCP | ✅ Done | `agent_invocation` runs as the payload user; MCP tools run as the bearer token's user |
+| 5 Dashboard | ✅ Done | [LoginModal.tsx](../../../src/web_ui/src/components/ui/LoginModal.tsx) (sign-in, Bee link, tokens, password, admin), [auth.ts](../../../src/web_ui/src/utils/auth.ts), [page.tsx](../../../src/web_ui/src/app/page.tsx) |
+| 6 Homelab rollout | 🟡 Code and docs ready ([11](../../11_homelab_test_deployment.md) §6); applied when `sessions` is merged into `main` | `deploy/homelab/*` |
+| 7 AWS providers | ⏳ Later | — |
 
----
+Tests: [tests/test_multi_user.py](../../../tests/test_multi_user.py) (T-MU-1…13 except V-items), `src/web_ui/src/utils/auth.test.ts`; the existing suite runs as `TEST_USER_ID` through `tests/conftest.py` (`login_client` for HTTP tests). A local smoke test over real HTTP (bootstrap admin, second user, isolation, SSE, PAT, logout) passed.
+
+### 0.1 Deviations from the specification
+
+| Spec | Implementation | Reason |
+|---|---|---|
+| Delete `get_storage_store()` (03 §1, phase 2.2) | Kept, but it now returns the store of the user in `current_user_ctx` and raises `MissingUserContext` without one (`user_id=` for explicit access) | Same fail-closed isolation with no change to the 49 call sites; background tasks inherit the context (`create_task` / `to_thread` copy contextvars, verified) |
+| FastMCP `token_verifier` + `AuthSettings` (04 §3) | `AuthMiddleware` authenticates `/mcp` bearer tokens and sets `current_user_ctx`; tools read the store from it | Verified that the MCP SDK runs tool calls in the context of the HTTP request carrying them (stateful and stateless); `AuthSettings` needs an OAuth issuer, which only exists on AWS (Cognito, phase 7) |
+| `/api/admin/users/{id}/disable` | `/api/admin/users/{id}/status` (`active` / `disabled`) + `/reset-password` (Q4) | One endpoint for both directions |
+| Per-user daily LLM budget (Q5) | Not enforced; global `MAX_CONCURRENT_LLM_CALLS` semaphore and the existing per-run backfill budget | Kept small for v1 |
+| Bee token migrated by the script | Link state `invalid` until the owner opens *Connect Bee* (or `GET /api/bee/link`), which verifies it with `bee me` | The script runs offline and must not call Bee |
+| Test seam | `storage._store_instance` pins one store for every user | Lets the pre-multi-user tests run unchanged; never set in production |
 
 ## 1. Phases
 

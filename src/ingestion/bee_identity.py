@@ -8,7 +8,7 @@ is a person's first name or "Unknown". Both are compared with the account owner'
 
 import logging
 import time
-from typing import Literal, Optional
+from typing import Dict, Literal, Optional
 
 from src.core.config import settings
 
@@ -33,11 +33,12 @@ def role_for_person(name: Optional[str], wearer_first_name: Optional[str]) -> Sp
 
 
 class WearerIdentity:
-    """Caches the wearer's first name (``BEE_WEARER_NAME`` or `bee me --json` → ``first_name``)."""
+    """Caches the wearer's first name (``BEE_WEARER_NAME``, the user's Bee link, or `bee me --json`)."""
 
-    def __init__(self, first_name: Optional[str] = None):
+    def __init__(self, first_name: Optional[str] = None, bee_config_dir: Optional[str] = None):
         configured = first_name if first_name is not None else settings.bee_wearer_name
         self.first_name: Optional[str] = (configured or "").strip() or None
+        self.bee_config_dir = bee_config_dir
         self._last_attempt: float = 0.0
 
     async def ensure_loaded(self) -> Optional[str]:
@@ -46,7 +47,7 @@ class WearerIdentity:
         self._last_attempt = time.time()
         from src.ingestion.stream_convo import BeeClient
 
-        profile = await BeeClient().run_json(["me"])
+        profile = await BeeClient(config_dir=self.bee_config_dir).run_json(["me"])
         name = ((profile or {}).get("first_name") or "").strip()
         if name:
             self.first_name = name
@@ -58,11 +59,27 @@ class WearerIdentity:
         return role_for_person(name, self.first_name)
 
 
-_identity: Optional[WearerIdentity] = None
+# One wearer identity per user (docs/next_steps/multi_user/02 §4.3)
+_identities: Dict[str, WearerIdentity] = {}
 
 
-def get_wearer_identity() -> WearerIdentity:
-    global _identity
-    if _identity is None:
-        _identity = WearerIdentity()
-    return _identity
+def get_wearer_identity(user_id: Optional[str] = None) -> WearerIdentity:
+    """Wearer of ``user_id`` (default: the user in the current context), from their Bee link."""
+    if not user_id:
+        from src.core.identity import require_user
+
+        user_id = require_user().user_id
+    identity = _identities.get(user_id)
+    if identity is None:
+        from src.core.storage import get_store_registry
+
+        registry = get_store_registry()
+        link = registry.system().get_bee_link(user_id)
+        identity = WearerIdentity(first_name=link.bee_first_name or settings.bee_wearer_name,
+                                  bee_config_dir=str(registry.bee_config_dir(user_id)))
+        _identities[user_id] = identity
+    return identity
+
+
+def forget_wearer_identity(user_id: str) -> None:
+    _identities.pop(user_id, None)

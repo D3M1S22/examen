@@ -8,6 +8,8 @@ import tempfile
 from datetime import datetime
 
 import pytest
+
+from tests.conftest import TEST_USER_ID, login_client
 from starlette.testclient import TestClient
 
 from src.core.schemas import BriefingReport, ChunkClassification, MicroEventRef, UtteranceChunk
@@ -220,16 +222,15 @@ def api(monkeypatch):
                       clock=lambda: clock["now"], synthesizer=CountingSynth())
     runtime = EventEngineRuntime(eng)
     monkeypatch.setattr(runtime, "ensure_started", lambda: True)
-    monkeypatch.setattr(engine_mod, "_engine", eng)
-    monkeypatch.setattr(engine_mod, "_runtime", runtime)
-    monkeypatch.setattr(server_mod, "_engine_listener_registered", False)
+    monkeypatch.setitem(engine_mod._engines, TEST_USER_ID, eng)
+    monkeypatch.setitem(engine_mod._runtimes, TEST_USER_ID, runtime)
     monkeypatch.setattr(server_mod, "agent_invocation", lambda payload: {"status": "ok", "categories": payload.get("categories")})
 
     async def _classify(transcript, active_tasks=None, prior_context=None):
         return ChunkClassification(categories=["noop"], confidence=0.9, summary_hint="")
     monkeypatch.setattr("src.ingestion.gatekeeper.aclassify_chunk", _classify)
 
-    client = TestClient(server_mod.create_app())
+    client = login_client(TestClient(server_mod.create_app()))
     yield client, eng, temp_store
     if os.path.exists(db_path):
         os.remove(db_path)

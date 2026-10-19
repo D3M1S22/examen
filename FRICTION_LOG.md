@@ -120,3 +120,12 @@ Whenever a friction point or roadblock is encountered during development, docume
   2. Running the test suite while logged in to Bee logged the developer out: the auth endpoint tests (`bee-disconnect`, GDPR purge) call the real `bee logout` on the host.
 * **Workaround / Resolution:** The private proxy runs on 127.0.0.1 (first free port from 8787, parsed from `Proxy listening on …`). `tests/conftest.py` replaces the Bee binary with a failing stub for every test.
 * **Platform Feedback:** Honour `--idle-timeout` on `--socket` proxies, and document the per-connection idle behaviour for long-lived SSE through `bee proxy`.
+
+### [2026-10-19] - Multi-user: SSE auth, MCP context propagation, Bee keychain
+* **Context:** Making one EXAMEN instance serve several users, each with their own Bee account (`docs/next_steps/multi_user/`).
+* **Friction Encountered:**
+  1. The browser `EventSource` API cannot send custom headers, so the old `x-user-id` scheme could never authenticate `/api/events`.
+  2. It was unclear whether a `ContextVar` set by an ASGI middleware reaches FastMCP tool functions, which run inside the session manager's task group.
+  3. bee-cli supports `BEE_CONFIG_DIR`, but with an OS keychain it stores the token under a fixed entry (`bee-cli` / `token:<env>`), so separate directories alone would still share one token.
+* **Workaround / Resolution:** HttpOnly session cookies (sent by `EventSource`, `withCredentials` for the dev server) plus a CSRF header on state-changing requests. A probe showed that the MCP SDK runs each tool call in the context of the HTTP request carrying it (stateful and stateless), so one `AuthMiddleware` covers REST, SSE and `/mcp`. Every Bee subprocess runs with `BEE_CONFIG_DIR=<user dir>` and `BEE_FORCE_FILE_STORE=1`.
+* **Platform Feedback:** bee-cli could namespace keychain entries by config dir (or account), and the MCP SDK docs could state explicitly that request contextvars propagate into tool calls.

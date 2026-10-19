@@ -192,7 +192,7 @@ class CliBeeHistorySource:
     async def _run_json(self, args: List[str]) -> Dict[str, Any]:
         cmd = self.client._build_cmd(args)
         process = await asyncio.create_subprocess_exec(
-            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=self.client.subprocess_env(),
         )
         try:
             stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=self.timeout_seconds)

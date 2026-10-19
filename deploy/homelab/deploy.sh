@@ -64,5 +64,4 @@ ssh "$HOST" 'set -e
   systemctl restart examen
   sleep 4
   systemctl is-active examen
-  curl -fsS http://127.0.0.1:8000/api/orchestrator/status | head -c 300; echo
-  sudo -u examen -H bee status | tail -1'
+  curl -fsS http://127.0.0.1:8000/api/health; echo'

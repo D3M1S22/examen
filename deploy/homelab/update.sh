@@ -13,7 +13,7 @@ set -euo pipefail
 
 APP_DIR="${EXAMEN_APP_DIR:-/opt/examen}"
 BRANCH="${EXAMEN_BRANCH:-main}"
-HEALTH_URL="${EXAMEN_HEALTH_URL:-http://127.0.0.1:8000/api/status}"
+HEALTH_URL="${EXAMEN_HEALTH_URL:-http://127.0.0.1:8000/api/health}"  # unauthenticated liveness probe
 
 as_app() { (cd "$APP_DIR" && sudo -u examen -H "$@"); }
 

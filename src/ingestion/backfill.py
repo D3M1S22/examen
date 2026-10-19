@@ -22,6 +22,8 @@ from datetime import datetime, timedelta
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Set, Tuple
 
 from src.core.config import settings
+from src.core.identity import require_user
+from src.core.limits import llm_slot
 from src.core.schemas import (
     BackfillEstimate,
     BackfillPlan,
@@ -102,7 +104,9 @@ class PlanResult:
 
 
 def speaker_role_for(speaker: Optional[str]) -> str:
-    """REST speakers are first names or "Unknown": the wearer's name ⇒ user (docs/10 §8)."""
+    """REST speakers are first names or "Unknown": the wearer's name ⇒ user (docs/10 §8).
+
+    Uses the wearer of the user in the current context (each user's runtime runs as that user)."""
     return get_wearer_identity().role_for(speaker)
 
 
@@ -530,11 +534,12 @@ class ReplayExecutor:
             prior = "\n".join(p for p in (prior, hint) if p)
         active = tasks_active_at(tasks, item.ts)
         try:
-            return await self.classify(
-                transcript=item.utterance.text,
-                active_tasks=active or None,
-                prior_context=prior or None,
-            )
+            async with llm_slot():  # shared with live ingestion of every user
+                return await self.classify(
+                    transcript=item.utterance.text,
+                    active_tasks=active or None,
+                    prior_context=prior or None,
+                )
         except Exception as e:
             logger.warning(f"Backfill screening failed for {item.source_key}: {e}")
             return None
@@ -683,9 +688,11 @@ class ReplayExecutor:
                     "source_key": item.source_key,
                     "ingest_source": "backfill",
                     "ingest_run_id": run.id,
+                    "user_id": require_user().user_id,
                 }
                 try:
-                    result = await asyncio.to_thread(self.dispatch, payload)
+                    async with llm_slot():
+                        result = await asyncio.to_thread(self.dispatch, payload)
                 except Exception as e:
                     logger.warning(f"Backfill dispatch failed for {item.source_key}: {e}")
                     result = {"status": "error"}
@@ -1187,11 +1194,25 @@ class BackfillService:
         return run
 
 
-_service: Optional[BackfillService] = None
+# One backfill service per user (docs/next_steps/multi_user/03 §3)
+_services: Dict[str, BackfillService] = {}
 
 
-def get_backfill_service() -> BackfillService:
-    global _service
-    if _service is None:
-        _service = BackfillService()
-    return _service
+def get_backfill_service(user_id: Optional[str] = None) -> BackfillService:
+    """The backfill service of ``user_id`` (default: the user in the current context)."""
+    if not user_id:
+        from src.core.identity import require_user
+
+        user_id = require_user().user_id
+    service = _services.get(user_id)
+    if service is None:
+        uid = user_id
+        service = BackfillService(store_getter=lambda: get_storage_store(user_id=uid))
+        _services[uid] = service
+    return service
+
+
+def drop_backfill_service(user_id: str) -> None:
+    service = _services.pop(user_id, None)
+    if service is not None:
+        service.stop()

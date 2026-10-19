@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useRef, useEffect } from "react";
-import { DemoUser } from "@/types/schemas";
+import { SessionUser } from "@/types/schemas";
 import { exportUserDataJson } from "@/utils/auth";
 
 interface SystemBarProps {
@@ -11,7 +11,7 @@ interface SystemBarProps {
   onOpenEchoModal?: () => void;
   sseConnected?: boolean;
   statusData?: any;
-  currentUser?: DemoUser | null;
+  currentUser?: SessionUser | null;
   onOpenLoginModal?: () => void;
   onLogout?: () => void;
   onPurgeData?: () => void;

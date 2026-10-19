@@ -761,4 +761,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    from src.core.cli import ephemeral_user_context
+
+    with ephemeral_user_context():  # isolated temporary store; the pipeline needs a user
+        main()

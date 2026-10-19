@@ -1,29 +1,334 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
-import { DemoUser, BeePairingInfo } from "@/types/schemas";
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import { AccountToken, AdminUser, BeeLinkInfo, SessionUser } from "@/types/schemas";
 import {
-  loginUser,
-  fetchBeeLink,
-  getSavedUsers,
-  fetchBackendUsers,
-  purgeUserData,
+  changePassword,
+  createToken,
+  createUser,
+  fetchSession,
+  listTokens,
+  listUsers,
+  login,
+  logoutEverywhere,
+  refreshBeeLink,
+  resetUserPassword,
+  revokeToken,
+  setUserStatus,
+  startBeePairing,
+  unlinkBee,
 } from "@/utils/auth";
 
 interface LoginModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onLoginSuccess: (user: DemoUser) => void;
-  currentUser?: DemoUser | null;
+  onLoginSuccess: (user: SessionUser) => void;
+  currentUser?: SessionUser | null;
   initialConnectBee?: boolean;
   onLogout?: () => void;
+  /** Signed out: the sign-in form cannot be dismissed. */
+  mandatory?: boolean;
+  /** Called when the Bee link or the account changed (refresh the session in the page). */
+  onSessionChanged?: (user: SessionUser | null) => void;
 }
 
-const PRESET_HANDLES = [
-  "Alex • Product Lead",
-  "Sam • Security Researcher",
-  "Morgan • Systems Architect",
-];
+const inputClass =
+  "w-full px-3.5 py-2.5 rounded-xl bg-black/50 border border-white/15 text-white font-mono text-xs focus:outline-none focus:border-cyan-400 transition-colors";
+const buttonClass =
+  "px-3.5 py-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-zinc-200 font-mono text-xs transition-colors cursor-pointer disabled:opacity-50";
+const primaryClass =
+  "px-5 py-2.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-zinc-950 font-sans font-semibold text-xs transition-all shadow-[0_0_15px_rgba(34,211,238,0.4)] disabled:opacity-50 flex items-center gap-2 cursor-pointer";
+const sectionClass = "p-4 rounded-xl bg-zinc-900/60 border border-white/10 space-y-3";
+const sectionTitle = "font-mono text-[10px] uppercase tracking-wider font-bold text-zinc-300";
+
+const STATE_BADGE: Record<string, string> = {
+  linked: "bg-emerald-950/60 border-emerald-500/40 text-emerald-300",
+  pairing: "bg-amber-950/60 border-amber-500/40 text-amber-300",
+  invalid: "bg-red-950/60 border-red-500/40 text-red-300",
+  unlinked: "bg-zinc-900 border-white/10 text-zinc-400",
+};
+
+function SignInForm({ onLoginSuccess }: { onLoginSuccess: (user: SessionUser) => void }) {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setError(null);
+    try {
+      onLoginSuccess(await login(username, password));
+    } catch (err: any) {
+      setError(err?.message || "Sign-in failed");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <form onSubmit={submit} className="space-y-4">
+      {error && (
+        <div className="p-3 rounded-xl bg-red-950/60 border border-red-500/40 text-red-300 font-mono text-xs">⚠️ {error}</div>
+      )}
+      <div className="space-y-2">
+        <label htmlFor="login-username" className="block text-xs font-mono font-semibold uppercase tracking-wider text-zinc-300">
+          Username
+        </label>
+        <input id="login-username" autoComplete="username" value={username} onChange={(e) => setUsername(e.target.value)}
+          required className={inputClass} />
+      </div>
+      <div className="space-y-2">
+        <label htmlFor="login-password" className="block text-xs font-mono font-semibold uppercase tracking-wider text-zinc-300">
+          Password
+        </label>
+        <input id="login-password" type="password" autoComplete="current-password" value={password}
+          onChange={(e) => setPassword(e.target.value)} required className={inputClass} />
+      </div>
+      <p className="text-[11px] text-zinc-400 leading-relaxed">
+        Each EXAMEN account links its own Bee device. Your data is never visible to other users. Accounts are
+        created by an administrator.
+      </p>
+      <div className="flex justify-end">
+        <button type="submit" disabled={loading || !username || !password} className={primaryClass}>
+          {loading && <span className="animate-spin text-xs">↻</span>}
+          <span>Sign in</span>
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function BeeLinkSection({ initialLink, autoStart, onChanged }: {
+  initialLink: BeeLinkInfo | null;
+  autoStart: boolean;
+  onChanged: () => void;
+}) {
+  const [link, setLink] = useState<BeeLinkInfo | null>(initialLink);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const started = useRef(false);
+  const state = link?.state || "unlinked";
+
+  const run = useCallback(async (action: () => Promise<BeeLinkInfo>) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const next = await action();
+      setLink(next);
+      if (next.state === "linked" || next.state === "unlinked") onChanged();
+    } catch (err: any) {
+      setError(err?.message || "Bee request failed");
+    } finally {
+      setBusy(false);
+    }
+  }, [onChanged]);
+
+  useEffect(() => {
+    if (autoStart && !started.current && state !== "linked" && state !== "pairing") {
+      started.current = true;
+      run(startBeePairing);
+    }
+  }, [autoStart, state, run]);
+
+  // While pairing, poll until the Bee app approves (or the request expires)
+  useEffect(() => {
+    if (state !== "pairing") return;
+    const timer = setInterval(async () => {
+      try {
+        const next = await refreshBeeLink();
+        setLink(next);
+        if (next.state !== "pairing") onChanged();
+      } catch (err: any) {
+        setError(err?.message || "Bee check failed");
+      }
+    }, 3000);
+    return () => clearInterval(timer);
+  }, [state, onChanged]);
+
+  return (
+    <div className={sectionClass}>
+      <div className="flex items-center justify-between">
+        <span className={sectionTitle}>🐝 Your Bee account</span>
+        <span className={`font-mono text-[10px] px-2 py-0.5 rounded border uppercase font-bold ${STATE_BADGE[state]}`}>{state}</span>
+      </div>
+      {error && <div className="text-red-300 font-mono text-[11px]">⚠️ {error}</div>}
+      {link?.last_error && state !== "linked" && <div className="text-amber-300 font-mono text-[11px]">{link.last_error}</div>}
+
+      {state === "linked" && (
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-xs text-zinc-200">
+            Linked as <strong className="text-white">{link?.bee_first_name || "Bee user"}</strong>: live ingestion runs for your account only.
+          </span>
+          <button type="button" disabled={busy} className={buttonClass} onClick={() => {
+            if (confirm("Disconnect your Bee account? Live ingestion stops; your data is kept.")) run(unlinkBee);
+          }}>
+            Disconnect Bee
+          </button>
+        </div>
+      )}
+
+      {state === "pairing" && link?.pairing_url && (
+        <div className="space-y-2 text-xs">
+          <p className="text-zinc-300">Open this link and approve it in the Bee app (Developer Mode). Waiting for approval…</p>
+          <div className="p-2.5 rounded-lg bg-black/60 border border-cyan-500/30 font-mono text-[11px] text-cyan-300 flex items-center justify-between gap-2">
+            <a href={link.pairing_url} target="_blank" rel="noopener noreferrer" className="truncate underline underline-offset-2">
+              {link.pairing_url}
+            </a>
+            <button type="button" className="shrink-0 px-2.5 py-1 rounded bg-cyan-950/80 border border-cyan-500/40 text-[10px] uppercase"
+              onClick={() => {
+                navigator.clipboard?.writeText(link.pairing_url!);
+                setCopied(true);
+                setTimeout(() => setCopied(false), 2000);
+              }}>
+              {copied ? "Copied" : "Copy"}
+            </button>
+          </div>
+          {link.pairing_expires_at && (
+            <p className="text-[10px] text-zinc-500">Expires at {new Date(link.pairing_expires_at).toLocaleTimeString()}</p>
+          )}
+        </div>
+      )}
+
+      {(state === "unlinked" || state === "invalid") && (
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-xs text-zinc-400">Link your own Bee account to start ambient ingestion.</span>
+          <button type="button" disabled={busy} className={primaryClass} onClick={() => run(startBeePairing)}>
+            {busy && <span className="animate-spin text-xs">↻</span>}
+            <span>Connect Bee</span>
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TokensSection() {
+  const [tokens, setTokens] = useState<AccountToken[]>([]);
+  const [name, setName] = useState("");
+  const [created, setCreated] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(() => listTokens().then(setTokens).catch((e) => setError(e.message)), []);
+  useEffect(() => { load(); }, [load]);
+
+  return (
+    <div className={sectionClass}>
+      <span className={sectionTitle}>🔑 MCP access tokens (Alexa+, Claude, …)</span>
+      {error && <div className="text-red-300 font-mono text-[11px]">⚠️ {error}</div>}
+      {created && (
+        <div className="p-2.5 rounded-lg bg-emerald-950/40 border border-emerald-500/30 font-mono text-[11px] text-emerald-200 break-all">
+          Copy it now, it will not be shown again: <span className="select-all text-white">{created}</span>
+        </div>
+      )}
+      {tokens.map((t) => (
+        <div key={t.token_id} className="flex items-center justify-between text-xs text-zinc-300 font-mono">
+          <span>{t.name} <span className="text-zinc-500">· {t.last_used_at ? `used ${new Date(t.last_used_at).toLocaleString()}` : "never used"}</span></span>
+          <button type="button" className="text-red-400 hover:text-red-300" onClick={() => revokeToken(t.token_id).then(load)}>Revoke</button>
+        </div>
+      ))}
+      <form className="flex gap-2" onSubmit={async (e) => {
+        e.preventDefault();
+        try {
+          const res = await createToken(name);
+          setCreated(res.token);
+          setName("");
+          load();
+        } catch (err: any) {
+          setError(err.message);
+        }
+      }}>
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Token name" className={inputClass} />
+        <button type="submit" disabled={!name.trim()} className={buttonClass}>Create</button>
+      </form>
+    </div>
+  );
+}
+
+function PasswordSection() {
+  const [current, setCurrent] = useState("");
+  const [next, setNext] = useState("");
+  const [message, setMessage] = useState<string | null>(null);
+  return (
+    <form className={sectionClass} onSubmit={async (e) => {
+      e.preventDefault();
+      try {
+        await changePassword(current, next);
+        setMessage("Password changed. Sign in again on your other devices.");
+        setCurrent("");
+        setNext("");
+      } catch (err: any) {
+        setMessage(`⚠️ ${err.message}`);
+      }
+    }}>
+      <span className={sectionTitle}>🔒 Change password</span>
+      {message && <div className="text-zinc-300 font-mono text-[11px]">{message}</div>}
+      <input type="password" autoComplete="current-password" placeholder="Current password" value={current}
+        onChange={(e) => setCurrent(e.target.value)} className={inputClass} />
+      <input type="password" autoComplete="new-password" placeholder="New password (12+ characters)" value={next}
+        onChange={(e) => setNext(e.target.value)} className={inputClass} />
+      <div className="flex justify-end"><button type="submit" disabled={!current || next.length < 12} className={buttonClass}>Update</button></div>
+    </form>
+  );
+}
+
+function AdminSection({ selfId }: { selfId: string }) {
+  const [users, setUsers] = useState<AdminUser[]>([]);
+  const [username, setUsername] = useState("");
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const load = useCallback(() => listUsers().then(setUsers).catch((e) => setNotice(`⚠️ ${e.message}`)), []);
+  useEffect(() => { load(); }, [load]);
+
+  return (
+    <div className={sectionClass}>
+      <span className={sectionTitle}>🛠️ Accounts (admin)</span>
+      {notice && <div className="text-zinc-200 font-mono text-[11px] break-all">{notice}</div>}
+      {users.map((u) => (
+        <div key={u.user_id} className="flex items-center justify-between gap-2 text-xs font-mono text-zinc-300">
+          <span>
+            {u.username}{u.is_admin ? " (admin)" : ""} · <span className="text-zinc-500">{u.status}</span> ·{" "}
+            <span className={u.streaming ? "text-emerald-400" : "text-zinc-500"}>
+              🐝 {u.bee_link_state || "unlinked"}{u.streaming ? " · live" : ""}
+            </span>
+          </span>
+          {u.user_id !== selfId && (
+            <span className="flex gap-2 shrink-0">
+              <button type="button" className="text-cyan-400" onClick={async () => {
+                const pw = await resetUserPassword(u.user_id);
+                setNotice(`One-time password for ${u.username}: ${pw}`);
+              }}>Reset password</button>
+              <button type="button" className="text-amber-400" onClick={() =>
+                setUserStatus(u.user_id, u.status === "disabled" ? "active" : "disabled").then(load)}>
+                {u.status === "disabled" ? "Enable" : "Disable"}
+              </button>
+            </span>
+          )}
+        </div>
+      ))}
+      <form className="flex items-center gap-2" onSubmit={async (e) => {
+        e.preventDefault();
+        try {
+          const res = await createUser(username, isAdmin);
+          setNotice(`Created ${res.user.username}. One-time password: ${res.initial_password}`);
+          setUsername("");
+          load();
+        } catch (err: any) {
+          setNotice(`⚠️ ${err.message}`);
+        }
+      }}>
+        <input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="New username" className={inputClass} />
+        <label className="flex items-center gap-1 text-[11px] text-zinc-400 shrink-0">
+          <input type="checkbox" checked={isAdmin} onChange={(e) => setIsAdmin(e.target.checked)} /> admin
+        </label>
+        <button type="submit" disabled={username.trim().length < 3} className={buttonClass}>Add</button>
+      </form>
+    </div>
+  );
+}
 
 export function LoginModal({
   isOpen,
@@ -32,407 +337,59 @@ export function LoginModal({
   currentUser,
   initialConnectBee = false,
   onLogout,
+  mandatory = false,
+  onSessionChanged,
 }: LoginModalProps) {
-  const [handle, setHandle] = useState("Alex • Product Lead");
-  const [connectBee, setConnectBee] = useState(initialConnectBee);
-  const [loading, setLoading] = useState(false);
-  const [pairingInfo, setPairingInfo] = useState<BeePairingInfo | null>(null);
-  const [copied, setCopied] = useState(false);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [savedUsers, setSavedUsers] = useState<DemoUser[]>([]);
-  const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
-  const [isRefreshingLink, setIsRefreshingLink] = useState(false);
-
-  // Sync state whenever modal opens or props change
-  useEffect(() => {
-    if (isOpen) {
-      setConnectBee(initialConnectBee);
-      setPairingInfo(null);
-      setErrorMsg(null);
-      if (currentUser) {
-        setHandle(currentUser.handle);
-        setSelectedUserId(currentUser.user_id);
-      } else {
-        setSelectedUserId(null);
-      }
-      // Load saved profiles from localStorage and backend
-      const local = getSavedUsers();
-      setSavedUsers(local);
-      fetchBackendUsers().then((synced) => {
-        if (synced && synced.length > 0) {
-          setSavedUsers(synced);
-        }
-      });
-    }
-  }, [isOpen, initialConnectBee, currentUser]);
-
-  const loadBeeLink = useCallback(async (userId?: string) => {
-    setIsRefreshingLink(true);
-    try {
-      const res = await fetchBeeLink(userId);
-      if (res.bee_pairing) {
-        setPairingInfo(res.bee_pairing);
-      }
-    } catch (err: any) {
-      console.warn("Could not fetch Bee pairing:", err);
-    } finally {
-      setIsRefreshingLink(false);
-    }
-  }, []);
-
-  // Fetch Bee pairing link when connectBee is active
-  useEffect(() => {
-    if (isOpen && connectBee && !pairingInfo && !isRefreshingLink) {
-      loadBeeLink(selectedUserId || currentUser?.user_id);
-    }
-  }, [isOpen, connectBee, pairingInfo, selectedUserId, currentUser, isRefreshingLink, loadBeeLink]);
+  const refreshSession = useCallback(async () => {
+    const user = await fetchSession();
+    onSessionChanged?.(user);
+  }, [onSessionChanged]);
 
   if (!isOpen) return null;
 
-  const handleCopyLink = (url: string) => {
-    if (typeof navigator !== "undefined" && navigator.clipboard) {
-      navigator.clipboard.writeText(url);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2500);
-    }
-  };
-
-  const handleSelectSavedUser = async (user: DemoUser) => {
-    setLoading(true);
-    setErrorMsg(null);
-    try {
-      const res = await loginUser(user.handle, connectBee, user.user_id);
-      if (res.success && res.user) {
-        onLoginSuccess(res.user);
-        onClose();
-      }
-    } catch (err: any) {
-      console.error("Login as saved user error:", err);
-      setErrorMsg(err?.message || "Failed to switch user profile.");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleDeleteSavedUser = async (e: React.MouseEvent, userId: string) => {
-    e.stopPropagation();
-    if (
-      confirm(
-        "GDPR Art. 17: Are you sure you want to permanently erase this profile and all its credentials?"
-      )
-    ) {
-      await purgeUserData(userId);
-      const updated = getSavedUsers();
-      setSavedUsers(updated);
-      if (currentUser?.user_id === userId) {
-        // If current user was purged, reset
-        setSelectedUserId(null);
-      }
-    }
-  };
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!handle.trim()) return;
-    setLoading(true);
-    setErrorMsg(null);
-
-    try {
-      // If switching or updating active user
-      const targetUserId =
-        currentUser && currentUser.handle === handle ? currentUser.user_id : undefined;
-      const res = await loginUser(handle, connectBee, targetUserId);
-      if (res.success && res.user) {
-        onLoginSuccess(res.user);
-        onClose();
-      }
-    } catch (err: any) {
-      console.error("Login error:", err);
-      setErrorMsg(err?.message || "Failed to initiate session. Please retry.");
-    } finally {
-      setLoading(false);
-    }
-  };
-
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="login-modal-title"
-      className="fixed inset-0 z-[10002] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200"
-    >
+    <div role="dialog" aria-modal="true" aria-labelledby="login-modal-title"
+      className="fixed inset-0 z-[10002] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200">
       <div className="relative w-full max-w-lg max-h-[90vh] overflow-y-auto bg-[#0e1117] border border-white/15 rounded-2xl shadow-[0_25px_60px_rgba(0,0,0,0.95)] flex flex-col">
-        {/* Modal Header */}
         <div className="sticky top-0 z-10 flex items-center justify-between p-5 border-b border-white/10 bg-zinc-950/90 backdrop-blur-md">
           <div className="flex items-center gap-2.5">
             <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-pulse shadow-[0_0_8px_rgba(34,211,238,0.8)]" />
             <h2 id="login-modal-title" className="font-sans text-base font-semibold text-white tracking-wide">
-              {currentUser ? "User Management & Bee Pairing" : "EXAMEN User Login & Bee Device Link"}
+              {currentUser ? `Account · ${currentUser.handle}` : "Sign in to EXAMEN"}
             </h2>
           </div>
-          <button
-            onClick={onClose}
-            aria-label="Close dialog"
-            className="w-8 h-8 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 flex items-center justify-center text-zinc-400 hover:text-white transition-colors text-sm"
-          >
-            ✕
-          </button>
+          {!mandatory && (
+            <button onClick={onClose} aria-label="Close dialog"
+              className="w-8 h-8 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 flex items-center justify-center text-zinc-400 hover:text-white transition-colors text-sm">
+              ✕
+            </button>
+          )}
         </div>
 
-        {/* Modal Body */}
         <div className="p-6 space-y-5">
-          {errorMsg && (
-            <div className="p-3 rounded-xl bg-red-950/60 border border-red-500/40 text-red-300 font-mono text-xs">
-              ⚠️ {errorMsg}
-            </div>
-          )}
-
-          {/* GDPR Article 25 Notice Banner */}
-          <div className="p-3.5 rounded-xl bg-cyan-950/30 border border-cyan-500/30 text-cyan-200 text-xs space-y-1.5">
-            <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-wider font-bold text-cyan-300">
-              <span>🛡️</span>
-              <span>GDPR Article 25 • Privacy by Design</span>
-            </div>
-            <p className="text-[11px] leading-relaxed text-zinc-300">
-              Demo sessions operate with <strong className="text-white">zero sensitive PII</strong>. No passwords,
-              emails, or biometric voiceprints are collected. Telemetry is pseudonymized and stored ephemerally.
-            </p>
-          </div>
-
-          {/* Saved User Profiles List (User Management per user) */}
-          {savedUsers.length > 0 && (
-            <div className="space-y-2.5">
-              <div className="flex items-center justify-between">
-                <label className="block text-xs font-mono font-semibold uppercase tracking-wider text-zinc-300">
-                  Saved User Profiles (Saved per user)
-                </label>
-                <span className="text-[10px] font-mono text-zinc-400">
-                  {savedUsers.length} profile{savedUsers.length === 1 ? "" : "s"}
-                </span>
-              </div>
-
-              <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
-                {savedUsers.map((u) => {
-                  const isCurrent = currentUser?.user_id === u.user_id;
-                  return (
-                    <div
-                      key={u.user_id}
-                      onClick={() => handleSelectSavedUser(u)}
-                      className={`group flex items-center justify-between p-2.5 rounded-xl border cursor-pointer transition-all ${
-                        isCurrent
-                          ? "bg-cyan-950/40 border-cyan-500/50 text-white"
-                          : "bg-white/[0.03] hover:bg-white/[0.08] border-white/10 text-zinc-300"
-                      }`}
-                    >
-                      <div className="flex items-center gap-2.5">
-                        <div className="w-6 h-6 rounded-full bg-cyan-500/20 border border-cyan-400 text-cyan-300 font-mono text-[10px] font-bold flex items-center justify-center shrink-0">
-                          {u.handle.charAt(0).toUpperCase()}
-                        </div>
-                        <div className="text-left">
-                          <div className="font-sans text-xs font-medium text-white flex items-center gap-2">
-                            <span>{u.handle}</span>
-                            {isCurrent && (
-                              <span className="font-mono text-[8px] px-1.5 py-0.2 rounded bg-cyan-900 text-cyan-200 uppercase font-bold">
-                                ACTIVE
-                              </span>
-                            )}
-                          </div>
-                          <div className="font-mono text-[9px] text-zinc-400 flex items-center gap-2">
-                            <span>{u.user_id}</span>
-                            <span>•</span>
-                            <span className={u.bee_connected ? "text-emerald-400" : "text-zinc-500"}>
-                              {u.bee_connected ? "🐝 BEE LINKED" : "NO BEE"}
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={(e) => handleDeleteSavedUser(e, u.user_id)}
-                          title="Erase profile (GDPR Art. 17)"
-                          className="opacity-0 group-hover:opacity-100 text-zinc-500 hover:text-red-400 transition-opacity p-1 text-xs"
-                        >
-                          🗑️
-                        </button>
-                        <span className="text-zinc-400 group-hover:text-cyan-300 text-xs">→</span>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* Create New / Switch User Form */}
-          <form onSubmit={handleSubmit} className="space-y-4 pt-2 border-t border-white/10">
-            <div className="space-y-2">
-              <label className="block text-xs font-mono font-semibold uppercase tracking-wider text-zinc-300">
-                {savedUsers.length > 0 ? "Or Create / Switch Profile" : "User Pseudonym / Role"}
-              </label>
-              <div className="flex flex-wrap gap-2 mb-2">
-                {PRESET_HANDLES.map((preset) => (
-                  <button
-                    type="button"
-                    key={preset}
-                    onClick={() => {
-                      setHandle(preset);
-                      setSelectedUserId(null);
-                    }}
-                    className={`text-[11px] px-2.5 py-1 rounded-lg border font-mono transition-colors ${
-                      handle === preset
-                        ? "bg-cyan-500/20 border-cyan-400 text-cyan-200"
-                        : "bg-white/5 border-white/10 text-zinc-400 hover:text-zinc-200"
-                    }`}
-                  >
-                    {preset}
-                  </button>
-                ))}
-              </div>
-              <input
-                type="text"
-                value={handle}
-                onChange={(e) => {
-                  setHandle(e.target.value);
-                  setSelectedUserId(null);
-                }}
-                placeholder="e.g. Alex (Demo Lead)"
-                required
-                maxLength={30}
-                className="w-full px-3.5 py-2.5 rounded-xl bg-black/50 border border-white/15 text-white font-mono text-xs focus:outline-none focus:border-cyan-400 transition-colors"
-              />
-            </div>
-
-            {/* Bee Wearable Device Connection Toggle */}
-            <div className="p-4 rounded-xl bg-zinc-900/60 border border-white/10 space-y-3">
-              <div className="flex items-center justify-between">
-                <label htmlFor="connect-bee-toggle" className="flex items-center gap-2 cursor-pointer">
-                  <span className="text-base">🐝</span>
-                  <span className="font-sans text-xs font-semibold text-white">
-                    Connect Bee Wearable AI Device
-                  </span>
-                </label>
-                <input
-                  id="connect-bee-toggle"
-                  type="checkbox"
-                  checked={connectBee}
-                  onChange={(e) => {
-                    const next = e.target.checked;
-                    setConnectBee(next);
-                    if (next && !pairingInfo) {
-                      loadBeeLink(selectedUserId || currentUser?.user_id);
-                    }
-                  }}
-                  className="w-4 h-4 rounded accent-cyan-400 cursor-pointer"
-                />
-              </div>
-
-              {connectBee && (
-                <div className="space-y-2.5 pt-2 border-t border-white/10 text-xs">
-                  {pairingInfo?.connected ? (
-                    <div className="flex items-center justify-between p-2.5 rounded-lg bg-emerald-950/50 border border-emerald-500/30 text-emerald-300 font-mono text-[11px]">
-                      <div className="flex items-center gap-2">
-                        <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                        <span>Verified: {pairingInfo.account || "Bee Device Paired"}</span>
-                      </div>
-                      <span className="text-[10px] uppercase font-bold text-emerald-400">ONLINE</span>
-                    </div>
-                  ) : (
-                    <>
-                      <div className="flex items-center justify-between text-[11px] text-zinc-300 leading-relaxed">
-                        <span>Bee CLI authentication link generated for ambient stream ingestion:</span>
-                        <button
-                          type="button"
-                          onClick={() => loadBeeLink(selectedUserId || currentUser?.user_id)}
-                          disabled={isRefreshingLink}
-                          className="text-[10px] font-mono text-cyan-400 hover:text-cyan-300 underline underline-offset-2 shrink-0 ml-2"
-                        >
-                          {isRefreshingLink ? "↻ Probing..." : "↻ Refresh link"}
-                        </button>
-                      </div>
-
-                      {pairingInfo?.pairing_url ? (
-                        <div className="space-y-2">
-                          <div className="p-2.5 rounded-lg bg-black/60 border border-cyan-500/30 font-mono text-[11px] text-cyan-300 break-all flex items-center justify-between gap-2">
-                            <span className="truncate">{pairingInfo.pairing_url}</span>
-                            <button
-                              type="button"
-                              onClick={() => handleCopyLink(pairingInfo.pairing_url!)}
-                              className="shrink-0 px-2.5 py-1 rounded bg-cyan-950/80 hover:bg-cyan-900 border border-cyan-500/40 text-cyan-300 text-[10px] font-mono uppercase tracking-wider transition-colors"
-                            >
-                              {copied ? "Copied!" : "Copy"}
-                            </button>
-                          </div>
-                          <a
-                            href={pairingInfo.pairing_url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1.5 text-[11px] font-mono text-cyan-400 hover:text-cyan-300 underline underline-offset-4"
-                          >
-                            <span>Open pairing authorization link in browser →</span>
-                          </a>
-                        </div>
-                      ) : (
-                        <div className="text-zinc-500 font-mono text-[11px] animate-pulse">
-                          Probing Bee CLI pairing service...
-                        </div>
-                      )}
-                      <p className="text-[10px] text-zinc-400">
-                        💡 <em>Tip: Tap the link above on any device or approve in your Bee companion app.</em>
-                      </p>
-                    </>
+          {!currentUser ? (
+            <SignInForm onLoginSuccess={onLoginSuccess} />
+          ) : (
+            <>
+              <BeeLinkSection initialLink={currentUser.bee_link} autoStart={initialConnectBee} onChanged={refreshSession} />
+              <TokensSection />
+              <PasswordSection />
+              {currentUser.is_admin && <AdminSection selfId={currentUser.user_id} />}
+              <div className="flex items-center justify-between pt-3 border-t border-white/10">
+                <div className="flex gap-2">
+                  {onLogout && (
+                    <button type="button" className={buttonClass} onClick={() => { onLogout(); onClose(); }}>🚪 Sign out</button>
                   )}
-                </div>
-              )}
-            </div>
-
-            {/* Actions */}
-            <div className="flex items-center justify-between pt-3 border-t border-white/10">
-              {currentUser && onLogout ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    onLogout();
+                  <button type="button" className={buttonClass} onClick={async () => {
+                    await logoutEverywhere();
+                    onSessionChanged?.(null);
                     onClose();
-                  }}
-                  className="px-3.5 py-2 rounded-xl bg-red-950/40 hover:bg-red-900/60 border border-red-500/30 text-red-300 font-mono text-xs transition-colors flex items-center gap-1.5 cursor-pointer"
-                  title="Sign out and clear session credentials"
-                >
-                  <span>🚪</span>
-                  <span>Sign Out</span>
-                </button>
-              ) : (
-                <div />
-              )}
-              <div className="flex items-center gap-3">
-                <button
-                  type="button"
-                  onClick={onClose}
-                  disabled={loading}
-                  className="px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-zinc-300 font-mono text-xs transition-colors cursor-pointer"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={loading || !handle.trim()}
-                  className="px-5 py-2.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-zinc-950 font-sans font-semibold text-xs transition-all shadow-[0_0_15px_rgba(34,211,238,0.4)] disabled:opacity-50 flex items-center gap-2 cursor-pointer"
-                >
-                  {loading && <span className="animate-spin text-xs">↻</span>}
-                  <span>
-                    {currentUser
-                      ? connectBee
-                        ? "Save & Connect Bee"
-                        : "Save Profile Changes"
-                      : connectBee
-                      ? "Connect & Enter Dashboard"
-                      : "Start Demo Session"}
-                  </span>
-                </button>
+                  }}>Sign out everywhere</button>
+                </div>
+                <button type="button" onClick={onClose} className={buttonClass}>Close</button>
               </div>
-            </div>
-          </form>
+            </>
+          )}
         </div>
       </div>
     </div>

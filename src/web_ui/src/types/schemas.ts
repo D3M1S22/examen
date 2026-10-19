@@ -330,27 +330,56 @@ export interface ExamenState {
   error?: string;
 }
 
-export interface BeePairingInfo {
-  status?: "already_connected" | "pairing_requested" | "disconnected" | string;
-  connected?: boolean;
-  account?: string | null;
+export type BeeLinkState = "unlinked" | "pairing" | "linked" | "invalid";
+
+/** The signed-in user's Bee account link (one Bee account per EXAMEN user). */
+export interface BeeLinkInfo {
+  user_id: string;
+  state: BeeLinkState;
+  bee_user_id?: number | null;
+  bee_first_name?: string | null;
   pairing_url?: string | null;
-  request_id?: string | null;
-  message?: string;
+  pairing_expires_at?: string | null;
+  linked_at?: string | null;
+  last_ok_at?: string | null;
+  last_error?: string | null;
 }
 
-export interface DemoUser {
+/** Signed-in user, derived from GET /api/auth/session (nothing is stored in the browser). */
+export interface SessionUser {
   user_id: string;
+  username: string;
   handle: string;
-  avatar_seed?: string;
+  is_admin: boolean;
   created_at: string;
-  last_active?: string;
-  gdpr_compliant: boolean;
-  privacy_framework?: string;
-  data_retention?: string;
+  bee_link: BeeLinkInfo | null;
   bee_connected: boolean;
+  bee_account: string | null;
+}
+
+/** Personal access token metadata (MCP clients); the token value is shown once at creation. */
+export interface AccountToken {
+  token_id: string;
+  user_id: string;
+  name: string;
+  scopes: string;
+  created_at: string;
+  last_used_at?: string | null;
+}
+
+/** Admin view of an account: no speech-derived data. */
+export interface AdminUser {
+  user_id: string;
+  username: string;
+  display_name?: string | null;
+  is_admin: boolean;
+  status: "active" | "disabled" | "erasing";
+  created_at: string;
+  last_login_at?: string | null;
+  bee_link_state?: BeeLinkState;
   bee_account?: string | null;
-  bee_pairing?: BeePairingInfo | null;
+  bee_last_error?: string | null;
+  streaming?: boolean;
 }
 
 export interface EchoNotification {

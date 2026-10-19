@@ -7,7 +7,7 @@ import {
   VerifiedAction,
   SocialEntity,
   BriefingReport,
-  DemoUser,
+  SessionUser,
   EchoNotification,
   EventEngineStatus,
   EventSummary,
@@ -29,7 +29,7 @@ import { LoginModal } from "@/components/ui/LoginModal";
 import { BackfillModal } from "@/components/ui/BackfillModal";
 import { formatDuration, mergeProgress } from "@/utils/backfill";
 import { getApiBaseUrl } from "@/utils/api";
-import { getLocalUser, logoutUser, disconnectBee, purgeUserData } from "@/utils/auth";
+import { AUTH_EXPIRED_EVENT, eraseAccount, fetchSession, installAuthFetch, logout, unlinkBee } from "@/utils/auth";
 
 const fetcher = (url: string) => fetch(`${getApiBaseUrl()}${url}`).then((res) => res.json());
 
@@ -43,7 +43,9 @@ export default function Dashboard() {
   const [showGlobalEchoModal, setShowGlobalEchoModal] = useState(false);
   const [showLoginModal, setShowLoginModal] = useState(false);
   const [loginModalConnectBee, setLoginModalConnectBee] = useState(false);
-  const [currentUser, setCurrentUser] = useState<DemoUser | null>(null);
+  const [currentUser, setCurrentUser] = useState<SessionUser | null>(null);
+  // Multi-user: the dashboard loads data only once the session cookie is verified
+  const [sessionChecked, setSessionChecked] = useState(false);
   const [sseConnected, setSseConnected] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [updatedTabs, setUpdatedTabs] = useState<Record<string, number>>({});
@@ -59,40 +61,44 @@ export default function Dashboard() {
     setShowGlobalEchoModal(true);
   }, []);
 
-  // Initialize local user session on mount
+  // Verify the server session on mount; any 401 later brings the sign-in form back
   useEffect(() => {
-    const user = getLocalUser();
-    if (user) {
-      setCurrentUser(user);
-    }
+    installAuthFetch();
+    fetchSession()
+      .then((user) => setCurrentUser(user))
+      .finally(() => setSessionChecked(true));
+    const onExpired = () => setCurrentUser(null);
+    window.addEventListener(AUTH_EXPIRED_EVENT, onExpired);
+    return () => window.removeEventListener(AUTH_EXPIRED_EVENT, onExpired);
   }, []);
+  const authed = currentUser !== null;
 
   // SWR Data Fetching
-  const { data: statusData, mutate: mutateStatus } = useSWR("/api/status", fetcher, { refreshInterval: 10000 });
+  const { data: statusData, mutate: mutateStatus } = useSWR(authed ? "/api/status" : null, fetcher, { refreshInterval: 10000 });
   const { data: routinesData, mutate: mutateRoutines } = useSWR<{ tasks: PlannedTask[] }>(
-    "/api/routines",
+    authed ? "/api/routines" : null,
     fetcher
   );
   const { data: actionsData, mutate: mutateActions } = useSWR<{ actions: VerifiedAction[] }>(
-    "/api/actions?limit=50",
+    authed ? "/api/actions?limit=50" : null,
     fetcher
   );
   const { data: socialData, mutate: mutateSocial } = useSWR<{ contacts: SocialEntity[] }>(
-    "/api/contacts",
+    authed ? "/api/contacts" : null,
     fetcher
   );
   const { data: topicsData, mutate: mutateTopics } = useSWR<{ topics: BriefingReport[] }>(
-    "/api/topics?limit=20",
+    authed ? "/api/topics?limit=20" : null,
     fetcher
   );
   // Deep Topic Event Engine: events (lectures/meetings) and live engine state
   const { data: sessionsData, mutate: mutateSessions } = useSWR<{ sessions: EventSummary[] }>(
-    "/api/sessions?events_only=true&limit=20",
+    authed ? "/api/sessions?events_only=true&limit=20" : null,
     fetcher,
     { refreshInterval: 15000 }
   );
   const { data: engineStatus, mutate: mutateEngine } = useSWR<EventEngineStatus>(
-    "/api/event-engine/status",
+    authed ? "/api/event-engine/status" : null,
     fetcher,
     { refreshInterval: 5000 }
   );
@@ -170,10 +176,11 @@ export default function Dashboard() {
 
   // Server-Sent Events (SSE) live connection to /api/events
   useEffect(() => {
-    if (typeof window === "undefined" || !("EventSource" in window)) return;
+    if (typeof window === "undefined" || !("EventSource" in window) || !authed) return;
     try {
       const baseUrl = getApiBaseUrl();
-      const es = new EventSource(`${baseUrl}/api/events`);
+      // The session cookie authenticates the stream (EventSource cannot send custom headers)
+      const es = new EventSource(`${baseUrl}/api/events`, { withCredentials: true });
 
       es.onopen = () => {
         setSseConnected(true);
@@ -328,67 +335,46 @@ export default function Dashboard() {
     } catch (err) {
       console.warn("SSE connection error:", err);
     }
-  }, [mutateActions, mutateRoutines, mutateSocial, mutateTopics, mutateStatus, refreshEvents, markTabUpdated, notifyEcho, showToast]);
+  }, [authed, mutateActions, mutateRoutines, mutateSocial, mutateTopics, mutateStatus, refreshEvents, markTabUpdated, notifyEcho, showToast]);
 
   // Auth & GDPR Handlers
-  const handleLoginSuccess = (user: DemoUser) => {
+  const handleLoginSuccess = (user: SessionUser) => {
     setCurrentUser(user);
-    showToast(`Welcome, ${user.handle}! Demo session initialized.`);
+    showToast(`Welcome, ${user.handle}!`);
     mutateStatus();
     notifyEcho({
-      title: "Authenticated User Session",
-      message: `Logged in as ${user.handle}. Privacy parameters calibrated.`,
+      title: "Signed in",
+      message: `Signed in as ${user.handle}. Only your own data is shown.`,
       category: "system",
       targetTab: "overview",
     });
   };
 
   const handleLogout = async () => {
-    await logoutUser(currentUser?.user_id);
+    await logout();
     setCurrentUser(null);
-    showToast("Logged out successfully. Session credentials cleared.");
-    mutateStatus();
-    notifyEcho({
-      title: "Session Terminated",
-      message: "User logged out. Device credentials purged.",
-      category: "system",
-      targetTab: "overview",
-    });
+    showToast("Signed out. Your Bee keeps streaming to your account.");
   };
 
   const handlePurgeData = async () => {
-    await purgeUserData(currentUser?.user_id);
-    setCurrentUser(null);
-    showToast("All user session telemetry permanently erased under GDPR Art. 17.");
-    mutateStatus();
-    mutateActions();
-    mutateRoutines();
-    mutateSocial();
-    mutateTopics();
-    notifyEcho({
-      title: "GDPR Right to be Forgotten",
-      message: "All personal session telemetry erased.",
-      category: "system",
-      targetTab: "overview",
-    });
+    const password = window.prompt("GDPR Art. 17: enter your password to permanently erase your account and all its data");
+    if (!password) return;
+    try {
+      await eraseAccount(password);
+      setCurrentUser(null);
+      showToast("Your account and all its data were permanently erased (GDPR Art. 17).");
+    } catch (err: any) {
+      showToast(`Erasure failed: ${err?.message || err}`);
+    }
   };
 
   const handleDisconnectBee = async () => {
-    const success = await disconnectBee(currentUser?.user_id);
-    if (success && currentUser) {
-      setCurrentUser({
-        ...currentUser,
-        bee_connected: false,
-        bee_account: null,
-        bee_pairing: null,
-      });
-      showToast("Bee Wearable AI disconnected and credentials removed.");
-      notifyEcho({
-        title: "Bee Wearable Disconnected",
-        message: "Bee audio stream unlinked from this session.",
-        category: "system",
-        targetTab: "overview",
-      });
+    try {
+      await unlinkBee();
+      setCurrentUser(await fetchSession());
+      showToast("Your Bee account was disconnected. Your data is kept.");
+    } catch (err: any) {
+      showToast(`Disconnect failed: ${err?.message || err}`);
     }
     mutateStatus();
   };
@@ -710,12 +696,20 @@ export default function Dashboard() {
 
       {/* GDPR-Compliant Login & Bee Pairing Modal */}
       <LoginModal
-        isOpen={showLoginModal}
+        isOpen={showLoginModal || (sessionChecked && !currentUser)}
+        mandatory={!currentUser}
         onClose={() => setShowLoginModal(false)}
-        onLoginSuccess={handleLoginSuccess}
+        onLoginSuccess={(user) => {
+          handleLoginSuccess(user);
+          setShowLoginModal(false);
+        }}
         currentUser={currentUser}
         initialConnectBee={loginModalConnectBee}
         onLogout={handleLogout}
+        onSessionChanged={(user) => {
+          setCurrentUser(user);
+          mutateStatus();
+        }}
       />
 
       {/* Left-Side Auto-Hiding Floating Status Dock (MacBook Pro Style) */}

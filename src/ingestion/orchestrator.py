@@ -30,6 +30,8 @@ from src.ingestion.event_engine import (
 from src.ingestion.gatekeeper import aclassify_chunk, is_noop
 from src.ingestion.ring_buffer import ContextRingBuffer
 from src.core.config import settings
+from src.core.identity import require_user
+from src.core.limits import llm_slot
 from src.core.storage import get_storage_store
 from src.core.schemas import CoverageGap, CoverageInterval, LocationTelemetry, UtteranceChunk
 
@@ -60,10 +62,13 @@ class BeeStreamOrchestrator(Debug):
         store=None,
         engine: Optional[EventEngine] = None,
         identity: Optional[WearerIdentity] = None,
+        bee_factory: Optional[Callable[[], BeeClient]] = None,
     ):
         super().__init__(debug_mode=debug_mode, sector_name="ORCHESTRATOR")
         self.store = store
         self.identity = identity or get_wearer_identity()
+        # The Bee account of this orchestrator's user (per-user BEE_CONFIG_DIR)
+        self.bee_factory: Callable[[], BeeClient] = bee_factory or (lambda: BeeClient(debug_mode=self.debug_mode))
 
         self.last_input_time = time.time()
         self.chunk_counter = 0
@@ -269,11 +274,12 @@ class BeeStreamOrchestrator(Debug):
         event_hint = self.engine.active_event_hint() if self.engine_enabled else ""
         prior_context = "\n".join(part for part in (rolling_hint, event_hint) if part) or None
 
-        classification = await aclassify_chunk(
-            transcript=chunk.text,
-            active_tasks=active_task_titles if active_task_titles else None,
-            prior_context=prior_context,
-        )
+        async with llm_slot():  # shared across users (MAX_CONCURRENT_LLM_CALLS)
+            classification = await aclassify_chunk(
+                transcript=chunk.text,
+                active_tasks=active_task_titles if active_task_titles else None,
+                prior_context=prior_context,
+            )
         chunk.categories = list(classification.categories)
 
         # Feed the event engine BEFORE the pipeline, so a chunk that opens an event is already
@@ -313,6 +319,7 @@ class BeeStreamOrchestrator(Debug):
             "event_managed": event_id is not None,
             "source_key": chunk.source_key,
             "ingest_source": "live",
+            "user_id": require_user().user_id,
         }
 
         try:
@@ -320,7 +327,8 @@ class BeeStreamOrchestrator(Debug):
             # agent_invocation is synchronous: keep it off the event loop (SSE/REST stay responsive)
             self.inflight_dispatches += 1
             try:
-                result = await asyncio.to_thread(agent_invocation, payload)
+                async with llm_slot():
+                    result = await asyncio.to_thread(agent_invocation, payload)
             finally:
                 self.inflight_dispatches -= 1
         except Exception as e:
@@ -423,7 +431,7 @@ class BeeStreamOrchestrator(Debug):
     # ------------------------------------------------------------------
 
     async def _fetch_location(self) -> Optional[dict]:
-        return await BeeClient(debug_mode=self.debug_mode).get_location()
+        return await self.bee_factory().get_location()
 
     async def poll_location(self) -> Optional[LocationTelemetry]:
         """Applies the last Bee fix if it is recent and new; returns the telemetry it produced."""
@@ -519,15 +527,13 @@ class BeeStreamOrchestrator(Debug):
 
         runtime: Optional[EventEngineRuntime] = None
         if self.engine_enabled:
-            if self.engine is get_event_engine():
-                from src.ingestion.event_engine import get_event_engine_runtime
-                runtime = get_event_engine_runtime()
-            else:
-                runtime = EventEngineRuntime(self.engine)
+            from src.ingestion.event_engine import get_event_engine_runtime
+            shared = get_event_engine_runtime()
+            runtime = shared if shared.engine is self.engine else EventEngineRuntime(self.engine)
             runtime.ensure_started()
 
         self.debug("Starting Bee stream ingestion...")
-        self.bee = BeeClient(debug_mode=self.debug_mode)
+        self.bee = self.bee_factory()
         self.coverage.recover_after_crash()
         await self.identity.ensure_loaded()
 

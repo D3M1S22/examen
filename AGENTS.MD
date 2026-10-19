@@ -161,8 +161,10 @@ Always verify that test suites pass before concluding any task:
 ```bash
 .venv/bin/pytest tests/ -v
 ```
+Multi-user: every test runs with its own data dir and as `TEST_USER_ID` (`tests/conftest.py`); HTTP tests sign in with `login_client(TestClient(create_app()))`. User data must always go through the scoped store (`get_storage_store()` resolves the current user and fails closed without one) — see `docs/next_steps/multi_user/`.
 
 ### Running the FastMCP Server Locally
+Set `EXAMEN_BOOTSTRAP_ADMIN` (and optionally `EXAMEN_BOOTSTRAP_ADMIN_PASSWORD`) in `.env`: the first start creates that admin; sign in on the dashboard, create users there, and link each user's Bee from *Account*.
 ```bash
 .venv/bin/python -m src.serving.mcp_server
 # Listens on http://0.0.0.0:8000/mcp (Streamable HTTP transport)

@@ -519,6 +519,7 @@ async def test_window_end_is_clamped_to_the_live_connection(store):
 # ---------------------------------------------------------------------------
 
 from src.ingestion import bee_identity  # noqa: E402
+from tests.conftest import TEST_USER_ID  # noqa: E402
 from src.ingestion.backfill import speaker_role_for  # noqa: E402
 
 
@@ -594,7 +595,7 @@ async def test_resegmented_final_covered_by_live_speech_is_a_duplicate(store, mo
 
 
 def test_backfill_speaker_roles_use_the_wearer_name(monkeypatch):
-    monkeypatch.setattr(bee_identity, "_identity", bee_identity.WearerIdentity("Ada"))
+    monkeypatch.setitem(bee_identity._identities, TEST_USER_ID, bee_identity.WearerIdentity("Ada"))
     assert speaker_role_for("Ada") == "user"
     assert speaker_role_for("Unknown") == "unknown"
     assert speaker_role_for("Marco") == "contact"

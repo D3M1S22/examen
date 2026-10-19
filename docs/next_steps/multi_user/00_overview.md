@@ -1,6 +1,6 @@
 # 👥 Multi-User Support — Overview
 
-> **Document Status:** Architectural Specification (not yet implemented), branch `sessions`
+> **Document Status:** Implemented on branch `sessions` (phases 1–5; homelab rollout ready, AWS providers later). Status and deviations: [05](05_implementation_plan_and_testing.md) §0
 > **Related specs:** [10_bee_cli_reference.md](../../10_bee_cli_reference.md) (observed Bee contract), [historical_backfill/](../historical_backfill/00_overview.md), [deep_topic_event_engine/](../deep_topic_event_engine/00_overview.md), [06_aws_cloud_deployment_architecture.md](../../06_aws_cloud_deployment_architecture.md), [11_homelab_test_deployment.md](../../11_homelab_test_deployment.md)
 > **Audience:** EXAMEN engineers implementing identity, data isolation, per-user ingestion and the serving changes
 
@@ -42,7 +42,7 @@ The goal is for several people, each with their **own Bee account**, to use the 
 
 ---
 
-## 3. Proposed decisions (to confirm before implementation)
+## 3. Decisions (confirmed 2026-10-19)
 
 | # | Topic | Proposal | Alternatives considered | Details |
 |---|---|---|---|---|

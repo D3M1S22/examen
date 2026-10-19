@@ -63,6 +63,24 @@ def _build_summary(result_state: Dict[str, Any]) -> str:
 
 @app.entrypoint
 def agent_invocation(payload: Dict[str, Any], context: Any = None) -> Dict[str, Any]:
+    """AgentCore entrypoint: runs the pipeline as the user named in the payload (multi-user).
+
+    ``payload["user_id"]`` is required unless the caller already runs as a user (in-process calls);
+    a caller acting as one user can never dispatch for another (docs/next_steps/multi_user/03 §3.4).
+    """
+    from src.core.identity import acting_as, get_current_user, is_valid_user_id, system_context
+
+    current = get_current_user()
+    user_id = payload.get("user_id") or (current.user_id if current else None)
+    if not is_valid_user_id(user_id) or (current is not None and current.user_id != user_id):
+        logger.warning("Pipeline invocation rejected: missing or foreign user_id")
+        return {"status": "error", "error": "invalid_user", "summary": "Pipeline invocation needs a valid user_id",
+                "action_data": None, "social_data": None, "briefing_report": None, "scheduled_task": None}
+    with acting_as(current or system_context(user_id)):
+        return _run_pipeline({**payload, "user_id": user_id}, context)
+
+
+def _run_pipeline(payload: Dict[str, Any], context: Any = None) -> Dict[str, Any]:
     """Main AWS Bedrock AgentCore entrypoint for incoming agent requests.
 
     Args:
@@ -151,6 +169,7 @@ def agent_invocation(payload: Dict[str, Any], context: Any = None) -> Dict[str, 
         "source_key": payload.get("source_key"),
         "ingest_source": payload.get("ingest_source") or "live",
         "ingest_run_id": payload.get("ingest_run_id"),
+        "user_id": payload["user_id"],
     }
 
     # 5. Execute LangGraph StateGraph

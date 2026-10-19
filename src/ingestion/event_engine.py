@@ -1794,8 +1794,10 @@ class EventEngineRuntime:
                 task.cancel()
 
 
-_engine: Optional[EventEngine] = None
-_runtime: Optional[EventEngineRuntime] = None
+# One live engine per user (docs/next_steps/multi_user/03 §3): keyed by user_id
+_engines: Dict[str, EventEngine] = {}
+_runtimes: Dict[str, EventEngineRuntime] = {}
+_registry_lock = threading.Lock()
 
 
 def build_continuity_from_settings() -> Optional[TopicSimilarity]:
@@ -1804,15 +1806,40 @@ def build_continuity_from_settings() -> Optional[TopicSimilarity]:
     return TopicSimilarity(cfg) if cfg else None
 
 
-def get_event_engine() -> EventEngine:
-    global _engine
-    if _engine is None:
-        _engine = EventEngine(continuity=build_continuity_from_settings())
-    return _engine
+def _resolve_user_id(user_id: Optional[str]) -> str:
+    if user_id:
+        return user_id
+    from src.core.identity import require_user
+
+    return require_user().user_id
 
 
-def get_event_engine_runtime() -> EventEngineRuntime:
-    global _runtime
-    if _runtime is None:
-        _runtime = EventEngineRuntime(get_event_engine())
-    return _runtime
+def get_event_engine(user_id: Optional[str] = None) -> EventEngine:
+    """The live Event Engine of ``user_id`` (default: the user in the current context)."""
+    uid = _resolve_user_id(user_id)
+    with _registry_lock:
+        engine = _engines.get(uid)
+        if engine is None:
+            from src.core.storage import get_storage_store
+
+            engine = EventEngine(store=get_storage_store(user_id=uid), continuity=build_continuity_from_settings())
+            _engines[uid] = engine
+        return engine
+
+
+def get_event_engine_runtime(user_id: Optional[str] = None) -> EventEngineRuntime:
+    uid = _resolve_user_id(user_id)
+    engine = get_event_engine(uid)
+    with _registry_lock:
+        runtime = _runtimes.get(uid)
+        if runtime is None:
+            runtime = EventEngineRuntime(engine)
+            _runtimes[uid] = runtime
+        return runtime
+
+
+def drop_event_engine(user_id: str) -> None:
+    """Forgets a user's engine (runtime stopped by the caller): unlink / erasure."""
+    with _registry_lock:
+        _runtimes.pop(user_id, None)
+        _engines.pop(user_id, None)

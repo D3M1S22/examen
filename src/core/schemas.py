@@ -741,6 +741,7 @@ class ExamenState(TypedDict, total=False):
     source_key: Optional[str]
     ingest_source: str
     ingest_run_id: Optional[str]
+    user_id: str  # tenant of every entity the pipeline persists (multi-user)
 
 
 # ============================================================================
@@ -816,3 +817,46 @@ class BackfillRun(BaseModel):
     @property
     def is_terminal(self) -> bool:
         return self.status in ("completed", "partial", "failed", "cancelled")
+
+
+# ============================================================================
+# Multi-user identity (docs/next_steps/multi_user/02): System DB records
+# ============================================================================
+BeeLinkState = Literal["unlinked", "pairing", "linked", "invalid"]
+
+
+class UserAccount(BaseModel):
+    """An EXAMEN user: the tenant of all speech-derived data. Never carries credentials to clients."""
+    user_id: str
+    username: str
+    display_name: Optional[str] = None
+    is_admin: bool = False
+    status: Literal["active", "disabled", "erasing"] = "active"
+    timezone: Optional[str] = None
+    external_sub: Optional[str] = None
+    created_at: str = Field(default_factory=lambda: datetime.now().isoformat())
+    last_login_at: Optional[str] = None
+
+
+class ApiTokenInfo(BaseModel):
+    """Personal access token metadata (the token itself is shown once and stored as a hash)."""
+    token_id: str
+    user_id: str
+    name: str
+    scopes: str = "mcp"
+    created_at: str = Field(default_factory=lambda: datetime.now().isoformat())
+    last_used_at: Optional[str] = None
+    revoked: bool = False
+
+
+class BeeLink(BaseModel):
+    """Binding between a user and one Bee account (one Bee account ↔ at most one user)."""
+    user_id: str
+    state: BeeLinkState = "unlinked"
+    bee_user_id: Optional[int] = None
+    bee_first_name: Optional[str] = None
+    pairing_url: Optional[str] = None
+    pairing_expires_at: Optional[str] = None
+    linked_at: Optional[str] = None
+    last_ok_at: Optional[str] = None
+    last_error: Optional[str] = None

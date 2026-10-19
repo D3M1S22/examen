@@ -387,4 +387,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    from src.core.cli import cli_user_context
+
+    with cli_user_context():  # EXAMEN_CLI_USER=<username>
+        main()

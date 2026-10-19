@@ -216,9 +216,10 @@ class BeeProxy(Debug):
     """Private `bee proxy` subprocess on 127.0.0.1: injects the Bee token for raw /v1 HTTP calls."""
 
     def __init__(self, build_cmd: Callable[[List[str]], List[str]], port: Optional[int] = None,
-                 debug_mode: str = "none"):
+                 debug_mode: str = "none", env_factory: Optional[Callable[[], Optional[Dict[str, str]]]] = None):
         super().__init__(debug_mode=debug_mode, sector_name="BEE")
         self.build_cmd = build_cmd
+        self.env_factory = env_factory or (lambda: None)
         self.port = settings.bee_proxy_port if port is None else port
         self.address: Optional[str] = None
         self.process: Optional[asyncio.subprocess.Process] = None
@@ -238,7 +239,7 @@ class BeeProxy(Debug):
             args += ["--port", str(self.port)]  # otherwise the first free port from 8787
         cmd = self.build_cmd(args)
         self.process = await asyncio.create_subprocess_exec(
-            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT, env=self.env_factory()
         )
         output: List[str] = []
         try:
@@ -285,14 +286,27 @@ class BeeProxy(Debug):
         self.address = None
 
 
+_LINK_RE = re.compile(r"Authentication link:\s*(https://\S+)")
+_VERIFIED_RE = re.compile(r"Verified as (.*?)(?:\s*\(id\s*(\d+)\))?\.?\s*$", re.MULTILINE)
+
+
 class BeeClient(Debug):
-    def __init__(self, cli_path='resources/bee-cli/bin/bee.js', debug_mode="none", transport: Optional[str] = None):
+    """Bee CLI wrapper for one Bee account.
+
+    ``config_dir`` isolates the account (multi-user, docs/next_steps/multi_user/02 §4): every subprocess
+    gets ``BEE_CONFIG_DIR=<config_dir>`` and ``BEE_FORCE_FILE_STORE=1`` (with an OS keychain the entry
+    name is fixed, so separate directories alone would still share one token).
+    """
+
+    def __init__(self, cli_path='resources/bee-cli/bin/bee.js', debug_mode="none", transport: Optional[str] = None,
+                 config_dir: Optional[str] = None):
         super().__init__(debug_mode=debug_mode, sector_name="BEE")
         self.cli_path = cli_path
+        self.config_dir = str(config_dir) if config_dir else None
         self.process = None
         self.transport = (transport or settings.bee_stream_transport or "proxy").strip().lower()
         self.active_transport: Optional[str] = None
-        self.proxy = BeeProxy(self._build_cmd, debug_mode=debug_mode)
+        self.proxy = BeeProxy(self._build_cmd, debug_mode=debug_mode, env_factory=self.subprocess_env)
         # Seams for tests: httpx transport used to reach the private proxy, reconnect back-off sleep
         self.http_transport_factory: Callable[[str], Any] = default_http_transport
         self._sleep: Callable[[float], Any] = asyncio.sleep
@@ -304,12 +318,57 @@ class BeeClient(Debug):
             return [runner, "run", bin_path] + subcmd_args
         return [bin_path] + subcmd_args
 
+    def subprocess_env(self) -> Optional[Dict[str, str]]:
+        """Environment for bee subprocesses (None = inherit, for the single host account)."""
+        if not self.config_dir:
+            return None
+        return {**os.environ, "BEE_CONFIG_DIR": self.config_dir, "BEE_FORCE_FILE_STORE": "1"}
+
+    async def run_text(self, subcmd_args: List[str], timeout: float = 30.0) -> Tuple[Optional[int], str]:
+        """Runs `bee <args>` and returns (exit code or None, stdout + stderr)."""
+        cmd = self._build_cmd(list(subcmd_args))
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT, env=self.subprocess_env()
+            )
+            stdout, _ = await asyncio.wait_for(process.communicate(), timeout=timeout)
+        except asyncio.TimeoutError:
+            with contextlib.suppress(Exception):
+                process.kill()
+            return None, "timeout"
+        except OSError as e:
+            return None, str(e)
+        return process.returncode, stdout.decode("utf-8", "replace")
+
+    async def status(self) -> Optional[str]:
+        """Verified account name from `bee status` (text only, ~1.3 s), or None when not logged in."""
+        code, out = await self.run_text(["status"], timeout=15)
+        match = _VERIFIED_RE.search(out or "")
+        return match.group(1).strip() if code == 0 and match else None
+
+    async def login_no_wait(self) -> Optional[str]:
+        """Starts a fresh pairing (`bee login --no-wait`) and returns the authentication link.
+
+        The previous pairing state is removed first: otherwise bee-cli resumes an old, possibly
+        almost expired request (observed 2026-10-19)."""
+        if self.config_dir:
+            for name in ("pairing-prod.json", "pairing-production.json"):
+                with contextlib.suppress(FileNotFoundError):
+                    os.unlink(os.path.join(self.config_dir, name))
+        _, out = await self.run_text(["login", "--no-wait"], timeout=30)
+        match = _LINK_RE.search(out or "")
+        return match.group(1).strip() if match else None
+
+    async def logout(self) -> bool:
+        code, _ = await self.run_text(["logout"], timeout=15)
+        return code == 0
+
     async def run_json(self, subcmd_args: List[str], timeout: float = 30.0) -> Optional[Dict[str, Any]]:
         """Runs `bee <args> --json` and returns the parsed body, or None on any failure."""
         cmd = self._build_cmd(list(subcmd_args) + ["--json"])
         try:
             process = await asyncio.create_subprocess_exec(
-                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=self.subprocess_env()
             )
             stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
         except asyncio.TimeoutError:
@@ -427,6 +486,7 @@ class BeeClient(Debug):
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             limit=1024 * 1024 * 10,
+            env=self.subprocess_env(),
         )
         # `bee stream --json` prints nothing during silence (pings are dropped): while the process is
         # running the connection is assumed alive, and a synthetic tick keeps coverage moving.

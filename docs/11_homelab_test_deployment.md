@@ -15,9 +15,9 @@
 | URL | `http://examen.deggio.local/` (Pi-hole record → Nginx Proxy Manager → `192.168.1.192:8000`) |
 | Endpoints | Dashboard `/`, Echo Show `/ext-app/`, MCP `/mcp`, REST `/api/*`, SSE `/api/events` |
 | Service | systemd `examen.service`, user `examen`, code in `/opt/examen` (git checkout of `origin/main`), venv `/opt/examen/.venv` (uv, Python 3.12); Bun 1.4 for dashboard builds |
-| Bee CLI | `/usr/local/bin/bee` (0.7.3); token in `/var/lib/examen/.bee/` (the service user's home) |
+| Bee CLI | `/usr/local/bin/bee` (0.7.3); **one token per EXAMEN user** in `/var/lib/examen/data/users/<user_id>/bee/` (mode 0700, `BEE_CONFIG_DIR` + `BEE_FORCE_FILE_STORE=1`) |
 | Secrets | `/opt/examen/.env` (mode 600, owner `examen`): AWS credentials and model settings |
-| Data | SQLite `/opt/examen/examen.db` |
+| Data | `/var/lib/examen/data/system.db` (users, sessions, tokens, Bee links) and one SQLite file per user in `/var/lib/examen/data/users/<user_id>/examen.db` (`EXAMEN_DATA_DIR`, set by `examen.service`) |
 | Time zone | `Europe/Rome` (same as the Bee account: EXAMEN uses naive local times) |
 | SSH | key-only root login (`PermitRootLogin prohibit-password`, no passwords) |
 
@@ -47,18 +47,16 @@ The reverse proxy disables buffering (`proxy_buffering off`, 1 h read timeout), 
 3. Turn `/opt/examen` into a checkout: `git init`, `git remote add origin git@github.com:<owner>/<repo>.git`, `git fetch origin main`, `git reset --hard origin/main` (as `examen`).
 4. Install Bun (`curl -fsSL https://bun.sh/install | BUN_INSTALL=/usr/local bash`), link `examen-update` → `/opt/examen/deploy/homelab/update.sh`, install and enable `examen-update.timer`, run `examen-update --force`.
 
-## 3. Bee login on the server
+## 3. Accounts and Bee login (multi-user)
 
-The token is per host and per user, so the server needs its own login:
+Every person signs in with their own EXAMEN account and links **their own** Bee account from the dashboard ([multi_user/](next_steps/multi_user/00_overview.md)):
 
-```bash
-ssh root@192.168.1.192 'cd /var/lib/examen && sudo -u examen -H bee login --no-wait'   # prints a link (valid ~5 min)
-# approve the link in the Bee app, then:
-ssh root@192.168.1.192 'cd /var/lib/examen && sudo -u examen -H bee status'
-ssh root@192.168.1.192 'systemctl restart examen'
-```
+1. The first start with an empty user table creates the admin named by `EXAMEN_BOOTSTRAP_ADMIN` in `/opt/examen/.env`. Without `EXAMEN_BOOTSTRAP_ADMIN_PASSWORD`, a one-time password is printed once: `journalctl -u examen | grep "Bootstrap admin"`.
+2. The admin creates the other accounts in *Account → Accounts (admin)*; each new user gets a one-time password.
+3. Each user opens *Account → Your Bee account → Connect Bee*, opens the link and approves it in the Bee app; the dashboard polls until the link is `linked` and starts that user's live ingestion.
+4. MCP clients (Alexa+ dev skill, Claude Desktop, …) use a personal access token from *Account → MCP access tokens* (`Authorization: Bearer exm_pat_…`).
 
-Until the login is done, `/api/status` reports `bee_device.status = DISCONNECTED` and the stream keeps retrying.
+Signing out ends only the browser session; Bee keeps streaming for that user. *Disconnect Bee* and *Erase my data* act on the signed-in user only.
 
 ---
 
@@ -66,9 +64,11 @@ Until the login is done, `/api/status` reports `bee_device.status = DISCONNECTED
 
 ```bash
 ssh root@192.168.1.192 'journalctl -u examen -f'                          # logs
-curl -s http://examen.deggio.local/api/orchestrator/status | jq             # stream, transport, speaker tags, location
-curl -s http://examen.deggio.local/api/backfill/coverage | jq '.gaps'
-ssh root@192.168.1.192 'systemctl stop examen && rm /opt/examen/examen.db && systemctl start examen'   # reset data
+curl -s http://examen.deggio.local/api/health                               # liveness (no auth)
+T=exm_pat_…                                                                  # a personal access token
+curl -s -H "Authorization: Bearer $T" http://examen.deggio.local/api/orchestrator/status | jq   # that user's stream
+curl -s -H "Authorization: Bearer $T" http://examen.deggio.local/api/backfill/coverage | jq '.gaps'
+ssh root@192.168.1.192 'systemctl stop examen && rm -r /var/lib/examen/data && systemctl start examen'   # wipe ALL users
 ```
 
 Through MCP from an agent: `get_lxc_service_logs(vmid=147, service_name="examen")`, `exec_lxc_command(vmid=147, ...)`.
@@ -77,6 +77,21 @@ Through MCP from an agent: `get_lxc_service_logs(vmid=147, service_name="examen"
 
 ## 5. Known limitations of the test instance
 
-- Plain HTTP on the LAN (like the other `*.deggio.local` services): no TLS, no authentication on the dashboard or `/mcp`. Do not expose it publicly; the AWS deployment adds CloudFront/TLS.
-- Logging out of the dashboard runs `bee logout` on the server (by design, [10](10_bee_cli_reference.md) C11): log in again as in §3.
-- One Bee account per instance.
+- Plain HTTP on the LAN (like the other `*.deggio.local` services): session cookies and tokens travel unencrypted. Fine on a trusted LAN; add an NPM certificate and `AUTH_COOKIE_SECURE=true` before inviting people from other networks (open question Q3 of [multi_user/05](next_steps/multi_user/05_implementation_plan_and_testing.md)). Do not expose it publicly.
+- `MAX_ACTIVE_USERS` (default 5) live Bee streams on 2 GB of RAM: each one runs a private `bee proxy` (to be measured, MU-V2).
+
+---
+
+## 6. Rolling out multi-user on an existing instance
+
+Done once, when the `sessions` work reaches `main` (the server tracks `main`):
+
+1. `ssh root@192.168.1.192 'systemctl stop examen-update.timer examen'`.
+2. Add `EXAMEN_BOOTSTRAP_ADMIN=<username>` (and optionally `EXAMEN_BOOTSTRAP_ADMIN_PASSWORD`) to `/opt/examen/.env`.
+3. `ssh root@192.168.1.192 'EXAMEN_HEALTH_URL=http://127.0.0.1:8000/api/health examen-update --force'`: pulls `main`, installs `argon2-cffi`, rebuilds the dashboard, installs the new unit (`EXAMEN_DATA_DIR=/var/lib/examen/data`), restarts and checks `/api/health`.
+4. Optional, to keep the single-tenant data and Bee token: `systemctl stop examen && cd /opt/examen && sudo -u examen -H EXAMEN_DATA_DIR=/var/lib/examen/data .venv/bin/python scripts/migrate_to_multi_user.py --owner <username> --db /opt/examen/examen.db --bee-dir /var/lib/examen/.bee && systemctl start examen`, then *Connect Bee* once to verify the migrated token.
+5. `systemctl start examen-update.timer`.
+
+The instance already has a safety net: `/etc/systemd/system/examen-update.service.d/health.conf` sets `EXAMEN_HEALTH_URL=http://127.0.0.1:8000/` (the dashboard, public before and after the change), so even an unattended update does not loop on rollbacks. Remove it after the rollout.
+
+Why steps 1 and 3 matter: the `update.sh` that runs is the one already on the server, which checks `/api/status` by default. That endpoint now answers `401`, so without `EXAMEN_HEALTH_URL` the update would roll itself back. Later updates use the new script (`/api/health`).

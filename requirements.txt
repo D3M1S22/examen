@@ -19,6 +19,9 @@ uvicorn>=0.30.0
 starlette>=0.38.0
 httpx>=0.27.0
 
+# Authentication (multi-user, docs/next_steps/multi_user/02)
+argon2-cffi>=23.1.0
+
 # Web Search & Tooling
 duckduckgo-search>=6.0.0
 ddgs>=9.0.0

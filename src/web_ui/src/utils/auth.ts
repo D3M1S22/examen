@@ -1,274 +1,168 @@
-import { DemoUser, BeePairingInfo } from "@/types/schemas";
+import { AccountToken, AdminUser, BeeLinkInfo, SessionUser } from "@/types/schemas";
 import { getApiBaseUrl } from "@/utils/api";
 
-const STORAGE_LEGACY_KEY = "examen_demo_user_session";
-const STORAGE_USERS_DIRECTORY = "examen_demo_users_directory";
-const STORAGE_ACTIVE_USER_ID = "examen_demo_active_user_id";
-
 /**
- * Returns all saved demo user profiles from local storage.
- * Enforces GDPR compliance: zero sensitive PII is stored.
+ * Multi-user authentication client (docs/next_steps/multi_user/04 §4).
+ *
+ * The server keeps the session in an HttpOnly cookie: nothing about the user is stored in the browser.
+ * `installAuthFetch()` makes every API call send the cookie (also from `next dev` on another port), adds
+ * the CSRF header to state-changing requests and reports 401 responses through `AUTH_EXPIRED_EVENT`.
  */
-export const getSavedUsers = (): DemoUser[] => {
-  if (typeof window === "undefined") return [];
-  try {
-    const raw = localStorage.getItem(STORAGE_USERS_DIRECTORY);
-    let users: DemoUser[] = raw ? JSON.parse(raw) : [];
 
-    // Migrate legacy session if present and not in directory
-    const legacyRaw = localStorage.getItem(STORAGE_LEGACY_KEY);
-    if (legacyRaw) {
-      try {
-        const legacyUser: DemoUser = JSON.parse(legacyRaw);
-        if (legacyUser?.user_id && !users.some((u) => u.user_id === legacyUser.user_id)) {
-          users.push(legacyUser);
-          localStorage.setItem(STORAGE_USERS_DIRECTORY, JSON.stringify(users));
-        }
-      } catch {
-        // ignore legacy parse error
-      }
+export const CSRF_HEADER = "X-Requested-With";
+export const CSRF_VALUE = "examen";
+export const AUTH_EXPIRED_EVENT = "examen:unauthenticated";
+
+let installed = false;
+
+const isApiRequest = (url: string): boolean => {
+  const base = getApiBaseUrl();
+  const path = base && url.startsWith(base) ? url.slice(base.length) : url;
+  return path.startsWith("/api/") || path.startsWith("/mcp");
+};
+
+export const installAuthFetch = (): void => {
+  if (installed || typeof window === "undefined") return;
+  installed = true;
+  const nativeFetch = window.fetch.bind(window);
+  window.fetch = async (input: RequestInfo | URL, init: RequestInit = {}) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (!isApiRequest(url)) return nativeFetch(input, init);
+    const method = (init.method || (input instanceof Request ? input.method : "GET")).toUpperCase();
+    const headers = new Headers(init.headers || (input instanceof Request ? input.headers : undefined));
+    if (!["GET", "HEAD", "OPTIONS"].includes(method)) headers.set(CSRF_HEADER, CSRF_VALUE);
+    const res = await nativeFetch(input, { ...init, headers, credentials: "include" });
+    if (res.status === 401 && !url.includes("/api/auth/")) {
+      window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT));
     }
-    return users;
-  } catch (err) {
-    console.warn("Failed to read saved demo users:", err);
-    return [];
-  }
-};
-
-/**
- * Saves or updates a demo user in the local directory.
- */
-export const saveUserToDirectory = (user: DemoUser): void => {
-  if (typeof window === "undefined" || !user?.user_id) return;
-  try {
-    const users = getSavedUsers();
-    const idx = users.findIndex((u) => u.user_id === user.user_id);
-    if (idx >= 0) {
-      users[idx] = { ...users[idx], ...user, last_active: new Date().toISOString() };
-    } else {
-      users.push({ ...user, last_active: new Date().toISOString() });
-    }
-    localStorage.setItem(STORAGE_USERS_DIRECTORY, JSON.stringify(users));
-  } catch (err) {
-    console.warn("Failed to save user to directory:", err);
-  }
-};
-
-/**
- * Removes a user profile completely from the local directory (GDPR Art. 17).
- */
-export const removeUserFromDirectory = (userId: string): void => {
-  if (typeof window === "undefined" || !userId) return;
-  try {
-    const users = getSavedUsers().filter((u) => u.user_id !== userId);
-    localStorage.setItem(STORAGE_USERS_DIRECTORY, JSON.stringify(users));
-    if (localStorage.getItem(STORAGE_ACTIVE_USER_ID) === userId) {
-      localStorage.removeItem(STORAGE_ACTIVE_USER_ID);
-    }
-    localStorage.removeItem(STORAGE_LEGACY_KEY);
-  } catch (err) {
-    console.warn("Failed to remove user from directory:", err);
-  }
-};
-
-/**
- * Retrieves the currently active user session, or null if unauthenticated.
- */
-export const getLocalUser = (): DemoUser | null => {
-  if (typeof window === "undefined") return null;
-  try {
-    const activeId = localStorage.getItem(STORAGE_ACTIVE_USER_ID);
-    const users = getSavedUsers();
-    if (activeId) {
-      const found = users.find((u) => u.user_id === activeId);
-      if (found) return found;
-    }
-    // Fallback to legacy single session key if available
-    const legacyRaw = localStorage.getItem(STORAGE_LEGACY_KEY);
-    if (legacyRaw) {
-      return JSON.parse(legacyRaw) as DemoUser;
-    }
-    return null;
-  } catch {
-    return null;
-  }
-};
-
-/**
- * Saves and sets the active demo user session.
- */
-export const saveLocalUser = (user: DemoUser): void => {
-  if (typeof window === "undefined" || !user?.user_id) return;
-  try {
-    saveUserToDirectory(user);
-    localStorage.setItem(STORAGE_ACTIVE_USER_ID, user.user_id);
-    // Maintain legacy key for any backward compatibility
-    localStorage.setItem(STORAGE_LEGACY_KEY, JSON.stringify(user));
-  } catch (err) {
-    console.warn("Failed to persist user session:", err);
-  }
-};
-
-/**
- * Clears the active session (logging out) without deleting the saved profile.
- */
-export const clearLocalUser = (): void => {
-  if (typeof window === "undefined") return;
-  try {
-    localStorage.removeItem(STORAGE_ACTIVE_USER_ID);
-    localStorage.removeItem(STORAGE_LEGACY_KEY);
-  } catch (err) {
-    console.warn("Failed to clear active user session:", err);
-  }
-};
-
-/**
- * Logs in with a handle or existing user ID.
- * Saved per user in the demo user management system.
- */
-export const loginUser = async (
-  handle: string,
-  connectBee: boolean = false,
-  existingUserId?: string
-): Promise<{ success: boolean; user: DemoUser; bee_pairing?: BeePairingInfo }> => {
-  const baseUrl = getApiBaseUrl();
-  const payload = {
-    handle: handle.trim(),
-    connect_bee: connectBee,
-    user_id: existingUserId || undefined,
+    return res;
   };
+};
 
-  const res = await fetch(`${baseUrl}/api/auth/login`, {
-    method: "POST",
+const api = (path: string): string => `${getApiBaseUrl()}${path}`;
+
+const jsonRequest = async <T>(path: string, method: string, body?: unknown): Promise<T> => {
+  const res = await fetch(api(path), {
+    method,
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
+    body: body === undefined ? undefined : JSON.stringify(body),
   });
-
+  const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new Error(`Login failed with status ${res.status}`);
+    throw new Error(data?.message || data?.error || `Request failed (${res.status})`);
   }
-
-  const data = await res.json();
-  if (data.user) {
-    saveLocalUser(data.user);
-  }
-  return data;
+  return data as T;
 };
 
-/**
- * Fetches the list of saved demo users from the backend directory.
- */
-export const fetchBackendUsers = async (): Promise<DemoUser[]> => {
-  const baseUrl = getApiBaseUrl();
-  try {
-    const res = await fetch(`${baseUrl}/api/auth/users`);
-    if (res.ok) {
-      const data = await res.json();
-      if (Array.isArray(data.users)) {
-        data.users.forEach((u: DemoUser) => saveUserToDirectory(u));
-        return getSavedUsers();
-      }
-    }
-  } catch (err) {
-    console.warn("Failed to fetch backend users:", err);
-  }
-  return getSavedUsers();
+interface SessionResponse {
+  authenticated: boolean;
+  user: {
+    user_id: string;
+    username: string;
+    display_name?: string | null;
+    is_admin: boolean;
+    timezone?: string | null;
+    created_at: string;
+  } | null;
+  bee_link: BeeLinkInfo | null;
+}
+
+export const toSessionUser = (data: SessionResponse): SessionUser | null => {
+  if (!data.authenticated || !data.user) return null;
+  const link = data.bee_link;
+  return {
+    user_id: data.user.user_id,
+    username: data.user.username,
+    handle: data.user.display_name || data.user.username,
+    is_admin: data.user.is_admin,
+    created_at: data.user.created_at,
+    bee_link: link,
+    bee_connected: link?.state === "linked",
+    bee_account: link?.state === "linked" ? link.bee_first_name ?? null : null,
+  };
 };
 
-/**
- * Generates or refreshes the Bee Wearable pairing URL by calling the Bee CLI.
- */
-export const fetchBeeLink = async (
-  userId?: string
-): Promise<{ success: boolean; bee_pairing: BeePairingInfo }> => {
-  const baseUrl = getApiBaseUrl();
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (userId) headers["x-user-id"] = userId;
+export const fetchSession = async (): Promise<SessionUser | null> => {
+  const res = await fetch(api("/api/auth/session"));
+  if (!res.ok) return null;
+  return toSessionUser(await res.json());
+};
 
-  const res = await fetch(`${baseUrl}/api/auth/bee-link`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ user_id: userId }),
+export const login = async (username: string, password: string): Promise<SessionUser> => {
+  const data = await jsonRequest<SessionResponse & { success: boolean }>("/api/auth/login", "POST", {
+    username: username.trim(),
+    password,
   });
-
-  if (!res.ok) {
-    throw new Error(`Failed to generate Bee link: ${res.status}`);
-  }
-
-  return res.json();
+  const user = toSessionUser({ ...data, authenticated: true });
+  if (!user) throw new Error("Sign-in failed");
+  return user;
 };
 
-/**
- * Disconnects the Bee Wearable AI device and clears pairing credentials.
- */
-export const disconnectBee = async (userId?: string): Promise<boolean> => {
-  const baseUrl = getApiBaseUrl();
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (userId) headers["x-user-id"] = userId;
-
-  const res = await fetch(`${baseUrl}/api/auth/bee-disconnect`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ user_id: userId }),
-  });
-
-  if (res.ok) {
-    const user = getLocalUser();
-    if (user) {
-      user.bee_connected = false;
-      user.bee_account = null;
-      user.bee_pairing = null;
-      saveLocalUser(user);
-    }
-    return true;
-  }
-  return false;
+/** Ends this browser session only: the Bee link and live ingestion keep running. */
+export const logout = async (): Promise<void> => {
+  await jsonRequest("/api/auth/logout", "POST").catch(() => undefined);
 };
 
-/**
- * Logs out the active user session and removes login.
- */
-export const logoutUser = async (userId?: string): Promise<void> => {
-  const baseUrl = getApiBaseUrl();
-  try {
-    await fetch(`${baseUrl}/api/auth/logout`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ user_id: userId, disconnect_bee: true }),
-    });
-  } catch (err) {
-    console.warn("Logout request error:", err);
-  } finally {
-    clearLocalUser();
-  }
+export const logoutEverywhere = async (): Promise<void> => {
+  await jsonRequest("/api/auth/sessions/revoke-all", "POST");
 };
 
-/**
- * GDPR Art. 17 Right to Erasure: purges all stored user data locally and remotely.
- */
-export const purgeUserData = async (userId?: string): Promise<void> => {
-  const baseUrl = getApiBaseUrl();
-  try {
-    await fetch(`${baseUrl}/api/auth/gdpr-purge`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ user_id: userId }),
-    });
-  } catch (err) {
-    console.warn("Purge request error:", err);
-  } finally {
-    if (userId) {
-      removeUserFromDirectory(userId);
-    } else {
-      clearLocalUser();
-    }
-  }
+export const changePassword = async (currentPassword: string, newPassword: string): Promise<void> => {
+  await jsonRequest("/api/auth/password", "POST", { current_password: currentPassword, new_password: newPassword });
 };
+
+// --- Bee account link -------------------------------------------------------
+
+export const startBeePairing = async (): Promise<BeeLinkInfo> =>
+  (await jsonRequest<{ bee_link: BeeLinkInfo }>("/api/bee/link", "POST")).bee_link;
+
+/** Re-checks the Bee token; completes an approved pairing and starts live ingestion. */
+export const refreshBeeLink = async (): Promise<BeeLinkInfo> =>
+  (await jsonRequest<{ bee_link: BeeLinkInfo }>("/api/bee/link", "GET")).bee_link;
+
+export const unlinkBee = async (): Promise<BeeLinkInfo> =>
+  (await jsonRequest<{ bee_link: BeeLinkInfo }>("/api/bee/unlink", "POST")).bee_link;
+
+// --- Account ------------------------------------------------------------------
+
+/** GDPR Art. 17: erases the signed-in user's data, Bee link and account (password required). */
+export const eraseAccount = async (password: string): Promise<void> => {
+  await jsonRequest("/api/account/erase", "POST", { password });
+};
+
+export const listTokens = async (): Promise<AccountToken[]> =>
+  (await jsonRequest<{ tokens: AccountToken[] }>("/api/account/tokens", "GET")).tokens;
+
+export const createToken = async (name: string): Promise<{ token: string; info: AccountToken }> =>
+  jsonRequest("/api/account/tokens", "POST", { name });
+
+export const revokeToken = async (tokenId: string): Promise<void> => {
+  await jsonRequest(`/api/account/tokens/${encodeURIComponent(tokenId)}`, "DELETE");
+};
+
+// --- Admin (accounts only) ------------------------------------------------------
+
+export const listUsers = async (): Promise<AdminUser[]> =>
+  (await jsonRequest<{ users: AdminUser[] }>("/api/admin/users", "GET")).users;
+
+export const createUser = async (
+  username: string,
+  isAdmin: boolean
+): Promise<{ user: AdminUser; initial_password: string | null }> =>
+  jsonRequest("/api/admin/users", "POST", { username, is_admin: isAdmin });
+
+export const setUserStatus = async (userId: string, status: "active" | "disabled"): Promise<void> => {
+  await jsonRequest(`/api/admin/users/${encodeURIComponent(userId)}/status`, "POST", { status });
+};
+
+export const resetUserPassword = async (userId: string): Promise<string> =>
+  (await jsonRequest<{ initial_password: string }>(`/api/admin/users/${encodeURIComponent(userId)}/reset-password`, "POST"))
+    .initial_password;
 
 /**
  * GDPR Art. 20 Data Portability: downloads the user's telemetry snapshot as JSON.
  */
-export const exportUserDataJson = (user: DemoUser, telemetryData?: any): void => {
+export const exportUserDataJson = (user: SessionUser, telemetryData?: unknown): void => {
   if (typeof window === "undefined") return;
   const exportPayload = {
     export_metadata: {
@@ -276,14 +170,12 @@ export const exportUserDataJson = (user: DemoUser, telemetryData?: any): void =>
       exported_at: new Date().toISOString(),
       system: "EXAMEN Ambient Intelligence Platform",
     },
-    user_profile: user,
+    user_profile: { user_id: user.user_id, username: user.username, bee_account: user.bee_account },
     ambient_telemetry_snapshot: telemetryData || null,
   };
-
-  const dataStr =
-    "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(exportPayload, null, 2));
-  const dlAnchorElem = document.createElement("a");
-  dlAnchorElem.setAttribute("href", dataStr);
-  dlAnchorElem.setAttribute("download", `examen-gdpr-export-${user.user_id || "demo"}.json`);
-  dlAnchorElem.click();
+  const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(exportPayload, null, 2));
+  const anchor = document.createElement("a");
+  anchor.setAttribute("href", dataStr);
+  anchor.setAttribute("download", `examen-gdpr-export-${user.username}.json`);
+  anchor.click();
 };

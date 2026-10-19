@@ -4,6 +4,8 @@ import asyncio
 from datetime import datetime, timedelta
 
 import pytest
+
+from tests.conftest import TEST_USER_ID, login_client
 from starlette.testclient import TestClient
 
 import src.core.storage as storage_mod
@@ -34,8 +36,8 @@ def env(tmp_path, monkeypatch):
                               synthesizer=StaticSynthesizer(), continuity=None),
     )
     monkeypatch.setattr(service, "ensure_started", lambda: True)   # runs are executed explicitly
-    monkeypatch.setattr(backfill_mod, "_service", service)
-    client = TestClient(create_app())
+    monkeypatch.setitem(backfill_mod._services, TEST_USER_ID, service)
+    client = login_client(TestClient(create_app()))
     return client, store, service
 
 

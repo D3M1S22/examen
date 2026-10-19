@@ -20,6 +20,7 @@ dependencies = [
     "bedrock-agentcore>=1.24.0",
     "langchain-openai>=0.2.0",
     "aws-bedrock-token-generator>=1.1.0",
+    "argon2-cffi>=23.1.0",
 ]
 
 [tool.pytest.ini_options]

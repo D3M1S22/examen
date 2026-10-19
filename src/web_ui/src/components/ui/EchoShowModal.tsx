@@ -8,7 +8,7 @@ import {
   VerifiedAction,
   SocialEntity,
   BriefingReport,
-  DemoUser,
+  SessionUser,
   EchoNotification,
   EventSummary,
   EventEngineStatus,
@@ -47,7 +47,7 @@ export interface EchoShowModalProps {
   topicsData?: { topics: BriefingReport[] };
   sessionsData?: { sessions: EventSummary[] };
   engineStatus?: EventEngineStatus;
-  currentUser?: DemoUser | null;
+  currentUser?: SessionUser | null;
   onOpenLoginModal?: () => void;
   onLogout?: () => void;
   onDisconnectBee?: () => void;

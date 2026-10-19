@@ -12,12 +12,10 @@ import asyncio
 import json
 import logging
 import os
-import re
-import shutil
-import subprocess
-import uuid
+import secrets
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import uvicorn
 from mcp.server.fastmcp import FastMCP
@@ -28,8 +26,9 @@ from starlette.responses import JSONResponse, StreamingResponse
 from starlette.staticfiles import StaticFiles
 
 from src.core.config import settings
-from src.core.schemas import PlannedTask, SocialCommitment
-from src.core.storage import get_storage_store
+from src.core.identity import MissingUserContext, UserContext, get_current_user, require_user
+from src.core.schemas import PlannedTask, SocialCommitment, UserAccount
+from src.core.storage import get_storage_store, get_system_store
 from src.pipeline.app import agent_invocation
 from src.serving.tools import (
     create_planned_task,
@@ -46,80 +45,47 @@ from src.serving.tools import (
 )
 from src.serving.tools.action_tools import _format_elapsed_time
 from src.serving.tools.topic_tools import get_topic_briefing
+from src.serving.auth import SESSION_COOKIE, AuthError, AuthMiddleware, get_auth_provider
+from src.serving.bee_accounts import BeeLinkError, erase_account, public_link, refresh_link, start_pairing
+from src.serving.bee_accounts import unlink as unlink_bee
+from src.serving.user_runtime import TooManyActiveUsers, UserRuntime, get_event_hub, get_runtime_manager
 
 logger = logging.getLogger("examen.serving.mcp")
 
 # Initialize FastMCP Server
 mcp = FastMCP("examen-mcp")
 
-# In-memory SSE subscribers set for real-time dashboard events
-_sse_subscribers: set[asyncio.Queue] = set()
+def broadcast_event(event_type: str, data: Optional[Dict[str, Any]] = None, user_id: Optional[str] = None) -> None:
+    """Publishes an SSE event to one user's dashboards (default: the user of the current context).
+
+    Without a user the event is dropped: speech-derived events are never broadcast to everyone."""
+    uid = user_id
+    if uid is None:
+        ctx = get_current_user()
+        if ctx is None:
+            logger.debug(f"SSE event '{event_type}' dropped: no user context")
+            return
+        uid = ctx.user_id
+    get_event_hub().publish(uid, event_type, data)
 
 
-def broadcast_event(event_type: str, data: Optional[Dict[str, Any]] = None) -> None:
-    """Broadcasts a JSON event to all connected SSE clients."""
-    payload = json.dumps({
-        "type": event_type,
-        "data": data or {},
-        "timestamp": datetime.now().isoformat(),
-    })
-    msg = f"data: {payload}\n\n"
-    for q in list(_sse_subscribers):
-        try:
-            q.put_nowait(msg)
-        except Exception:
-            _sse_subscribers.discard(q)
-
-
-_engine_listener_registered = False
-_backfill_prepared = False
+def _runtime() -> UserRuntime:
+    """The live runtime of the user in the current context."""
+    return get_runtime_manager().current()
 
 
 def _ensure_event_engine() -> Any:
-    """Starts the Deep Topic Event Engine runtime (tick loop + synthesis worker) on this loop
-    and forwards engine lifecycle events to SSE subscribers. Returns the shared engine."""
-    global _engine_listener_registered
-    from src.ingestion.event_engine import get_event_engine_runtime
-
-    runtime = get_event_engine_runtime()
-    if not _engine_listener_registered:
-        runtime.add_listener(lambda event_type, payload: broadcast_event(event_type, payload))
-        _engine_listener_registered = True
-    # History backfill: the startup hand-over must happen before the live engine starts ticking
-    _ensure_backfill_service(runtime.engine)
-    if settings.event_engine_enabled:
-        runtime.ensure_started()
-    return runtime.engine
+    """Starts the caller's Event Engine runtime (and backfill service); returns the caller's engine."""
+    return _runtime().ensure_engine()
 
 
-def _ensure_backfill_service(live_engine: Any = None) -> Any:
-    """Wires the Historical Transcript Backfill service to the live ingestion and starts it.
-
-    On the first call it runs the startup catch-up (docs/next_steps/historical_backfill/03 §6-7)."""
-    global _backfill_prepared
-    from src.ingestion.backfill import get_backfill_service
-
-    service = get_backfill_service()
-    if not settings.backfill_enabled:
-        return service
-    if not _backfill_prepared:
-        _backfill_prepared = True
-        mgr = OrchestratorManager.get_instance()
-        service.broadcast = broadcast_event
-        service.live_engine_getter = (lambda: live_engine) if live_engine is not None else None
-        service.live_since_getter = mgr.live_since
-        service.live_busy = mgr.live_busy
-        try:
-            run = service.prepare_startup(live_engine if settings.event_engine_enabled else None)
-            if run is not None:
-                logger.info(f"History backfill: startup catch-up queued for {run.window_from} → {run.window_to}")
-        except Exception as e:
-            logger.warning(f"History backfill startup preparation failed: {e}")
-    service.ensure_started()
-    return service
+def _ensure_backfill_service() -> Any:
+    runtime = _runtime()
+    runtime.ensure_engine()
+    return runtime.backfill
 
 
-# Register the 10 core MCP tools for Alexa+
+# Register the core MCP tools for Alexa+ (each call runs as the token's user: AuthMiddleware)
 mcp.tool()(create_planned_task)
 mcp.tool()(get_upcoming_tasks)
 mcp.tool()(verify_action_status)
@@ -135,499 +101,324 @@ mcp.tool()(get_ingestion_coverage)
 
 
 # ---------------------------------------------------------------------------
-# REST API Endpoints (for the Web UI & Echo Show Ext-App)
+# Identity helpers
 # ---------------------------------------------------------------------------
 
-_bee_status_cache: Dict[str, Any] = {"timestamp": 0.0, "data": None}
+def _ctx(request: Request) -> UserContext:
+    ctx = getattr(request.state, "user", None)
+    if ctx is None:  # AuthMiddleware guards protected routes; this is a second line of defence
+        raise MissingUserContext("unauthenticated")
+    return ctx
 
 
-class OrchestratorManager:
-    """Manages the background execution and telemetry lifecycle of the BeeStreamOrchestrator."""
-    _instance: Optional["OrchestratorManager"] = None
-
-    def __init__(self):
-        self.orchestrator = None
-        self.task: Optional[asyncio.Task] = None
-        self.is_started = False
-
-    @classmethod
-    def get_instance(cls) -> "OrchestratorManager":
-        if cls._instance is None:
-            cls._instance = cls()
-        return cls._instance
-
-    def ensure_started(self) -> None:
-        """Launches the background orchestrator task if not already active."""
-        if self.task is None or self.task.done():
-            try:
-                loop = asyncio.get_running_loop()
-                self.task = loop.create_task(self._run_orchestrator())
-                self.is_started = True
-            except RuntimeError:
-                pass
-
-    async def _run_orchestrator(self) -> None:
-        try:
-            from src.ingestion.orchestrator import BeeStreamOrchestrator
-            store = get_storage_store()
-            self.orchestrator = BeeStreamOrchestrator(
-                debug_mode="none", store=store, engine=_ensure_event_engine()
-            )
-            from src.ingestion.backfill import get_backfill_service
-
-            self.orchestrator.on_coverage_gap = lambda gap: broadcast_event(
-                "coverage_gap_detected", gap.model_dump()
-            )
-            self.orchestrator.on_coverage_open = get_backfill_service().on_live_coverage_open
-            logger.info("Ingestion Orchestrator background service started.")
-            await self.orchestrator.run()
-        except asyncio.CancelledError:
-            logger.info("Ingestion Orchestrator background service stopped.")
-        except Exception as e:
-            logger.warning(f"Ingestion Orchestrator background service error: {e}")
-        finally:
-            self.is_started = False
-
-    def live_since(self) -> Optional[str]:
-        """Start of the current live coverage interval (history backfill windows end there)."""
-        orch = self.orchestrator
-        if orch is None or not hasattr(orch, "coverage") or orch.coverage.current is None:
-            return None
-        return orch.coverage.current.start
-
-    def live_busy(self) -> bool:
-        orch = self.orchestrator
-        return bool(orch is not None and getattr(orch, "inflight_dispatches", 0) > 0)
-
-    def stop(self) -> None:
-        """Stops the running orchestrator background task."""
-        if self.task and not self.task.done():
-            self.task.cancel()
-        self.is_started = False
-
-    def get_status(self) -> Dict[str, Any]:
-        """Returns real-time status of the orchestrator stream and buffers."""
-        self.ensure_started()
-        if self.orchestrator and hasattr(self.orchestrator, "get_status_dict"):
-            st = self.orchestrator.get_status_dict()
-            st["service_managed"] = True
-            return st
-        return {
-            "running": self.is_started and (self.task is not None and not self.task.done()),
-            "status": "LISTENING" if self.is_started else "STANDBY",
-            "mode": "ambient_sse",
-            "chunks_screened": 0,
-            "utterances_received": 0,
-            "detail": "Orchestrator initializing background stream",
-            "service_managed": True,
-        }
+def _client_ip(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for", "")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else ""
 
 
-def _get_bee_device_telemetry() -> Dict[str, Any]:
-    """Probes the Bee CLI for real authentication and joins it with Orchestrator stream state."""
-    import time
-    now = time.time()
-    orch_mgr = OrchestratorManager.get_instance()
-    orch_status = orch_mgr.get_status()
+async def _json_body(request: Request) -> Dict[str, Any]:
+    try:
+        body = await request.json()
+    except Exception:
+        return {}
+    return body if isinstance(body, dict) else {}
 
-    if _bee_status_cache["data"] and (now - _bee_status_cache["timestamp"] < 10.0):
-        res = dict(_bee_status_cache["data"])
-        # Update dynamic streaming status from orchestrator
-        if orch_status.get("status") == "STREAMING":
-            res["status"] = "STREAMING"
-            res["connected"] = True
-            res["detail"] = f"Bee Wearable streaming ({orch_status.get('utterances_received', 0)} utterances)"
-        elif orch_status.get("status") == "LISTENING" and res.get("account"):
-            res["status"] = "LISTENING"
-            res["connected"] = False
-            res["detail"] = f"Bee account verified as {res['account']}; orchestrator listening for audio stream"
-        return res
 
-    from src.ingestion.stream_convo import BeeClient, get_bee_binary_path
-    bee_bin = get_bee_binary_path()
-    if not bee_bin:
-        res = {
-            "connected": False,
-            "status": "DISCONNECTED",
-            "account": None,
-            "device_paired": False,
-            "detail": "Bee CLI binary not found in resources/bee-cli/dist or PATH",
-        }
+def _auth_error(e: AuthError) -> JSONResponse:
+    return JSONResponse({"error": e.code, "message": e.message}, status_code=e.status)
+
+
+def _user_payload(user: UserAccount) -> Dict[str, Any]:
+    return user.model_dump(exclude={"external_sub"})
+
+
+def _bee_device_telemetry() -> Dict[str, Any]:
+    """The caller's Bee status from their link and live runtime (no `bee status` subprocess per request)."""
+    user_id = require_user().user_id
+    link = get_system_store().get_bee_link(user_id)
+    runtime = get_runtime_manager().get(user_id)
+    orch = runtime.get_status() if runtime is not None else None
+    account = link.bee_first_name if link.state == "linked" else None
+    if link.state == "pairing":
+        status, detail = "PAIRING", "Waiting for the Bee app to approve the pairing link"
+    elif link.state != "linked":
+        status = "DISCONNECTED"
+        detail = link.last_error or "No Bee account linked. Use 'Connect Bee' to pair your own Bee."
+    elif orch and orch.get("status") == "STREAMING":
+        status, detail = "STREAMING", f"Bee streaming ({orch.get('utterances_received', 0)} utterances)"
+    elif runtime is not None and runtime.streaming:
+        status, detail = "LISTENING", f"Bee account {account} linked; listening for speech"
     else:
-        try:
-            import subprocess
-            # `bee status` verifies the token over the network (~1.3 s observed): callers run this off the loop
-            proc = subprocess.run(
-                BeeClient()._build_cmd(["status"]),
-                capture_output=True,
-                text=True,
-                timeout=5.0,
-            )
-            out = proc.stdout.strip()
-            if "Verified as" in out:
-                import re
-                m = re.search(r"Verified as (.*?)(?:\s*\(id|\.|$)", out)
-                user_name = m.group(1).strip() if m else "Authenticated User"
-                
-                is_streaming = orch_status.get("status") == "STREAMING"
-                is_listening = orch_status.get("status") == "LISTENING" or orch_status.get("running")
-
-                res = {
-                    "connected": is_streaming,
-                    "status": "STREAMING" if is_streaming else ("LISTENING" if is_listening else "STANDBY"),
-                    "account": user_name,
-                    "device_paired": is_streaming,
-                    "detail": (
-                        f"Bee Wearable streaming audio ({orch_status.get('utterances_received', 0)} chunks)"
-                        if is_streaming
-                        else f"Bee account verified as {user_name}; orchestrator listening for wearable stream"
-                    ),
-                }
-            elif "Not logged in" in out:
-                res = {
-                    "connected": False,
-                    "status": "DISCONNECTED",
-                    "account": None,
-                    "device_paired": False,
-                    "detail": "Bee CLI not logged in. Run 'bee login' to authenticate.",
-                }
-            else:
-                res = {
-                    "connected": False,
-                    "status": "STANDBY",
-                    "account": None,
-                    "device_paired": False,
-                    "detail": out or "Awaiting Bee device link",
-                }
-        except Exception as e:
-            res = {
-                "connected": False,
-                "status": "STANDBY",
-                "account": None,
-                "device_paired": False,
-                "detail": f"Bee CLI probe: {str(e)}",
-            }
-
-    _bee_status_cache["timestamp"] = now
-    _bee_status_cache["data"] = res
-    return res
-
-
-# ---------------------------------------------------------------------------
-# GDPR-Compliant User Management & Bee Pairing Helpers
-# ---------------------------------------------------------------------------
-
-_user_sessions: Dict[str, Dict[str, Any]] = {}
-
-
-def _initiate_bee_login_pairing() -> Dict[str, Any]:
-    """Invokes Bee CLI login in non-waiting mode to obtain or report pairing authentication."""
-    from src.ingestion.stream_convo import get_bee_binary_path
-
-    bee_bin = get_bee_binary_path()
-    telemetry = _get_bee_device_telemetry()
-    if telemetry.get("account"):
-        return {
-            "status": "already_connected",
-            "connected": True,
-            "account": telemetry.get("account"),
-            "pairing_url": None,
-            "request_id": None,
-            "message": f"Already authenticated with Bee as {telemetry.get('account')}.",
-        }
-
-    if bee_bin:
-        try:
-            cmd = [bee_bin, "login", "--no-wait"]
-            if bee_bin.endswith(".js"):
-                runner = "bun" if shutil.which("bun") else ("node" if shutil.which("node") else "bun")
-                cmd = [runner, "run", bee_bin, "login", "--no-wait"]
-
-            proc = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=5.0,
-            )
-            out = proc.stdout + "\n" + proc.stderr
-            m_link = re.search(r"Authentication link:\s*(https://\S+)", out)
-            if m_link:
-                url = m_link.group(1).strip()
-                req_id = url.split("#")[-1] if "#" in url else ""
-                return {
-                    "status": "pairing_requested",
-                    "connected": False,
-                    "pairing_url": url,
-                    "request_id": req_id,
-                    "account": None,
-                    "message": "Bee pairing link generated. Authorize via Bee mobile app.",
-                }
-
-            m_verified = re.search(r"already connected to Bee as (.*?)\.", out, re.IGNORECASE)
-            if m_verified:
-                acc = m_verified.group(1).strip()
-                return {
-                    "status": "already_connected",
-                    "connected": True,
-                    "account": acc,
-                    "pairing_url": None,
-                    "request_id": None,
-                    "message": f"Already authenticated with Bee as {acc}.",
-                }
-        except Exception as e:
-            logger.warning(f"Failed to execute Bee login CLI: {e}")
-
-    # Fallback to generated pairing URL compliant with Bee format
-    req_id = f"bee_{uuid.uuid4().hex[:12]}"
-    url = f"https://bee.computer/connect#{req_id}"
+        status, detail = "STANDBY", link.last_error or f"Bee account {account} linked; live ingestion not running"
     return {
-        "status": "pairing_requested",
-        "connected": False,
-        "pairing_url": url,
-        "request_id": req_id,
-        "account": None,
-        "message": "Bee pairing link generated. Open link and authorize in mobile app.",
+        "connected": status == "STREAMING",
+        "status": status,
+        "account": account,
+        # Means "utterances are flowing": the Bee CLI exposes no BLE pairing / battery / RSSI
+        "device_paired": status == "STREAMING",
+        "detail": detail,
+        "link_state": link.state,
+        "last_error": link.last_error,
     }
 
 
-def _disconnect_bee_device() -> bool:
-    """Invokes Bee CLI logout to clear credentials from the device."""
-    from src.ingestion.stream_convo import get_bee_binary_path
+# ---------------------------------------------------------------------------
+# Authentication & account (docs/next_steps/multi_user/02, 04 §1)
+# ---------------------------------------------------------------------------
 
-    bee_bin = get_bee_binary_path()
-    global _bee_status_cache
-    _bee_status_cache = {"timestamp": 0.0, "data": None}
-    if bee_bin:
-        try:
-            cmd = [bee_bin, "logout"]
-            if bee_bin.endswith(".js"):
-                runner = "bun" if shutil.which("bun") else ("node" if shutil.which("node") else "bun")
-                cmd = [runner, "run", bee_bin, "logout"]
-            subprocess.run(cmd, capture_output=True, text=True, timeout=5.0)
-            return True
-        except Exception as e:
-            logger.warning(f"Error calling bee logout: {e}")
-            return False
-    return True
-
-
-async def _extract_user_id_from_request(request: Request) -> Optional[str]:
-    """Helper to safely extract user_id from headers, query params, or JSON body."""
-    uid = request.headers.get("x-user-id") or request.query_params.get("user_id")
-    if uid:
-        return uid
-    if request.method in ("POST", "PUT", "PATCH", "DELETE"):
-        try:
-            body = await request.json()
-            if isinstance(body, dict):
-                return body.get("user_id")
-        except Exception:
-            pass
-    return None
-
-
-@mcp.custom_route("/api/auth/users", methods=["GET"])
-async def api_auth_users(request: Request) -> JSONResponse:
-    """Returns list of active/saved demo user profiles for GDPR-compliant user management."""
-    users_list = []
-    telemetry = await asyncio.to_thread(_get_bee_device_telemetry)
-    for uid, sess in _user_sessions.items():
-        users_list.append({
-            "user_id": uid,
-            "handle": sess.get("handle", "Demo User"),
-            "avatar_seed": sess.get("avatar_seed", uid),
-            "created_at": sess.get("created_at"),
-            "last_active": sess.get("last_active", sess.get("created_at")),
-            "bee_connected": bool(sess.get("bee_connected", False) or telemetry.get("account")),
-            "bee_account": sess.get("bee_account") or telemetry.get("account"),
-            "gdpr_compliant": True,
-        })
-    return JSONResponse({
-        "success": True,
-        "users": users_list,
-        "count": len(users_list),
-        "gdpr_mode": "Strict Privacy by Design (No sensitive PII stored)",
-    })
-
-
-@mcp.custom_route("/api/auth/session", methods=["GET"])
-async def api_auth_session(request: Request) -> JSONResponse:
-    """Returns current user session and live Bee hardware pairing state."""
-    user_id = request.headers.get("x-user-id") or request.query_params.get("user_id")
-    user_session = _user_sessions.get(user_id) if user_id else None
-    telemetry = await asyncio.to_thread(_get_bee_device_telemetry)
-
-    if user_session:
-        user_session["bee_connected"] = bool(telemetry.get("account"))
-        user_session["bee_account"] = telemetry.get("account")
-
-    return JSONResponse({
-        "authenticated": user_session is not None,
-        "user": user_session,
-        "bee_device": telemetry,
-        "gdpr_mode": "Strict Privacy by Design (No sensitive PII stored)",
-    })
+@mcp.custom_route("/api/health", methods=["GET"])
+async def api_health(request: Request) -> JSONResponse:
+    """Unauthenticated liveness probe (deploy health checks)."""
+    return JSONResponse({"status": "ok", "timestamp": datetime.now().isoformat()})
 
 
 @mcp.custom_route("/api/auth/login", methods=["POST"])
 async def api_auth_login(request: Request) -> JSONResponse:
-    """GDPR-compliant demo session initialization with optional Bee device pairing."""
+    """Username + password sign-in: sets the HttpOnly session cookie."""
+    body = await _json_body(request)
     try:
-        body = await request.json()
-    except Exception:
-        body = {}
-
-    raw_handle = body.get("handle") or "Demo User"
-    # Sanitize handle: strip emails or numbers to prevent accidental PII leakage under GDPR Art. 5(1)(c)
-    handle = raw_handle.strip()
-    if "@" in handle:
-        handle = handle.split("@")[0]
-    if len(handle) > 30:
-        handle = handle[:30]
-
-    user_id = body.get("user_id") or f"usr_{uuid.uuid4().hex[:8]}"
-    connect_bee = bool(body.get("connect_bee", False))
-
-    telemetry = await asyncio.to_thread(_get_bee_device_telemetry)
-    bee_pairing = None
-    if connect_bee:
-        bee_pairing = await asyncio.to_thread(_initiate_bee_login_pairing)
-
-    now_iso = datetime.now().isoformat()
-    existing_sess = _user_sessions.get(user_id)
-    created_at = existing_sess.get("created_at") if existing_sess else now_iso
-
-    user_session = {
-        "user_id": user_id,
-        "handle": handle,
-        "avatar_seed": user_id,
-        "created_at": created_at,
-        "last_active": now_iso,
-        "gdpr_compliant": True,
-        "privacy_framework": "EU GDPR Art. 25 Privacy by Design",
-        "data_retention": "ephemeral-session",
-        "bee_connected": bool(telemetry.get("account")),
-        "bee_account": telemetry.get("account"),
-        "bee_pairing": bee_pairing,
-    }
-    _user_sessions[user_id] = user_session
-    broadcast_event("user_logged_in", {
-        "user_id": user_id,
-        "handle": handle,
-        "bee_connected": user_session["bee_connected"],
-    })
-
-    return JSONResponse({
+        user, token = await asyncio.to_thread(
+            get_auth_provider().login, str(body.get("username") or ""), str(body.get("password") or ""),
+            ip=_client_ip(request), user_agent=request.headers.get("user-agent", ""),
+        )
+    except AuthError as e:
+        return _auth_error(e)
+    response = JSONResponse({
         "success": True,
-        "user": user_session,
-        "bee_pairing": bee_pairing,
+        "user": _user_payload(user),
+        "bee_link": public_link(get_system_store().get_bee_link(user.user_id)),
     })
+    response.set_cookie(
+        SESSION_COOKIE, token, max_age=int(settings.auth_session_days * 86400), httponly=True,
+        samesite="lax", secure=settings.auth_cookie_secure, path="/",
+    )
+    return response
 
 
-@mcp.custom_route("/api/auth/bee-link", methods=["GET", "POST"])
-async def api_auth_bee_link(request: Request) -> JSONResponse:
-    """Generates or refreshes the Bee pairing URL by invoking the Bee CLI."""
-    pairing_info = await asyncio.to_thread(_initiate_bee_login_pairing)
-    user_id = await _extract_user_id_from_request(request)
-    if user_id and user_id in _user_sessions:
-        _user_sessions[user_id]["bee_pairing"] = pairing_info
-        if pairing_info.get("connected"):
-            _user_sessions[user_id]["bee_connected"] = True
-            _user_sessions[user_id]["bee_account"] = pairing_info.get("account")
-    return JSONResponse({"success": True, "bee_pairing": pairing_info})
-
-
-@mcp.custom_route("/api/auth/bee-disconnect", methods=["POST"])
-async def api_auth_bee_disconnect(request: Request) -> JSONResponse:
-    """Logs out of Bee CLI and removes device pairing credentials."""
-    await asyncio.to_thread(_disconnect_bee_device)
-    user_id = await _extract_user_id_from_request(request)
-    if user_id and user_id in _user_sessions:
-        _user_sessions[user_id]["bee_connected"] = False
-        _user_sessions[user_id]["bee_account"] = None
-        _user_sessions[user_id]["bee_pairing"] = None
-    broadcast_event("bee_disconnected", {})
+@mcp.custom_route("/api/auth/session", methods=["GET"])
+async def api_auth_session(request: Request) -> JSONResponse:
+    """Current user (or ``authenticated: false``) and their Bee link."""
+    ctx = getattr(request.state, "user", None)
+    if ctx is None:
+        return JSONResponse({"authenticated": False, "user": None, "bee_link": None,
+                             "signup_enabled": settings.auth_allow_signup})
+    user = get_system_store().get_user(ctx.user_id)
     return JSONResponse({
-        "success": True,
-        "connected": False,
-        "message": "Bee Wearable pairing removed and credentials cleared.",
+        "authenticated": user is not None,
+        "user": _user_payload(user) if user else None,
+        "auth_method": ctx.auth_method,
+        "bee_link": public_link(get_system_store().get_bee_link(ctx.user_id)),
+        "bee_device": _bee_device_telemetry(),
     })
 
 
 @mcp.custom_route("/api/auth/logout", methods=["POST"])
 async def api_auth_logout(request: Request) -> JSONResponse:
-    """Logs out the user, removes session from memory, and clears Bee credentials."""
+    """Ends this web session only: the Bee link and live ingestion keep running (D8)."""
+    from src.serving.auth import session_token_from_scope
+
+    get_auth_provider().logout(session_token_from_scope(request.scope))
+    response = JSONResponse({"success": True})
+    response.delete_cookie(SESSION_COOKIE, path="/")
+    return response
+
+
+@mcp.custom_route("/api/auth/sessions/revoke-all", methods=["POST"])
+async def api_auth_revoke_all(request: Request) -> JSONResponse:
+    """Logs the caller out everywhere: every web session and personal access token."""
+    get_auth_provider().revoke_everything(_ctx(request).user_id)
+    response = JSONResponse({"success": True})
+    response.delete_cookie(SESSION_COOKIE, path="/")
+    return response
+
+
+@mcp.custom_route("/api/auth/password", methods=["POST"])
+async def api_auth_password(request: Request) -> JSONResponse:
+    ctx = _ctx(request)
+    body = await _json_body(request)
+    provider = get_auth_provider()
+    if not await asyncio.to_thread(provider.verify_password, ctx.user_id, str(body.get("current_password") or "")):
+        return JSONResponse({"error": "invalid_credentials", "message": "Current password is wrong"}, status_code=401)
     try:
-        body = await request.json()
-    except Exception:
-        body = {}
-
-    user_id = body.get("user_id") or request.headers.get("x-user-id") or request.query_params.get("user_id")
-    disconnect_bee = body.get("disconnect_bee", True)
-
-    if disconnect_bee:
-        await asyncio.to_thread(_disconnect_bee_device)
-
-    if user_id and user_id in _user_sessions:
-        del _user_sessions[user_id]
-
-    broadcast_event("user_logged_out", {"user_id": user_id})
-    return JSONResponse({
-        "success": True,
-        "message": "User session cleared and logged out successfully.",
-    })
+        await asyncio.to_thread(provider.set_password, ctx.user_id, str(body.get("new_password") or ""))
+    except AuthError as e:
+        return _auth_error(e)
+    return JSONResponse({"success": True, "message": "Password changed: sign in again"})
 
 
-@mcp.custom_route("/api/auth/gdpr-purge", methods=["POST", "DELETE"])
-async def api_auth_gdpr_purge(request: Request) -> JSONResponse:
-    """GDPR Art. 17 Right to Erasure: purges all stored session data and disconnects Bee."""
+@mcp.custom_route("/api/account/tokens", methods=["GET", "POST"])
+async def api_account_tokens(request: Request) -> JSONResponse:
+    """Personal access tokens for MCP clients (the token value is returned once, at creation)."""
+    ctx = _ctx(request)
+    if request.method == "POST":
+        if ctx.auth_method == "api_token":
+            return JSONResponse({"error": "forbidden", "message": "Tokens cannot create tokens"}, status_code=403)
+        body = await _json_body(request)
+        raw, info = get_auth_provider().create_api_token(ctx.user_id, str(body.get("name") or ""))
+        return JSONResponse({"success": True, "token": raw, "info": info.model_dump()}, status_code=201)
+    tokens = get_system_store().list_api_tokens(ctx.user_id)
+    return JSONResponse({"tokens": [t.model_dump() for t in tokens]})
+
+
+@mcp.custom_route("/api/account/tokens/{token_id}", methods=["DELETE"])
+async def api_account_token_revoke(request: Request) -> JSONResponse:
+    ctx = _ctx(request)
+    if not get_system_store().revoke_api_token(ctx.user_id, request.path_params["token_id"]):
+        return JSONResponse({"error": "not_found"}, status_code=404)
+    get_system_store().audit("api_token_revoked", user_id=ctx.user_id, detail={"token_id": request.path_params["token_id"]})
+    return JSONResponse({"success": True})
+
+
+@mcp.custom_route("/api/account/erase", methods=["POST"])
+async def api_account_erase(request: Request) -> JSONResponse:
+    """GDPR Art. 17: deletes the caller's data, Bee link, sessions and account (password required)."""
+    ctx = _ctx(request)
+    if ctx.auth_method != "session":
+        return JSONResponse({"error": "forbidden", "message": "Erasure needs a signed-in session"}, status_code=403)
+    body = await _json_body(request)
+    if not await asyncio.to_thread(get_auth_provider().verify_password, ctx.user_id, str(body.get("password") or "")):
+        return JSONResponse({"error": "invalid_credentials", "message": "Password required to erase the account"},
+                            status_code=401)
+    await erase_account(ctx.user_id, actor_user_id=ctx.user_id)
+    response = JSONResponse({"success": True, "erased": True})
+    response.delete_cookie(SESSION_COOKIE, path="/")
+    return response
+
+
+# ---------------------------------------------------------------------------
+# Admin: accounts only, never other users' speech-derived data (02 §3)
+# ---------------------------------------------------------------------------
+
+def _require_admin(request: Request) -> Optional[JSONResponse]:
+    ctx = _ctx(request)
+    if not ctx.is_admin or ctx.auth_method != "session":
+        return JSONResponse({"error": "forbidden", "message": "Admin session required"}, status_code=403)
+    return None
+
+
+@mcp.custom_route("/api/admin/users", methods=["GET", "POST"])
+async def api_admin_users(request: Request) -> JSONResponse:
+    denied = _require_admin(request)
+    if denied:
+        return denied
+    system = get_system_store()
+    if request.method == "POST":
+        body = await _json_body(request)
+        password = str(body.get("password") or "") or secrets.token_urlsafe(12)
+        try:
+            user = await asyncio.to_thread(
+                get_auth_provider().create_user, str(body.get("username") or ""), password,
+                display_name=body.get("display_name"), is_admin=bool(body.get("is_admin", False)),
+            )
+        except AuthError as e:
+            return _auth_error(e)
+        system.audit("admin_user_created", user_id=user.user_id, actor_user_id=_ctx(request).user_id)
+        return JSONResponse({"success": True, "user": _user_payload(user),
+                             "initial_password": None if body.get("password") else password}, status_code=201)
+    users = []
+    for user in system.list_users():
+        link = system.get_bee_link(user.user_id)
+        runtime = get_runtime_manager().get(user.user_id)
+        users.append({**_user_payload(user), "bee_link_state": link.state, "bee_account": link.bee_first_name,
+                      "bee_last_error": link.last_error, "streaming": bool(runtime and runtime.streaming)})
+    return JSONResponse({"users": users, "count": len(users)})
+
+
+@mcp.custom_route("/api/admin/users/{user_id}/status", methods=["POST"])
+async def api_admin_user_status(request: Request) -> JSONResponse:
+    """Body ``{"status": "active" | "disabled"}``; disabling stops the user's live ingestion."""
+    denied = _require_admin(request)
+    if denied:
+        return denied
+    user_id = request.path_params["user_id"]
+    body = await _json_body(request)
+    status = body.get("status")
+    system = get_system_store()
+    if status not in ("active", "disabled") or system.get_user(user_id) is None:
+        return JSONResponse({"error": "invalid_request"}, status_code=400)
+    if user_id == _ctx(request).user_id and status == "disabled":
+        return JSONResponse({"error": "forbidden", "message": "You cannot disable yourself"}, status_code=403)
+    system.update_user(user_id, status=status)
+    if status == "disabled":
+        system.revoke_user_sessions(user_id)
+        await get_runtime_manager().stop_stream(user_id)
+    system.audit(f"admin_user_{status}", user_id=user_id, actor_user_id=_ctx(request).user_id)
+    return JSONResponse({"success": True})
+
+
+@mcp.custom_route("/api/admin/users/{user_id}/reset-password", methods=["POST"])
+async def api_admin_reset_password(request: Request) -> JSONResponse:
+    """Issues a one-time password (no e-mail on the homelab, open question Q4 of doc 05)."""
+    denied = _require_admin(request)
+    if denied:
+        return denied
+    user_id = request.path_params["user_id"]
+    if get_system_store().get_user(user_id) is None:
+        return JSONResponse({"error": "not_found"}, status_code=404)
+    password = secrets.token_urlsafe(12)
+    await asyncio.to_thread(get_auth_provider().set_password, user_id, password)
+    get_system_store().audit("admin_password_reset", user_id=user_id, actor_user_id=_ctx(request).user_id)
+    return JSONResponse({"success": True, "initial_password": password})
+
+
+# ---------------------------------------------------------------------------
+# Bee account link (one Bee account per user, 02 §4)
+# ---------------------------------------------------------------------------
+
+def _bee_error(e: BeeLinkError) -> JSONResponse:
+    return JSONResponse({"error": e.code, "message": e.message}, status_code=e.status)
+
+
+@mcp.custom_route("/api/bee/link", methods=["GET", "POST"])
+async def api_bee_link(request: Request) -> JSONResponse:
+    """GET re-checks the caller's Bee token (and completes an approved pairing); POST starts a pairing."""
+    user_id = _ctx(request).user_id
     try:
-        body = await request.json()
-    except Exception:
-        body = {}
-
-    user_id = body.get("user_id") or request.headers.get("x-user-id") or request.query_params.get("user_id")
-    if user_id and user_id in _user_sessions:
-        del _user_sessions[user_id]
-
-    await asyncio.to_thread(_disconnect_bee_device)
-    try:
-        get_storage_store().purge_ingestion_history()
-    except NotImplementedError:
-        pass
-    except Exception as e:
-        logger.warning(f"Failed to purge ingestion history: {e}")
-    broadcast_event("gdpr_data_purged", {"user_id": user_id})
-    return JSONResponse({
-        "success": True,
-        "purged": True,
-        "message": "All session telemetry and device associations purged under GDPR Art. 17.",
-    })
+        link = await (start_pairing(user_id) if request.method == "POST" else refresh_link(user_id))
+    except BeeLinkError as e:
+        return _bee_error(e)
+    return JSONResponse({"bee_link": public_link(link), "bee_device": _bee_device_telemetry()})
 
 
+@mcp.custom_route("/api/bee/unlink", methods=["POST"])
+async def api_bee_unlink(request: Request) -> JSONResponse:
+    """Stops the caller's ingestion and logs out their Bee account (their data is kept)."""
+    link = await unlink_bee(_ctx(request).user_id)
+    broadcast_event("bee_disconnected", {})
+    return JSONResponse({"success": True, "bee_link": public_link(link)})
+
+
+# ---------------------------------------------------------------------------
+# Live ingestion of the caller
+# ---------------------------------------------------------------------------
 
 @mcp.custom_route("/api/orchestrator/status", methods=["GET"])
 async def api_orchestrator_status(request: Request) -> JSONResponse:
-    """Returns the live status of the Ingestion Orchestrator background stream."""
-    mgr = OrchestratorManager.get_instance()
-    status = mgr.get_status()
+    """Live status of the caller's ingestion stream."""
+    status = _runtime().get_status()
     status.update(_history_status())
     return JSONResponse(status)
 
 
 @mcp.custom_route("/api/orchestrator/start", methods=["POST"])
 async def api_orchestrator_start(request: Request) -> JSONResponse:
-    """Explicitly launches the Ingestion Orchestrator background loop."""
-    mgr = OrchestratorManager.get_instance()
-    mgr.ensure_started()
-    return JSONResponse({"success": True, "orchestrator": mgr.get_status()})
+    """(Re)starts the caller's live ingestion (requires a linked Bee account)."""
+    user_id = _ctx(request).user_id
+    if get_system_store().get_bee_link(user_id).state != "linked":
+        return JSONResponse({"error": "bee_not_linked", "message": "Connect your Bee account first"}, status_code=409)
+    try:
+        runtime = get_runtime_manager().start_stream(user_id)
+    except TooManyActiveUsers as e:
+        return JSONResponse({"error": "capacity", "message": str(e)}, status_code=503)
+    return JSONResponse({"success": True, "orchestrator": runtime.get_status()})
 
 
 @mcp.custom_route("/api/orchestrator/stop", methods=["POST"])
 async def api_orchestrator_stop(request: Request) -> JSONResponse:
-    """Safely suspends the Ingestion Orchestrator background loop."""
-    mgr = OrchestratorManager.get_instance()
-    mgr.stop()
+    """Suspends the caller's live ingestion (until restart or the next start)."""
+    await get_runtime_manager().stop_stream(_ctx(request).user_id)
     return JSONResponse({"success": True, "status": "STOPPED"})
 
 
@@ -647,8 +438,8 @@ async def api_status(request: Request) -> JSONResponse:
     open_commitments = sum(1 for c in all_commitments if c.status == "open")
 
     latency_metrics = store.get_latency_metrics()
-    bee_telemetry = await asyncio.to_thread(_get_bee_device_telemetry)
-    orch_status = OrchestratorManager.get_instance().get_status()
+    bee_telemetry = _bee_device_telemetry()
+    orch_status = _runtime().get_status()
     history_status = _history_status()
 
     # Dynamic sensor mesh description based on live hardware & orchestrator state
@@ -733,8 +524,9 @@ async def api_actions(request: Request) -> JSONResponse:
 @mcp.custom_route("/api/events", methods=["GET"])
 async def api_events(request: Request) -> StreamingResponse:
     """Server-Sent Events endpoint streaming real-time pipeline and entity updates."""
-    queue: asyncio.Queue = asyncio.Queue()
-    _sse_subscribers.add(queue)
+    user_id = _ctx(request).user_id
+    hub = get_event_hub()
+    queue = hub.subscribe(user_id)
 
     limit_param = request.query_params.get("limit")
     max_events = int(limit_param) if limit_param and limit_param.isdigit() else None
@@ -759,7 +551,7 @@ async def api_events(request: Request) -> StreamingResponse:
                 except asyncio.TimeoutError:
                     yield ": keepalive\n\n"
         finally:
-            _sse_subscribers.discard(queue)
+            hub.unsubscribe(user_id, queue)
 
     return StreamingResponse(
         event_generator(),
@@ -768,8 +560,6 @@ async def api_events(request: Request) -> StreamingResponse:
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Headers": "*",
         },
     )
 
@@ -1867,7 +1657,7 @@ def _history_status() -> Dict[str, Any]:
     from src.ingestion.coverage import compute_gaps
 
     store = get_storage_store()
-    mgr = OrchestratorManager.get_instance()
+    mgr = _runtime()
     now = datetime.now().replace(microsecond=0)
     week_ago = (now - timedelta(days=7)).isoformat()
     coverage: Dict[str, Any] = {"live_since": mgr.live_since(), "last_gap": None, "uncovered_seconds_7d": None}
@@ -1883,9 +1673,7 @@ def _history_status() -> Dict[str, Any]:
         pass
     backfill: Dict[str, Any] = {"enabled": settings.backfill_enabled, "active_run": None, "queued": 0}
     if settings.backfill_enabled:
-        from src.ingestion.backfill import get_backfill_service
-
-        backfill = get_backfill_service().status_summary()
+        backfill = _runtime().backfill.status_summary()
     return {"coverage": coverage, "backfill": backfill}
 
 
@@ -1917,7 +1705,7 @@ async def api_backfill_coverage(request: Request) -> JSONResponse:
     return JSONResponse({
         "window_from": window_from,
         "window_to": window_to,
-        "live_since": OrchestratorManager.get_instance().live_since(),
+        "live_since": _runtime().live_since(),
         "summary": coverage_summary(window_from, window_to, intervals),
         "intervals": [i.model_dump() for i in intervals],
         "gaps": [g.model_dump() for g in compute_gaps(window_from, window_to, intervals)],
@@ -2021,14 +1809,31 @@ def create_app() -> Starlette:
     """Constructs the unified ASGI application serving MCP, API, and Web UI."""
     app = mcp.streamable_http_app()
 
-    # Enable CORS for Next.js dev server and external web callers
+    # Multi-user: every /api and /mcp request runs as an authenticated user (docs/next_steps/multi_user/04 §1)
+    app.add_middleware(AuthMiddleware)
+    # CORS (outermost): credentialed requests need explicit origins, so only local dev origins are allowed
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?",
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    mcp_lifespan = app.router.lifespan_context
+
+    @asynccontextmanager
+    async def lifespan(asgi_app):
+        async with mcp_lifespan(asgi_app):
+            await asyncio.to_thread(get_auth_provider().ensure_bootstrap_admin)
+            startup = asyncio.create_task(get_runtime_manager().start_all_linked())
+            try:
+                yield
+            finally:
+                startup.cancel()
+                await get_runtime_manager().shutdown_all()
+
+    app.router.lifespan_context = lifespan
 
     # Locate static web UI directory (Next.js static export 'out' folder)
     current_dir = os.path.dirname(os.path.abspath(__file__))

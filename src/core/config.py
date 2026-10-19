@@ -135,6 +135,20 @@ class Settings(BaseSettings):
     # `bee locations current` polling period while streaming (0 disables)
     bee_location_poll_seconds: float = Field(default=120.0, alias="BEE_LOCATION_POLL_SECONDS")
 
+    # Multi-user (docs/next_steps/multi_user/): data layout, authentication, per-user runtime limits
+    # <data_dir>/system.db + <data_dir>/users/<user_id>/{examen.db, bee/}
+    examen_data_dir: str = Field(default="data", alias="EXAMEN_DATA_DIR")
+    auth_provider: str = Field(default="local", alias="AUTH_PROVIDER")
+    auth_session_days: float = Field(default=14.0, alias="AUTH_SESSION_DAYS")
+    auth_allow_signup: bool = Field(default=False, alias="AUTH_ALLOW_SIGNUP")
+    # Set the Secure flag on the session cookie (enable behind HTTPS)
+    auth_cookie_secure: bool = Field(default=False, alias="AUTH_COOKIE_SECURE")
+    # First start with no users: creates this admin (password from the variable below, or printed once)
+    examen_bootstrap_admin: Optional[str] = Field(default=None, alias="EXAMEN_BOOTSTRAP_ADMIN")
+    examen_bootstrap_admin_password: Optional[str] = Field(default=None, alias="EXAMEN_BOOTSTRAP_ADMIN_PASSWORD")
+    max_active_users: int = Field(default=5, alias="MAX_ACTIVE_USERS")
+    max_concurrent_llm_calls: int = Field(default=8, alias="MAX_CONCURRENT_LLM_CALLS")
+
     # Serving & MCP
     mcp_host: str = Field(default="0.0.0.0", alias="MCP_HOST")
     mcp_port: int = Field(default=8000, alias="MCP_PORT")

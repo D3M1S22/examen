@@ -13,6 +13,8 @@ dist/
 .env.local
 
 # Databases & Local state
+# Multi-user data dir (EXAMEN_DATA_DIR): system.db, users/<id>/{examen.db,bee/}
+data/
 *.db
 *.sqlite3
 examen.db.*
