@@ -1280,6 +1280,14 @@ class EventEngine:
             ev.topic_profile = self.continuity.update(None, self._join(chunks))
         self._save(ev)
 
+    def register_bee_conversation(self, conv_id: Any, conv_uuid: Optional[str]) -> None:
+        """Records a Bee REST id ↔ stream uuid pair (e.g. from `new-utterance-chunks`), so that later
+        `update-conversation-summary` events (which carry only the id) can enrich the open event."""
+        if conv_id is None or not conv_uuid:
+            return
+        with self._lock:
+            self._bee_conv_ids[str(conv_id)] = conv_uuid
+
     def on_bee_conversation(self, event_type: str, data: Dict[str, Any]) -> None:
         """Bee conversation lifecycle (doc 05 §2.4): a new conversation during a pause slightly favours a
         split; titles/summaries of conversations belonging to the open event enrich its topic profile."""

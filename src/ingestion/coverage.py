@@ -83,6 +83,7 @@ def ledger_entry_for_chunk(
         "status": status,
         "categories": list(chunk.categories or []),
         "run_id": run_id,
+        "duration_ms": chunk.duration_ms,
     }
 
 

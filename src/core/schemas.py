@@ -40,14 +40,17 @@ class LocationTelemetry(BaseModel):
     def infer_semantic_zone(cls, place_name: Optional[str]) -> Optional[Literal["home", "work_office", "transit", "public_venue"]]:
         if not place_name:
             return None
-        name_lower = place_name.lower()
-        if any(w in name_lower for w in ["home", "residence", "house", "apartment", "casa", "condo"]):
+        # Whole words only: Bee places are postal addresses, where substrings misfire
+        # ("Corso Carlo" is not a car, "Casale" is not a casa, "Barriera" is not a bar).
+        words = set(re.findall(r"[^\W\d_]+", place_name.lower()))
+        if words & {"home", "residence", "house", "apartment", "casa", "condo"}:
             return "home"
-        if any(w in name_lower for w in ["office", "corp", "work", "lab", "hq", "ufficio", "building", "campus"]):
+        if words & {"office", "corp", "work", "coworking", "lab", "hq", "ufficio", "building", "campus"}:
             return "work_office"
-        if any(w in name_lower for w in ["transit", "highway", "train", "metro", "bus", "station", "stazione", "airport", "subway", "car", "auto"]):
+        if words & {"transit", "highway", "train", "metro", "bus", "station", "stazione", "airport", "subway",
+                    "car", "auto", "autostrada"}:
             return "transit"
-        if any(w in name_lower for w in ["cafe", "coffee", "starbucks", "hotel", "restaurant", "bar", "convention", "center", "shop"]):
+        if words & {"cafe", "coffee", "starbucks", "hotel", "restaurant", "bar", "convention", "center", "shop"}:
             return "public_venue"
         return "unknown"
 
@@ -56,7 +59,10 @@ class UtteranceChunk(BaseModel):
     chunk_id: str = Field(default_factory=lambda: str(uuid.uuid4()), description="Unique utterance chunk identifier.")
     conversation_uuid: str = Field(default="default_session", description="Conversation session UUID.")
     text: str = Field(description="Transcribed spoken audio utterance.")
-    speaker_id: Optional[str] = Field(default=None, description="Diarized speaker ID (e.g. 'speaker_0', 'speaker_1').")
+    speaker_id: Optional[str] = Field(
+        default=None,
+        description="Speaker label: Bee person first name (tagged-utterance / REST speaker), 'Unknown', or a simulator label."
+    )
     speaker_role: Optional[Literal["user", "contact", "unknown"]] = Field(
         default="unknown",
         description="Role of speaker: primary user ('user'), counterparty ('contact'), or 'unknown'."
@@ -81,6 +87,9 @@ class UtteranceChunk(BaseModel):
     )
     bee_conversation_id: Optional[int] = Field(
         default=None, description="Numeric Bee REST conversation id, when known (history backfill)."
+    )
+    duration_ms: Optional[int] = Field(
+        default=None, description="Utterance duration from Bee start/end (relative seconds), when known."
     )
 
     @model_validator(mode="before")

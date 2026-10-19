@@ -2,8 +2,9 @@ import asyncio
 import time
 import argparse
 import signal
+from collections import OrderedDict
 from datetime import datetime
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Dict, Optional, Tuple
 
 import sys
 from pathlib import Path
@@ -11,7 +12,8 @@ from pathlib import Path
 # Add project root (two levels up from src/ingestion/) to sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
-from src.ingestion.stream_convo import BeeClient
+from src.ingestion.stream_convo import BeeClient, normalize_bee_time
+from src.ingestion.bee_identity import WearerIdentity, get_wearer_identity
 from src.ingestion.coverage import (
     CoverageTracker,
     ledger_entry_for_chunk,
@@ -31,10 +33,25 @@ from src.core.config import settings
 from src.core.storage import get_storage_store
 from src.core.schemas import CoverageGap, CoverageInterval, LocationTelemetry, UtteranceChunk
 
+# Bounded caches keyed by Bee utterance id (speaker tags, utterance → conversation uuid)
+_ID_CACHE_SIZE = 2000
+
+
+def _remember(cache: "OrderedDict[str, Any]", key: str, value: Any) -> None:
+    cache[key] = value
+    cache.move_to_end(key)
+    while len(cache) > _ID_CACHE_SIZE:
+        cache.popitem(last=False)
+
 
 class BeeStreamOrchestrator(Debug):
     """Consumes the Bee event stream: screens each utterance, feeds the Deep Topic Event Engine
-    and dispatches qualified chunks to the LangGraph pipeline."""
+    and dispatches qualified chunks to the LangGraph pipeline.
+
+    Payload semantics follow the observed Bee contract (docs/10_bee_cli_reference.md): speaker identity
+    comes from `tagged-utterance`, locations from `bee locations current` polling (the Apple Watch emits
+    no `update-location`), liveness from SSE pings.
+    """
 
     def __init__(
         self,
@@ -42,9 +59,11 @@ class BeeStreamOrchestrator(Debug):
         ring_buffer_capacity=4,
         store=None,
         engine: Optional[EventEngine] = None,
+        identity: Optional[WearerIdentity] = None,
     ):
         super().__init__(debug_mode=debug_mode, sector_name="ORCHESTRATOR")
         self.store = store
+        self.identity = identity or get_wearer_identity()
 
         self.last_input_time = time.time()
         self.chunk_counter = 0
@@ -53,7 +72,24 @@ class BeeStreamOrchestrator(Debug):
         # Milestone 3.1: Context Ring Buffer & Multimodal Telemetry
         self.ring_buffer = ContextRingBuffer(capacity=ring_buffer_capacity)
         self.latest_telemetry: Optional[LocationTelemetry] = None
-        self.debounce_window: float = 0.75  # 750ms debounce window for diarization
+
+        # Speaker identity (`tagged-utterance`, ~1 s after its utterance): tag cache + waiters
+        self.speaker_tag_wait: float = settings.bee_speaker_tag_wait_seconds
+        self._speaker_tags: "OrderedDict[str, Tuple[str, Optional[float]]]" = OrderedDict()
+        self._tag_waiters: Dict[str, asyncio.Event] = {}
+        # True while run() reads the stream concurrently with the utterance worker (tags can arrive)
+        self._concurrent_reader = False
+
+        # Bee uuid ↔ numeric id bridge (`new-utterance-chunks` lists utterance ids with the REST id)
+        self._utterance_conversations: "OrderedDict[str, str]" = OrderedDict()
+        self._conversation_ids: Dict[str, int] = {}
+
+        # Location polling (`bee locations current`): last accepted fix id, wake-up on new conversations
+        self.location_poll_seconds: float = settings.bee_location_poll_seconds
+        self._last_location_fix_id: Any = None
+        self._location_poke: Optional[asyncio.Event] = None
+        self._seen_conversations: set = set()
+        self.bee: Optional[BeeClient] = None
 
         # Deep Topic Event Engine (macro events, segments, synthesis scheduling)
         self.engine_enabled = settings.event_engine_enabled
@@ -104,6 +140,10 @@ class BeeStreamOrchestrator(Debug):
             "last_heartbeat": self.last_heartbeat_time,
             "last_input_time": self.last_input_time,
             "has_location": self.latest_telemetry is not None,
+            "location_place": self.latest_telemetry.place_name if self.latest_telemetry else None,
+            "stream_transport": self.bee.active_transport if self.bee else None,
+            "wearer_identity_known": bool(self.identity.first_name),
+            "speaker_tags_seen": len(self._speaker_tags),
             "event_engine": self.engine.status_summary() if self.engine_enabled else None,
             "coverage": {
                 "live_since": self.coverage.current.start if self.coverage.current else None,
@@ -117,13 +157,16 @@ class BeeStreamOrchestrator(Debug):
         lat = float(location_data.get("latitude", 0.0))
         lon = float(location_data.get("longitude", 0.0))
         place = location_data.get("name") or location_data.get("address") or location_data.get("place_name")
+        # No Bee source exposes an accuracy today; kept for other sources and the simulator
         accuracy = location_data.get("horizontal_accuracy") or location_data.get("accuracy_meters")
+        extra = {"captured_at": location_data["captured_at"]} if location_data.get("captured_at") else {}
 
         telemetry = LocationTelemetry(
             latitude=lat,
             longitude=lon,
             place_name=place,
             accuracy_meters=float(accuracy) if accuracy is not None else None,
+            **extra,
         )
         self.latest_telemetry = telemetry
         self.debug(
@@ -143,8 +186,8 @@ class BeeStreamOrchestrator(Debug):
         speaker_role: Optional[str] = None,
         session_id: Optional[str] = None,
     ) -> bool:
-        """Retrospectively patches diarization speaker info in ring buffer and persistent store."""
-        role = speaker_role or ("user" if speaker_id in ("speaker_0", "user") else "contact")
+        """Retrospectively patches speaker info (late `tagged-utterance`) in ring buffer and store."""
+        role = speaker_role or self.identity.role_for(speaker_id)
         patched_buffer = self.ring_buffer.patch_speaker(
             chunk_id=utterance_id, speaker_id=speaker_id, speaker_role=role, conv_id=session_id
         )
@@ -172,7 +215,11 @@ class BeeStreamOrchestrator(Debug):
         speaker = utterance_data.get("speaker") or utterance_data.get("speaker_id")
         speaker_role = utterance_data.get("speaker_role")
         if not speaker_role or speaker_role == "unknown":
-            speaker_role = "user" if speaker in ("speaker_0", "user") else ("contact" if speaker else "unknown")
+            # Live Bee utterances carry no speaker: identity arrives later as tagged-utterance
+            speaker_role = self.identity.role_for(speaker)
+        tag = self._speaker_tags.get(chunk_id)
+        if tag is not None:
+            speaker, speaker_role = tag[0], self.identity.role_for(tag[0])
 
         # Best-known utterance time: spoken_at (Bee) > received_at (BeeClient) > now
         spoken_at = utterance_data.get("spoken_at")
@@ -190,6 +237,8 @@ class BeeStreamOrchestrator(Debug):
             spoken_at=spoken_at,
             location=self.latest_telemetry.model_dump() if self.latest_telemetry else None,
             source_key=utterance_data.get("source_key") or live_source_key(conv_uuid, chunk_id),
+            bee_conversation_id=self._conversation_ids.get(conv_uuid),
+            duration_ms=utterance_data.get("duration_ms"),
         )
         self.ring_buffer.push(chunk)
         return chunk
@@ -246,6 +295,7 @@ class BeeStreamOrchestrator(Debug):
             return None
 
         self.debug(f"Chunk '{chunk_id}' screened -> QUALIFIED {classification.categories}")
+        await self._await_speaker_tag(chunk)
 
         # Dispatch with full context to pipeline
         payload = {
@@ -292,21 +342,141 @@ class BeeStreamOrchestrator(Debug):
         except Exception as e:
             self.debug(f"Ingest ledger write error: {e}")
 
+    # ------------------------------------------------------------------
+    # Speaker identity (tagged-utterance)
+    # ------------------------------------------------------------------
+
+    def on_tagged_utterance(self, data: dict) -> None:
+        """Caches a Bee speaker tag; wakes a waiting utterance or patches an already dispatched one."""
+        uid = str(data.get("utterance_id") or "")
+        name = (data.get("person_first_name") or "").strip()
+        if not uid or not name:
+            return
+        _remember(self._speaker_tags, uid, (name, data.get("speaker_score")))
+        waiter = self._tag_waiters.get(uid)
+        if waiter is not None:
+            waiter.set()
+            return
+        self.patch_diarization(uid, name, session_id=data.get("conversation_uuid"))
+
+    async def _await_speaker_tag(self, chunk: UtteranceChunk) -> None:
+        """Before dispatch, waits (bounded) for the utterance's tagged-utterance and applies it."""
+        tag = self._speaker_tags.get(chunk.chunk_id)
+        if tag is None and self._concurrent_reader and self.speaker_tag_wait > 0:
+            received = datetime.fromisoformat(chunk.received_at).timestamp() if chunk.received_at else time.time()
+            remaining = received + self.speaker_tag_wait - time.time()
+            if remaining > 0:
+                waiter = self._tag_waiters.setdefault(chunk.chunk_id, asyncio.Event())
+                try:
+                    await asyncio.wait_for(waiter.wait(), timeout=remaining)
+                except asyncio.TimeoutError:
+                    pass
+                finally:
+                    self._tag_waiters.pop(chunk.chunk_id, None)
+                tag = self._speaker_tags.get(chunk.chunk_id)
+        if tag is not None:
+            chunk.speaker_id = tag[0]
+            chunk.speaker_role = self.identity.role_for(tag[0])
+
+    # ------------------------------------------------------------------
+    # Bee conversation identity (uuid ↔ numeric id)
+    # ------------------------------------------------------------------
+
+    def on_utterance_chunks(self, data: dict) -> None:
+        """`new-utterance-chunks` is the only live event with the numeric conversation id."""
+        conv_id = data.get("conversation_id")
+        try:
+            conv_id = int(conv_id)
+        except (TypeError, ValueError):
+            return
+        conv_uuid = next(
+            (self._utterance_conversations[u] for u in data.get("utterance_ids") or [] if u in self._utterance_conversations),
+            None,
+        )
+        if not conv_uuid or self._conversation_ids.get(conv_uuid) == conv_id:
+            return
+        self._conversation_ids[conv_uuid] = conv_id
+        try:
+            (self.store or get_storage_store()).map_bee_conversation(conv_uuid, conv_id)
+        except NotImplementedError:
+            pass
+        except Exception as e:
+            self.debug(f"Conversation map error: {e}")
+        if self.engine_enabled:
+            self.engine.register_bee_conversation(conv_id, conv_uuid)
+
+    def _note_utterance(self, data: dict) -> None:
+        self.total_utterances_received += 1
+        self.last_input_time = time.time()
+        self.status = "STREAMING"
+        uid = str(data.get("id") or "")
+        conv_uuid = data.get("conversation_uuid")
+        if uid and conv_uuid:
+            _remember(self._utterance_conversations, uid, conv_uuid)
+        if conv_uuid and conv_uuid not in self._seen_conversations:
+            self._seen_conversations.add(conv_uuid)
+            if self._location_poke is not None:
+                self._location_poke.set()  # new conversation: Bee samples a fresh location fix
+
+    # ------------------------------------------------------------------
+    # Location polling (the Apple Watch emits no update-location)
+    # ------------------------------------------------------------------
+
+    async def _fetch_location(self) -> Optional[dict]:
+        return await BeeClient(debug_mode=self.debug_mode).get_location()
+
+    async def poll_location(self) -> Optional[LocationTelemetry]:
+        """Applies the last Bee fix if it is recent and new; returns the telemetry it produced."""
+        try:
+            fix = await self._fetch_location()
+        except Exception as e:
+            self.debug(f"Location poll error: {e}")
+            return None
+        if not fix or not fix.get("is_recent"):
+            return None
+        if fix.get("id") is not None and fix.get("id") == self._last_location_fix_id:
+            return None
+        self._last_location_fix_id = fix.get("id")
+        return self.update_location({
+            "latitude": fix["latitude"],
+            "longitude": fix["longitude"],
+            "address": fix.get("address"),
+            "captured_at": normalize_bee_time(fix.get("created_at")),
+        })
+
+    async def _location_poll_loop(self) -> None:
+        assert self._location_poke is not None
+        while True:
+            await self.poll_location()
+            try:
+                await asyncio.wait_for(self._location_poke.wait(), timeout=self.location_poll_seconds)
+            except asyncio.TimeoutError:
+                pass
+            self._location_poke.clear()
+
+    # ------------------------------------------------------------------
+    # Event routing
+    # ------------------------------------------------------------------
+
     async def handle_event(self, event: dict) -> Optional[Any]:
-        """Dispatches an incoming SSE event to the appropriate handler."""
+        """Dispatches an incoming stream event to the appropriate handler."""
         evt_type = event.get("event")
         data = event.get("data", {})
 
+        if evt_type in ("stream-ping", "stream-connected"):
+            self.last_heartbeat_time = time.time()
+            return None
         if evt_type == "update-location":
             return self.update_location(data)
-        elif evt_type == "update-utterance":
-            uid = str(data.get("utterance_id", ""))
-            spk = data.get("speaker", "")
-            return self.patch_diarization(uid, spk)
+        elif evt_type == "tagged-utterance":
+            return self.on_tagged_utterance(data)
+        elif evt_type == "new-utterance-chunks":
+            return self.on_utterance_chunks(data)
         elif evt_type in ("new-conversation", "update-conversation", "update-conversation-summary"):
             conv = data.get("conversation") if isinstance(data.get("conversation"), dict) else {}
             if conv.get("uuid") and conv.get("id") is not None:
                 try:
+                    self._conversation_ids[str(conv["uuid"])] = int(conv["id"])
                     (self.store or get_storage_store()).map_bee_conversation(str(conv["uuid"]), int(conv["id"]))
                 except (NotImplementedError, ValueError, TypeError):
                     pass
@@ -322,14 +492,27 @@ class BeeStreamOrchestrator(Debug):
             self.coverage.mark_disconnected()
             return None
         elif evt_type == "new-utterance":
-            self.total_utterances_received += 1
-            self.last_input_time = time.time()
-            self.status = "STREAMING"
+            self._note_utterance(data)
             return await self.process_incoming_utterance(data)
         return None
 
+    async def _utterance_worker(self, queue: "asyncio.Queue[dict]") -> None:
+        """Processes utterances one at a time, in arrival order, while the reader keeps consuming."""
+        while True:
+            data = await queue.get()
+            try:
+                await self.process_incoming_utterance(data)
+            except Exception as e:
+                self.debug(f"Utterance processing error: {e}")
+            finally:
+                queue.task_done()
+
     async def run(self):
-        """Main loop that ingests the stream and drives the event engine runtime."""
+        """Main loop: reads the stream and hands utterances to a sequential worker.
+
+        Reading never waits for screening or the pipeline, so `tagged-utterance`, pings and conversation
+        events are applied while an utterance is still being processed.
+        """
         self.main_task = asyncio.current_task()
         self.is_running = True
         self.status = "LISTENING"
@@ -344,25 +527,40 @@ class BeeStreamOrchestrator(Debug):
             runtime.ensure_started()
 
         self.debug("Starting Bee stream ingestion...")
-        bee = BeeClient(debug_mode=self.debug_mode)
+        self.bee = BeeClient(debug_mode=self.debug_mode)
         self.coverage.recover_after_crash()
+        await self.identity.ensure_loaded()
+
+        queue: "asyncio.Queue[dict]" = asyncio.Queue()
+        background = [asyncio.create_task(self._utterance_worker(queue))]
+        if self.location_poll_seconds > 0:
+            self._location_poke = asyncio.Event()
+            background.append(asyncio.create_task(self._location_poll_loop()))
+        self._concurrent_reader = True
 
         try:
-            async for event in bee.stream_events():
+            async for event in self.bee.stream_events():
                 evt_name = event.get('event')
                 self.debug(f"⚡ Received event: {evt_name}")
-                if evt_name == "stream-heartbeat":
-                    self.last_heartbeat_time = time.time()
                 if evt_name != "stream-disconnected":
                     self.coverage.mark_alive()
+                if evt_name == "new-utterance":
+                    self._note_utterance(event.get("data", {}))
+                    await queue.put(event.get("data", {}))
+                    continue
                 await self.handle_event(event)
         except asyncio.CancelledError:
             pass
         finally:
+            self._concurrent_reader = False
+            for task in background:
+                task.cancel()
+            await asyncio.gather(*background, return_exceptions=True)
+            self._location_poke = None
             self.coverage.mark_disconnected()
             self.is_running = False
             self.status = "STOPPED"
-            bee.stop()
+            self.bee.stop()
 
     async def shutdown(self):
         """Safely triggers cancellation of the main run loop only."""

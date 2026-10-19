@@ -112,3 +112,11 @@ Whenever a friction point or roadblock is encountered during development, docume
   3. The conversation uuid used by the stream is missing from `conversations get`, but present in `daily find` (`conversations[].conversation_uuid`).
 * **Workaround / Resolution:** Documented the observed contract and the conformance gaps C1–C16 (location polling, `tagged-utterance` handling, speaker-role mapping in live and backfill, liveness, logout side effect).
 * **Platform Feedback:** Emit `update-location` from every capture device (or document which ones do), include an accuracy field, document `tagged-utterance` and its coverage, and expose `uuid` consistently on every conversation resource.
+
+### [2026-10-19] - Bee CLI / `bee proxy --socket` idle timeout & `bee logout` in tests
+* **Context:** Moving the live stream to raw SSE through a private `bee proxy`, so the 30 s server pings become visible (`docs/next_steps/07_bee_data_alignment.md`).
+* **Friction Encountered:**
+  1. With `bee proxy --socket <path> --idle-timeout 255`, the stream closed every ~10.5 s. In the Unix-socket branch, bee-cli does not pass `idleTimeout` to `Bun.serve`, so Bun's default 10 s idle timeout applies (the per-request `server.timeout()` does not help). The TCP branch passes it and works.
+  2. Running the test suite while logged in to Bee logged the developer out: the auth endpoint tests (`bee-disconnect`, GDPR purge) call the real `bee logout` on the host.
+* **Workaround / Resolution:** The private proxy runs on 127.0.0.1 (first free port from 8787, parsed from `Proxy listening on …`). `tests/conftest.py` replaces the Bee binary with a failing stub for every test.
+* **Platform Feedback:** Honour `--idle-timeout` on `--socket` proxies, and document the per-connection idle behaviour for long-lived SSE through `bee proxy`.

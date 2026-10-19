@@ -1,7 +1,7 @@
 """Configuration module for EXAMEN."""
 
 import os
-from typing import Literal
+from typing import Literal, Optional
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -117,8 +117,23 @@ class Settings(BaseSettings):
     backfill_cost_per_gatekeeper_call: float = Field(default=0.000005, alias="BACKFILL_COST_PER_GATEKEEPER_CALL")
     backfill_cost_per_pipeline_call: float = Field(default=0.0003, alias="BACKFILL_COST_PER_PIPELINE_CALL")
     backfill_cost_per_event: float = Field(default=0.003, alias="BACKFILL_COST_PER_EVENT")
+    # Share of a final utterance's span already spoken live (same conversation) above which it is a live duplicate
+    backfill_live_coverage_fraction: float = Field(default=0.5, alias="BACKFILL_LIVE_COVERAGE_FRACTION")
     coverage_flush_seconds: float = Field(default=30.0, alias="COVERAGE_FLUSH_SECONDS")
     coverage_degraded_error_rate: float = Field(default=0.2, alias="COVERAGE_DEGRADED_ERROR_RATE")
+
+    # Bee CLI integration (observed contract: docs/10_bee_cli_reference.md, plan: docs/next_steps/07)
+    # proxy = raw SSE through a private `bee proxy` (sees the 30 s pings); cli = `bee stream --json`
+    bee_stream_transport: str = Field(default="proxy", alias="BEE_STREAM_TRANSPORT")
+    # Port of the private proxy on 127.0.0.1 (0 = first free port from 8787)
+    bee_proxy_port: int = Field(default=0, alias="BEE_PROXY_PORT")
+    bee_stream_ping_timeout_seconds: float = Field(default=90.0, alias="BEE_STREAM_PING_TIMEOUT_SECONDS")
+    # Max wait after receipt for a `tagged-utterance` (speaker identity, ~1 s after the utterance)
+    bee_speaker_tag_wait_seconds: float = Field(default=1.5, alias="BEE_SPEAKER_TAG_WAIT_SECONDS")
+    # Wearer first name (default: `bee me` first_name)
+    bee_wearer_name: Optional[str] = Field(default=None, alias="BEE_WEARER_NAME")
+    # `bee locations current` polling period while streaming (0 disables)
+    bee_location_poll_seconds: float = Field(default=120.0, alias="BEE_LOCATION_POLL_SECONDS")
 
     # Serving & MCP
     mcp_host: str = Field(default="0.0.0.0", alias="MCP_HOST")

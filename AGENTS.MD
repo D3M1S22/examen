@@ -178,6 +178,7 @@ bee login                                                     # approve in the B
 python scripts/bee_spike.py check                             # Phase 0 spike tool, raw data in .bee-spike/
 ```
 Runbook and results: `docs/next_steps/historical_backfill/06_phase0_device_spike.md`.
+The live stream uses a private `bee proxy` on 127.0.0.1 (`BEE_STREAM_TRANSPORT=proxy`, fallback `cli`); see `.env.example` for the `BEE_*` settings. Tests must never run the real `bee` binary: `tests/conftest.py` stubs it (some endpoints call `bee logout`).
 **Before touching any code that reads Bee data, read `docs/10_bee_cli_reference.md`**: real payloads differ from the official docs (no speaker in `new-utterance`, ISO `spoken_at`, relative `start`/`end`, no `update-utterance`, no `update-location` from the Apple Watch).
 
 ### Running the Synthetic Conversation Scenarios (For Demos & Testing)

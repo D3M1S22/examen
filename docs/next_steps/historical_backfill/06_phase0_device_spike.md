@@ -41,7 +41,7 @@ All commands write into the same session directory (`.bee-spike/<today>/`, overr
 | 4 | `python scripts/bee_spike.py poll <id> --minutes 60 --until-final` | V4 | Records each `state` / transcription change until the final (`realtime: false`) transcription appears |
 | 5 | `python scripts/bee_spike.py history --hours 2` | V1, V3 | Saves the list pages and every conversation detail of the window |
 | 6 | `python scripts/bee_spike.py analyze` | V0–V6 report | Writes `analysis.md` / `analysis.json` and one payload sample per SSE event type in `samples/` |
-| 7 | `python scripts/bee_spike.py fixture .bee-spike/<date>/history/conv_<id>.json live_full` | fixtures | Redacts text with a random per-run salt (same word → same token inside one fixture, so realtime/final matching still works, but not reversible by dictionary), speaker names, summaries and location. `--keep-text` only for non-personal scripted speech |
+| 7 | `python scripts/bee_spike.py fixture .bee-spike/<date>/history/conv_<id>.json live_full` | local fixtures in `.bee-spike/fixtures/` (never committed: committed tests use synthetic payloads with the real shapes) | Redacts text with a random per-run salt (same word → same token inside one fixture, so realtime/final matching still works, but not reversible by dictionary), speaker names, summaries and location. `--keep-text` only for non-personal scripted speech |
 | 8 | Repeat 2–7 for the outage and delayed-upload scenarios (§3.2) | T-DED fixtures | |
 | 9 | Fill §5, update [FRICTION_LOG.md](../../../FRICTION_LOG.md), adjust settings (§6) | exit criteria | |
 
@@ -58,7 +58,7 @@ Speak in a quiet room, ~2 s pause between sentences, mixing English and Italian:
 5. Two minutes of a mini-lecture on one technical topic (deep_topic / event engine).
 6. Small talk (noop).
 
-### 3.2 Fixture scenarios (Phase 0 exit, [05](05_implementation_plan_and_testing.md) §1)
+### 3.2 Local fixture scenarios (Phase 0 exit, [05](05_implementation_plan_and_testing.md) §1; kept out of git)
 
 | Fixture name | How to produce it |
 |---|---|
@@ -131,17 +131,19 @@ REST utterance (both transcriptions): `{id, text, speaker, spoken_at (epoch ms),
 
 ### 5.2 Impact on the implementation
 
+> Fix plan and status: [07_bee_data_alignment.md](../07_bee_data_alignment.md).
+
 | # | Finding | Affected code | Recommended change |
 |---|---|---|---|
-| **I1** | No line reaches `--json` consumers during silence (pings dropped), but EXAMEN treats 330 s without lines as a dead stream | [stream_convo.py](../../../src/ingestion/stream_convo.py) read timeout; `CoverageTracker` closes the interval at the last line | Any pause > 5.5 min causes a needless reconnect **and a false coverage gap**, which then triggers a reconnect backfill. Either read the raw SSE through `bee proxy` (30 s pings → liveness timeout ~90 s), or with the CLI transport extend coverage while the `bee stream` process is alive instead of using a read timeout |
-| **I2** | REST and live `start`/`end` are relative seconds (unknown origin): `epoch_ms()` returns `None`, so every utterance span collapses to a point at `spoken_at` | [bee_history.py](../../../src/ingestion/bee_history.py) `BeeUtterance.span_ms` | `span = [spoken_at, spoken_at + (end − start) · 1000]` |
-| **I3** | Backfill runs only see **completed** conversations, which no longer expose the realtime transcription, so the planner's primary path (match live rows to REST realtime, 02 §4) never applies and it falls back to matching against the final. That works when the final re-issues the realtime text (`11404747`: 100 % verbatim, 99 % same `spoken_at`), but not when Bee re-segments it into minutes-long utterances (`11390239`) | [backfill.py](../../../src/ingestion/backfill.py) `BackfillPlanner` | Promote **exact text + `spoken_at`** matching against the final to the primary path. For re-segmented finals, build "seen" spans **from the live ledger** (`spoken_at` + `end − start`, per conversation uuid) and select final utterances by span overlap. Keep id equality (V2) for the rare `CAPTURING` case |
-| **I4** | Live utterances carry no `speaker`; identity arrives later via `tagged-utterance`. The REST speaker is a person name | `speaker_0 → user` heuristic (orchestrator, gatekeeper context) | Treat `tagged-utterance` with `person_first_name` = account `me.first_name` (or a stored `person_id`) as the user; patch the ring buffer like `update-utterance`. Untagged → unknown |
-| **I5** | `tagged-utterance`, `new-utterance-chunks`, `connected` fall into `stream-alive` | `BeeClient.stream_events` | Parse them explicitly (I4, I6) |
-| **I6** | uuid ↔ numeric id is not in REST (V1) | `bee_conversation_map` (filled only from `new-conversation` today) | Also fill it from `new-utterance-chunks`: the chunk's utterance ids map to the uuid of the matching `new-utterance` events |
-| I7 | States are `CAPTURING` / `PROCESSING` / `COMPLETED` | `_IN_PROGRESS_STATES` in `bee_history.py` | Add `capturing` (harmless today because `end_time` is null while open); `processing` is already deferred, and lasts ~30 s |
-| I8 | Bee produces its own semantic chunks with tags | gatekeeper | Possible later input to window screening (Phase 6) |
-| I9 | REST speaker = first name or `"Unknown"` | `speaker_role_for` in `backfill.py` | Every backfilled utterance becomes `contact` (wearer included). See [10_bee_cli_reference.md](../../10_bee_cli_reference.md) C16 |
+| **I1** | No line reaches `--json` consumers during silence (pings dropped), but EXAMEN treats 330 s without lines as a dead stream | [stream_convo.py](../../../src/ingestion/stream_convo.py) read timeout; `CoverageTracker` closes the interval at the last line | ✅ Fixed (07 phase 1). Any pause > 5.5 min causes a needless reconnect **and a false coverage gap**, which then triggers a reconnect backfill. Either read the raw SSE through `bee proxy` (30 s pings → liveness timeout ~90 s), or with the CLI transport extend coverage while the `bee stream` process is alive instead of using a read timeout |
+| **I2** | REST and live `start`/`end` are relative seconds (unknown origin): `epoch_ms()` returns `None`, so every utterance span collapses to a point at `spoken_at` | [bee_history.py](../../../src/ingestion/bee_history.py) `BeeUtterance.span_ms` | ✅ Fixed (07 phase 4). `span = [spoken_at, spoken_at + (end − start) · 1000]` |
+| **I3** | Backfill runs only see **completed** conversations, which no longer expose the realtime transcription, so the planner's primary path (match live rows to REST realtime, 02 §4) never applies and it falls back to matching against the final. That works when the final re-issues the realtime text (`11404747`: 100 % verbatim, 99 % same `spoken_at`), but not when Bee re-segments it into minutes-long utterances (`11390239`) | [backfill.py](../../../src/ingestion/backfill.py) `BackfillPlanner` | ✅ Fixed (07 phase 4): live-coverage fraction. Promote **exact text + `spoken_at`** matching against the final to the primary path. For re-segmented finals, build "seen" spans **from the live ledger** (`spoken_at` + `end − start`, per conversation uuid) and select final utterances by span overlap. Keep id equality (V2) for the rare `CAPTURING` case |
+| **I4** | Live utterances carry no `speaker`; identity arrives later via `tagged-utterance`. The REST speaker is a person name | `speaker_0 → user` heuristic (orchestrator, gatekeeper context) | ✅ Fixed (07 phase 2). Treat `tagged-utterance` with `person_first_name` = account `me.first_name` (or a stored `person_id`) as the user; patch the ring buffer like `update-utterance`. Untagged → unknown |
+| **I5** | `tagged-utterance`, `new-utterance-chunks`, `connected` fall into `stream-alive` | `BeeClient.stream_events` | ✅ Fixed (07 phase 1). Parse them explicitly (I4, I6) |
+| **I6** | uuid ↔ numeric id is not in REST (V1) | `bee_conversation_map` (filled only from `new-conversation` today) | ✅ Fixed (07 phase 2). Also fill it from `new-utterance-chunks`: the chunk's utterance ids map to the uuid of the matching `new-utterance` events |
+| I7 | States are `CAPTURING` / `PROCESSING` / `COMPLETED` | `_IN_PROGRESS_STATES` in `bee_history.py` | ✅ Fixed (07 phase 4). Add `capturing` (harmless today because `end_time` is null while open); `processing` is already deferred, and lasts ~30 s |
+| I8 | Bee produces its own semantic chunks with tags | gatekeeper | Follow-up (07 §5). Possible later input to window screening (Phase 6) |
+| I9 | REST speaker = first name or `"Unknown"` | `speaker_role_for` in `backfill.py` | ✅ Fixed (07 phase 2). Every backfilled utterance becomes `contact` (wearer included). See [10_bee_cli_reference.md](../../10_bee_cli_reference.md) C16 |
 
 Findings outside the backfill (location, live speaker role, logout side effect, …) are in [10_bee_cli_reference.md](../../10_bee_cli_reference.md) §10.
 

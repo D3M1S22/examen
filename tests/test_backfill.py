@@ -60,13 +60,15 @@ async def fake_classify(transcript, active_tasks=None, prior_context=None):
 def make_conv(conv_id: int, start: datetime, lines: List[Tuple[float, str]], *, uuid: Optional[str] = None,
               realtime: bool = True, final: bool = True, state: str = "processed", ended: bool = True,
               final_texts: Optional[Dict[int, str]] = None) -> dict:
-    """Bee `conversations get --json` payload. Realtime and final transcriptions carry the same speech."""
+    """Bee `conversations get --json` payload with the observed shape (docs/10 §4.3): epoch-ms `spoken_at`,
+    `start`/`end` in relative seconds, speaker = first name or "Unknown". Realtime and final carry the same speech."""
     def utts(id_base: int, texts: Optional[Dict[int, str]] = None):
         out = []
         for i, (offset, text) in enumerate(lines):
             at = int((start + timedelta(seconds=offset)).timestamp() * 1000)
-            out.append({"id": id_base + i, "text": (texts or {}).get(i, text), "speaker": "speaker_1",
-                        "spoken_at": at, "start": at, "end": at + 4000, "realtime": id_base < 2000})
+            out.append({"id": id_base + i, "text": (texts or {}).get(i, text), "speaker": "Unknown",
+                        "spoken_at": at, "start": float(offset), "end": float(offset) + 4.0,
+                        "realtime": id_base < 2000})
         return out
 
     end_ms = int((start + timedelta(seconds=lines[-1][0] + 5)).timestamp() * 1000)
@@ -509,3 +511,91 @@ async def test_window_end_is_clamped_to_the_live_connection(store):
     assert "live stream owns" in result.plan.warnings[0]
     with pytest.raises(BackfillRequestError):
         await service.preview((NOW - timedelta(minutes=30)).isoformat(), NOW.isoformat())
+
+
+# ---------------------------------------------------------------------------
+# Observed Bee contract (docs/10_bee_cli_reference.md): completed conversations have no uuid and only the
+# final transcription; start/end are relative seconds; speakers are first names or "Unknown".
+# ---------------------------------------------------------------------------
+
+from src.ingestion import bee_identity  # noqa: E402
+from src.ingestion.backfill import speaker_role_for  # noqa: E402
+
+
+def record_live_spoken(store, conv_uuid: str, start: datetime, spans, delay=12.0):
+    """Live ledger rows as the real orchestrator writes them: ts = spoken_at, duration_ms from start/end."""
+    for i, (offset, seconds, text) in enumerate(spans):
+        spoken = start + timedelta(seconds=offset)
+        chunk = UtteranceChunk(chunk_id=f"live-{conv_uuid}-{i}", conversation_uuid=conv_uuid, text=text,
+                               timestamp=spoken.isoformat(), spoken_at=spoken.isoformat(),
+                               received_at=(spoken + timedelta(seconds=delay)).isoformat(),
+                               duration_ms=int(seconds * 1000))
+        store.record_ingested_utterance(ledger_entry_for_chunk(chunk, "qualified"))
+
+
+def test_utterance_span_uses_relative_start_end_as_duration():
+    spoken = int((NOW - timedelta(hours=1)).timestamp() * 1000)
+    conv = BeeConversation.from_payload({"conversation": {
+        "id": 10, "start_time": spoken, "end_time": spoken + 60_000, "state": "COMPLETED",
+        "transcriptions": [{"id": 1, "realtime": False, "utterances": [
+            {"id": 1, "text": "hi", "spoken_at": spoken, "start": 1747.12, "end": 2152.64, "speaker": "Unknown"},
+            {"id": 2, "text": "no times", "spoken_at": spoken + 1000, "start": None, "end": 3.0}]}],
+    }})
+    first, second = conv.final_transcription().utterances
+    assert first.span_ms == (spoken, spoken + 405_520)
+    assert second.span_ms == (spoken + 1000, spoken + 1000)
+
+
+@pytest.mark.parametrize("state,ended,expected", [
+    ("CAPTURING", False, "deferred"), ("PROCESSING", True, "deferred"), ("COMPLETED", True, "ready"),
+])
+def test_readiness_with_observed_states(state, ended, expected):
+    start = NOW - timedelta(hours=1)
+    conv = BeeConversation.from_payload(make_conv(11, start, lines_every(30, TEN[:2]), realtime=False,
+                                                  state=state, ended=ended))
+    assert conv.readiness(int(NOW.timestamp() * 1000)) == expected
+
+
+@pytest.mark.asyncio
+async def test_reissued_final_is_matched_exactly_against_live(store):
+    """Typical completed conversation: the final re-issues the realtime text with new ids, no uuid."""
+    start = NOW - timedelta(hours=3)
+    lines = lines_every(20, TEN[:6])
+    record_live_spoken(store, "uuid-12", start, [(o, 4.0, t) for o, t in lines[:4]])
+    source = FixtureBeeHistorySource([make_conv(12, start, lines, realtime=False)])
+    result = await BackfillPlanner(source, lambda: store).plan(
+        (start - timedelta(minutes=10)).isoformat(), (start + timedelta(minutes=30)).isoformat())
+    assert [s.utterance.text for s in result.items] == TEN[4:6]
+    assert result.plan.utterances["duplicate_live"] == 4
+
+
+@pytest.mark.asyncio
+async def test_resegmented_final_covered_by_live_speech_is_a_duplicate(store, monkeypatch):
+    """Bee sometimes collapses minutes of speech into one final utterance: text cannot match, time can."""
+    start = NOW - timedelta(hours=3)
+    live_spans = [(i * 30, 25.0, f"live sentence {i} about the quarterly plan") for i in range(10)]  # 0–295 s
+    record_live_spoken(store, "uuid-13", start, live_spans)
+    long_text = " ".join(f"word{i}" for i in range(600))
+    at = int(start.timestamp() * 1000)
+    payload = {"conversation": {
+        "id": 13, "start_time": at, "end_time": at + 700_000, "state": "COMPLETED",
+        "transcriptions": [{"id": 131, "realtime": False, "utterances": [
+            {"id": 1, "text": long_text, "speaker": "Unknown", "spoken_at": at, "start": 0.0, "end": 300.0},
+            {"id": 2, "text": long_text + " more", "speaker": "Unknown", "spoken_at": at + 400_000,
+             "start": 400.0, "end": 650.0},
+        ]}],
+    }}
+    store.map_bee_conversation("uuid-13", 13)
+    result = await BackfillPlanner(FixtureBeeHistorySource([payload]), lambda: store).plan(
+        (start - timedelta(minutes=10)).isoformat(), (start + timedelta(minutes=30)).isoformat())
+    # First block: spoken live (fraction ≈ 0.98); second block: after live stopped → recovered
+    assert [s.utterance.id for s in result.items] == [2]
+    assert result.plan.utterances["duplicate_live"] == 1
+
+
+def test_backfill_speaker_roles_use_the_wearer_name(monkeypatch):
+    monkeypatch.setattr(bee_identity, "_identity", bee_identity.WearerIdentity("Ada"))
+    assert speaker_role_for("Ada") == "user"
+    assert speaker_role_for("Unknown") == "unknown"
+    assert speaker_role_for("Marco") == "contact"
+    assert speaker_role_for(None) == "unknown"

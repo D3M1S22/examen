@@ -159,7 +159,7 @@ class AbstractContextStore(ABC):
     def patch_utterance_speaker(
         self, chunk_id: str, speaker_id: str, speaker_role: Optional[str] = None
     ) -> bool:
-        """Retrospectively patches speaker metadata on stored actions/tasks. Returns True if patched."""
+        """Records a late speaker identity (Bee `tagged-utterance`) for an utterance. Returns True if stored."""
         return False
 
     # --- Macro Session & Micro-Event Decoupling (Milestone 3.2) ---

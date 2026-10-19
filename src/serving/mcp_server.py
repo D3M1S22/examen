@@ -243,7 +243,7 @@ def _get_bee_device_telemetry() -> Dict[str, Any]:
             res["detail"] = f"Bee account verified as {res['account']}; orchestrator listening for audio stream"
         return res
 
-    from src.ingestion.stream_convo import get_bee_binary_path
+    from src.ingestion.stream_convo import BeeClient, get_bee_binary_path
     bee_bin = get_bee_binary_path()
     if not bee_bin:
         res = {
@@ -256,11 +256,12 @@ def _get_bee_device_telemetry() -> Dict[str, Any]:
     else:
         try:
             import subprocess
+            # `bee status` verifies the token over the network (~1.3 s observed): callers run this off the loop
             proc = subprocess.run(
-                [bee_bin, "status"],
+                BeeClient()._build_cmd(["status"]),
                 capture_output=True,
                 text=True,
-                timeout=2.0,
+                timeout=5.0,
             )
             out = proc.stdout.strip()
             if "Verified as" in out:
@@ -429,7 +430,7 @@ async def _extract_user_id_from_request(request: Request) -> Optional[str]:
 async def api_auth_users(request: Request) -> JSONResponse:
     """Returns list of active/saved demo user profiles for GDPR-compliant user management."""
     users_list = []
-    telemetry = _get_bee_device_telemetry()
+    telemetry = await asyncio.to_thread(_get_bee_device_telemetry)
     for uid, sess in _user_sessions.items():
         users_list.append({
             "user_id": uid,
@@ -454,7 +455,7 @@ async def api_auth_session(request: Request) -> JSONResponse:
     """Returns current user session and live Bee hardware pairing state."""
     user_id = request.headers.get("x-user-id") or request.query_params.get("user_id")
     user_session = _user_sessions.get(user_id) if user_id else None
-    telemetry = _get_bee_device_telemetry()
+    telemetry = await asyncio.to_thread(_get_bee_device_telemetry)
 
     if user_session:
         user_session["bee_connected"] = bool(telemetry.get("account"))
@@ -487,10 +488,10 @@ async def api_auth_login(request: Request) -> JSONResponse:
     user_id = body.get("user_id") or f"usr_{uuid.uuid4().hex[:8]}"
     connect_bee = bool(body.get("connect_bee", False))
 
-    telemetry = _get_bee_device_telemetry()
+    telemetry = await asyncio.to_thread(_get_bee_device_telemetry)
     bee_pairing = None
     if connect_bee:
-        bee_pairing = _initiate_bee_login_pairing()
+        bee_pairing = await asyncio.to_thread(_initiate_bee_login_pairing)
 
     now_iso = datetime.now().isoformat()
     existing_sess = _user_sessions.get(user_id)
@@ -526,7 +527,7 @@ async def api_auth_login(request: Request) -> JSONResponse:
 @mcp.custom_route("/api/auth/bee-link", methods=["GET", "POST"])
 async def api_auth_bee_link(request: Request) -> JSONResponse:
     """Generates or refreshes the Bee pairing URL by invoking the Bee CLI."""
-    pairing_info = _initiate_bee_login_pairing()
+    pairing_info = await asyncio.to_thread(_initiate_bee_login_pairing)
     user_id = await _extract_user_id_from_request(request)
     if user_id and user_id in _user_sessions:
         _user_sessions[user_id]["bee_pairing"] = pairing_info
@@ -539,7 +540,7 @@ async def api_auth_bee_link(request: Request) -> JSONResponse:
 @mcp.custom_route("/api/auth/bee-disconnect", methods=["POST"])
 async def api_auth_bee_disconnect(request: Request) -> JSONResponse:
     """Logs out of Bee CLI and removes device pairing credentials."""
-    _disconnect_bee_device()
+    await asyncio.to_thread(_disconnect_bee_device)
     user_id = await _extract_user_id_from_request(request)
     if user_id and user_id in _user_sessions:
         _user_sessions[user_id]["bee_connected"] = False
@@ -565,7 +566,7 @@ async def api_auth_logout(request: Request) -> JSONResponse:
     disconnect_bee = body.get("disconnect_bee", True)
 
     if disconnect_bee:
-        _disconnect_bee_device()
+        await asyncio.to_thread(_disconnect_bee_device)
 
     if user_id and user_id in _user_sessions:
         del _user_sessions[user_id]
@@ -589,7 +590,7 @@ async def api_auth_gdpr_purge(request: Request) -> JSONResponse:
     if user_id and user_id in _user_sessions:
         del _user_sessions[user_id]
 
-    _disconnect_bee_device()
+    await asyncio.to_thread(_disconnect_bee_device)
     try:
         get_storage_store().purge_ingestion_history()
     except NotImplementedError:
@@ -646,7 +647,7 @@ async def api_status(request: Request) -> JSONResponse:
     open_commitments = sum(1 for c in all_commitments if c.status == "open")
 
     latency_metrics = store.get_latency_metrics()
-    bee_telemetry = _get_bee_device_telemetry()
+    bee_telemetry = await asyncio.to_thread(_get_bee_device_telemetry)
     orch_status = OrchestratorManager.get_instance().get_status()
     history_status = _history_status()
 

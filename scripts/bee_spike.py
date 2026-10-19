@@ -5,7 +5,8 @@ Captures what the real Bee stream and REST history return, then answers the open
 verifications V0-V6 of docs/next_steps/historical_backfill/06_phase0_device_spike.md.
 
 Raw captures contain personal speech: they are written to `.bee-spike/` (git-ignored).
-Only `fixture` writes into the repository, and it redacts text by default.
+`fixture` writes anonymised copies to `.bee-spike/fixtures/` (also git-ignored): tests must use
+synthetic payloads with the real shapes instead (docs/10_bee_cli_reference.md).
 
 Usage:
     python scripts/bee_spike.py check
@@ -43,7 +44,7 @@ from src.ingestion.coverage import normalize_text, token_jaccard  # noqa: E402
 from src.ingestion.stream_convo import BeeClient, get_bee_binary_path  # noqa: E402
 
 SPIKE_ROOT = ROOT / ".bee-spike"
-FIXTURE_DIR = ROOT / "tests" / "fixtures" / "bee_history"
+FIXTURE_DIR = SPIKE_ROOT / "fixtures"  # derived from personal captures: never committed
 
 
 def now_ms() -> int:
@@ -323,7 +324,7 @@ async def _run_production_parser(lines: List[str]) -> Counter:
     with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as f:
         f.write("\n".join(lines) + "\n")
         path = f.name
-    client = BeeClient()
+    client = BeeClient(transport="cli")
     client._build_cmd = lambda _sub: ["cat", path]
     counts: Counter = Counter()
     async for event in client.stream_events():
@@ -430,7 +431,8 @@ def cmd_analyze(args) -> None:
         utt = p.get("utterance") or {}
         text = normalize_text(utt.get("text") or p.get("text") or "")
         conv_uuid = p.get("conversation_uuid") or p.get("conversation_id")
-        pool = [r for r in rest_rt if r["realtime"]]
+        # Completed conversations only return the final transcription (new ids): match its text then
+        pool = [r for r in rest_rt if r["realtime"]] or list(rest_rt)
         if conv_uuid in uuid_to_conv:
             uuid_ok += 1
             pool = [r for r in pool if r["conv"] is uuid_to_conv[conv_uuid]] or pool
@@ -443,7 +445,7 @@ def cmd_analyze(args) -> None:
         if best is None and pool:
             best = max(pool, key=lambda r: token_jaccard(r["norm"], text))
             kind = "fuzzy" if token_jaccard(best["norm"], text) >= 0.6 else None
-        if not kind:
+        if best is None or not kind:
             matches.append({"text": text[:60], "matched": False})
             continue
         u = best["u"]
@@ -596,7 +598,7 @@ def main() -> None:
 
     sub.add_parser("analyze", help="Answer V0-V6 from the session captures")
 
-    p = sub.add_parser("fixture", help="Anonymise a conversation detail into tests/fixtures/bee_history/")
+    p = sub.add_parser("fixture", help="Anonymise a conversation detail into .bee-spike/fixtures/")
     p.add_argument("source")
     p.add_argument("name")
     p.add_argument("--keep-text", action="store_true", help="Do not redact utterance text")

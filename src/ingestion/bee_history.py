@@ -16,11 +16,12 @@ from typing import Any, Dict, Iterable, List, Optional, Protocol
 from pydantic import BaseModel, Field
 
 from src.core.config import settings
-from src.ingestion.stream_convo import BeeClient
+from src.ingestion.stream_convo import BeeClient, duration_ms
 
 logger = logging.getLogger("examen.ingestion.bee_history")
 
-_IN_PROGRESS_STATES = {"processing", "preparing", "analyzing", "recording", "in_progress"}
+# Observed: CAPTURING → PROCESSING → COMPLETED (docs/10_bee_cli_reference.md §5); others kept defensively
+_IN_PROGRESS_STATES = {"capturing", "processing", "preparing", "analyzing", "recording", "in_progress"}
 
 
 def epoch_ms(value: Any) -> Optional[int]:
@@ -41,22 +42,21 @@ def epoch_ms(value: Any) -> Optional[int]:
 class BeeUtterance(BaseModel):
     id: Any = None
     text: str = ""
-    speaker: Optional[str] = None
+    speaker: Optional[str] = None  # a person's first name or "Unknown"
     spoken_at_ms: Optional[int] = None
-    start_ms: Optional[int] = None
-    end_ms: Optional[int] = None
+    # Bee `start`/`end` are relative seconds with an unknown origin: only their difference is usable
+    duration_ms: Optional[int] = None
 
     @property
     def ts_ms(self) -> Optional[int]:
-        return self.spoken_at_ms if self.spoken_at_ms is not None else self.start_ms
+        return self.spoken_at_ms
 
     @property
     def span_ms(self) -> Optional[tuple]:
         start = self.ts_ms
         if start is None:
             return None
-        end = self.end_ms if self.end_ms is not None and self.end_ms >= start else start
-        return start, end
+        return start, start + max(0, self.duration_ms or 0)
 
 
 class BeeTranscription(BaseModel):
@@ -137,8 +137,7 @@ class BeeConversation(BaseModel):
                     text=str(u.get("text") or ""),
                     speaker=u.get("speaker"),
                     spoken_at_ms=epoch_ms(u.get("spoken_at")),
-                    start_ms=epoch_ms(u.get("start")),
-                    end_ms=epoch_ms(u.get("end")),
+                    duration_ms=duration_ms(u.get("start"), u.get("end")),
                 )
                 for u in tx.get("utterances") or []
                 if isinstance(u, dict)

@@ -160,6 +160,7 @@ Detailed technical, architectural, and operational documentation is organized ac
 * 🚀 [ROADMAP.md](docs/next_steps/ROADMAP.md): Evolution Roadmap, pipeline refinements status dashboard, and execution plan for Next Steps.
 * 🧠 [deep_topic_event_engine/](docs/next_steps/deep_topic_event_engine/00_overview.md): Deep Topic Event Engine specification, state machine, topic continuity calibration, synthesis scheduling, serving/UI and test plan.
 * ⏪ [historical_backfill/](docs/next_steps/historical_backfill/00_overview.md): Historical Transcript Backfill specification: coverage ledger, gap detection, live/backfill de-duplication, virtual-clock replay, auto catch-up and the History Sync UI.
+* 🐝 [07_bee_data_alignment.md](docs/next_steps/07_bee_data_alignment.md): Fix plan and status for aligning EXAMEN with the observed Bee data (location, speaker identity, stream liveness, backfill durations).
 
 ---
 
@@ -186,7 +187,8 @@ In strict accordance with the non-modifying model directive, the current LLM mod
 - [x] **Precompiled Standalone Binary Resolution:** Native fallback to `resources/bee-cli/dist/platforms/mac-arm64/bee` (or linux/windows) removing dependency on global `bun`/`node` on host.
 - [x] **Capture real `bee stream --json` samples:** event `type` field present, `utterance.spoken_at` (ISO) present, undocumented `tagged-utterance` / `new-utterance-chunks` events, 30 s SSE pings dropped by `--json`. Full contract: [docs/10_bee_cli_reference.md](docs/10_bee_cli_reference.md).
 - [ ] **Live Audio Stream Linking with the physical Bee wearable:** verified with the Apple Watch app only; re-run `scripts/bee_spike.py` with the wearable (locations, `device_type`, `update-location`).
-- [ ] **Bee data conformance fixes** ([docs/10_bee_cli_reference.md](docs/10_bee_cli_reference.md) §10): live location polling (C2–C4), speaker identity from `tagged-utterance` (C5, C16), stream liveness without pings (C9), no `bee logout` on dashboard logout (C11).
+- [x] **Bee data conformance fixes** ([docs/next_steps/07_bee_data_alignment.md](docs/next_steps/07_bee_data_alignment.md)): live location polling (C2–C4), speaker identity from `tagged-utterance` (C5, C16), raw-SSE liveness through a private `bee proxy` (C9), backfill durations and re-segmented finals (I2, I3). Dashboard logout disconnecting Bee is kept by design (C11).
+- [ ] **End-to-end verification of the fixes** with the real device and Bedrock (doc 07 §4).
 - [ ] **Capture `new-conversation` / `update-conversation`:** start a capture before speaking.
 - [ ] **Re-calibrate topic similarity on real lectures:** `python scripts/replay_event_scenarios.py --calibrate` after adding recorded scenarios (the Titan V2 same/different gap is narrow: 0.36 / 0.43).
 - [ ] **Webhook Gateway Ingestion:** Transition from local subprocess polling to Bee Cloud webhook callback ingestion (`bee stream --webhook-endpoint <URL>`).

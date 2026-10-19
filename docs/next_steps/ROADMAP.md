@@ -283,7 +283,7 @@
 * [x] Next.js: *Topic Dossiers → Events* timeline with decision audit trail and manual operations, simulator event mode + scenario player, live event banner in Overview.
 
 #### ⏭️ Open items
-* [ ] Capture real `bee stream --json` payloads (event type field, utterance time, conversation events) with the physical device.
+* [x] Capture real `bee stream --json` payloads (event type field, utterance time): done 2026-10-19 ([10](../10_bee_cli_reference.md) §7). `new-conversation` / `update-conversation` still to be captured.
 * [ ] Record real lectures as replay scenarios and re-run `scripts/replay_event_scenarios.py --calibrate`.
 
 ### Phase 5: Historical Transcript Backfill (IMPLEMENTED ✅, device verification pending)
@@ -295,7 +295,12 @@
 * [x] **M5.3 Replay executor:** isolated `EventEngine` on a virtual clock, ordered parallel screening, as-of temporal guards (task resolution, relative times, notifications), resumable runs.
 * [x] **M5.4 Auto catch-up:** startup and reconnect triggers, open-event hand-over and boundary stitching, budget guards.
 * [x] **M5.5 UI:** History Sync card, coverage strip, preview → run modal, progress badge, `⏪ Recovered` provenance badges.
-* [ ] **Open:** Phase 0 device verification (V1–V6 in [HTB 01 §6](historical_backfill/01_bee_history_sources.md)) and Phase 6 optimisations (proxy transport, window screening). Status and deviations: [HTB 05 §0](historical_backfill/05_implementation_plan_and_testing.md).
+* [x] **Phase 0 device verification** (2026-10-19, Apple Watch): results in [HTB 06](historical_backfill/06_phase0_device_spike.md) §5.
+* [ ] **Open:** Phase 6 optimisations (proxy transport, window screening). Status and deviations: [HTB 05 §0](historical_backfill/05_implementation_plan_and_testing.md).
+
+### Phase 6: Bee Data Alignment (IN PROGRESS)
+> **Goal:** make every consumer of Bee data follow the observed contract ([10_bee_cli_reference.md](../10_bee_cli_reference.md)): live location, speaker identity, stream liveness, backfill durations.
+> **Plan & status:** [07_bee_data_alignment.md](07_bee_data_alignment.md).
 
 ---
 

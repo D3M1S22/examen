@@ -359,6 +359,11 @@ class SQLiteContextStore(AbstractContextStore):
                     run_id TEXT
                 )
             """)
+            try:
+                # Utterance duration from Bee start/end (relative seconds): live spans for backfill dedup
+                cursor.execute("ALTER TABLE ingest_ledger ADD COLUMN duration_ms INTEGER;")
+            except Exception:
+                pass
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_ledger_hash_time ON ingest_ledger (text_hash, received_at);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_ledger_ts ON ingest_ledger (ts);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_ledger_status ON ingest_ledger (status);")
@@ -1266,26 +1271,16 @@ class SQLiteContextStore(AbstractContextStore):
     def patch_utterance_speaker(
         self, chunk_id: str, speaker_id: str, speaker_role: Optional[str] = None
     ) -> bool:
-        """Retrospectively patches speaker metadata on stored actions/tasks and records diarization."""
-        patched = False
+        """Records a late speaker identity (Bee `tagged-utterance`) for an utterance.
+
+        Only the diarization table is written: actions and tasks have no speaker column, and their
+        `session_id` / `matched_task_id` must never be overwritten with a speaker label.
+        """
         with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
+            conn.cursor().execute(
                 "INSERT OR REPLACE INTO utterance_diarization (chunk_id, speaker_id, speaker_role, updated_at) VALUES (?, ?, ?, ?)",
                 (chunk_id, speaker_id, speaker_role or "unknown", datetime.now(timezone.utc).isoformat())
             )
-            cursor.execute(
-                "UPDATE planned_tasks SET session_id = ? WHERE id = ? OR session_id = ?",
-                (speaker_id, chunk_id, chunk_id),
-            )
-            if cursor.rowcount > 0:
-                patched = True
-            cursor.execute(
-                "UPDATE verified_actions SET matched_task_id = ? WHERE id = ?",
-                (speaker_id, chunk_id),
-            )
-            if cursor.rowcount > 0:
-                patched = True
             conn.commit()
         return True
 
@@ -1919,8 +1914,8 @@ class SQLiteContextStore(AbstractContextStore):
             conn.cursor().execute("""
                 INSERT OR REPLACE INTO ingest_ledger
                 (source_key, source, bee_conversation_uuid, bee_conversation_id, ts, received_at,
-                 text_norm, text_hash, status, categories_json, run_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 text_norm, text_hash, status, categories_json, run_id, duration_ms)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 entry["source_key"],
                 entry.get("source", "live"),
@@ -1933,6 +1928,7 @@ class SQLiteContextStore(AbstractContextStore):
                 entry.get("status", "screened_noop"),
                 json.dumps(entry.get("categories") or [], ensure_ascii=False),
                 entry.get("run_id"),
+                entry.get("duration_ms"),
             ))
             conn.commit()
 

@@ -35,6 +35,7 @@ from src.core.schemas import (
 from src.core.storage import get_storage_store
 from src.core.storage.base import AbstractContextStore
 from src.ingestion.bee_history import BeeConversation, BeeHistorySource, BeeUtterance, CliBeeHistorySource
+from src.ingestion.bee_identity import get_wearer_identity
 from src.ingestion.coverage import (
     Span,
     bee_source_key,
@@ -101,10 +102,8 @@ class PlanResult:
 
 
 def speaker_role_for(speaker: Optional[str]) -> str:
-    """Same heuristic as live ingestion: speaker_0 is the wearer."""
-    if speaker in ("speaker_0", "user"):
-        return "user"
-    return "contact" if speaker else "unknown"
+    """REST speakers are first names or "Unknown": the wearer's name ⇒ user (docs/10 §8)."""
+    return get_wearer_identity().role_for(speaker)
 
 
 def _context_line(utt: BeeUtterance) -> str:
@@ -124,6 +123,8 @@ class _LiveEvidence:
     def __init__(self, rows: List[Dict[str, Any]], counted_statuses: Set[str]):
         self.rows: List[Dict[str, Any]] = []
         self.by_hash: Dict[str, List[int]] = {}
+        # Speech spans live analysed ([spoken_at, spoken_at + duration]), for re-segmented finals
+        spans: List[Tuple[Optional[str], Span]] = []
         for row in rows:
             if row.get("status") not in counted_statuses:
                 continue
@@ -134,6 +135,22 @@ class _LiveEvidence:
             self.rows.append({"t": t, "uuid": row.get("bee_conversation_uuid"),
                               "norm": row.get("text_norm") or "", "used": False})
             self.by_hash.setdefault(row["text_hash"], []).append(idx)
+            spoken = to_epoch(row.get("ts"))
+            if spoken is not None and row.get("duration_ms"):
+                spans.append((row.get("bee_conversation_uuid"), (spoken, spoken + row["duration_ms"] / 1000.0)))
+        self._spans = spans
+
+    def covered_fraction(self, span: Span, conv_uuid: Optional[str], merge_tolerance: float) -> float:
+        """Share of ``span`` covered by live speech of the same conversation (pauses ≤ tolerance bridged)."""
+        start, end = span
+        if end <= start:
+            return 0.0
+        live = merge_spans(
+            [s for uuid, s in self._spans if self._uuid_ok(uuid, conv_uuid) and s[1] >= start and s[0] <= end],
+            tolerance=merge_tolerance,
+        )
+        covered = sum(max(0.0, min(end, b) - max(start, a)) for a, b in live)
+        return covered / (end - start)
 
     @staticmethod
     def _uuid_ok(row_uuid: Optional[str], conv_uuid: Optional[str]) -> bool:
@@ -295,6 +312,11 @@ class BackfillPlanner:
                     utt_counts["duplicate_live"] += 1
                     continue
                 if final_hits.get(id(utt)):
+                    utt_counts["duplicate_live"] += 1
+                    continue
+                # Re-segmented final (minutes-long utterances): no text match, but live heard that speech
+                if evidence.covered_fraction((t, t_end), conv_uuid, settings.backfill_span_merge_seconds) \
+                        >= settings.backfill_live_coverage_fraction:
                     utt_counts["duplicate_live"] += 1
                     continue
                 if t < horizon and any(a <= t <= b for a, b in live_spans):
