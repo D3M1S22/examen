@@ -17,7 +17,7 @@ from src.core.config import settings
 from src.core.models import get_fast_model, has_active_model_credentials
 from src.core.schemas import ExamenState, SocialCommitment, SocialEntity
 from src.core.storage import get_storage_store
-from src.pipeline.nodes.scheduler import parse_relative_time_expression
+from src.pipeline.nodes.scheduler import parse_reference_time, parse_relative_time_expression
 
 logger = logging.getLogger("examen.pipeline.social")
 
@@ -129,6 +129,7 @@ def _heuristic_extract_social(
     transcript: str,
     historical_context: Optional[str] = None,
     speaker_role: Optional[str] = None,
+    ref_dt: Optional[datetime] = None,
 ) -> Optional[SocialEntity]:
     """Deterministic heuristic extractor for offline dev, testing, or API fallbacks."""
     text = transcript.strip()
@@ -208,9 +209,9 @@ def _heuristic_extract_social(
     for pat in user_patterns:
         for match in re.finditer(pat, text, re.IGNORECASE):
             comm_desc = match.group(1).strip()
-            norm_iso, raw_time = parse_relative_time_expression(comm_desc)
+            norm_iso, raw_time = parse_relative_time_expression(comm_desc, ref_dt)
             if not raw_time:
-                norm_iso, raw_time = parse_relative_time_expression(text)
+                norm_iso, raw_time = parse_relative_time_expression(text, ref_dt)
             commitments.append(SocialCommitment(
                 contact_name=person_name,
                 debtor=effective_user_debtor,
@@ -228,9 +229,9 @@ def _heuristic_extract_social(
     for pat in contact_patterns:
         for match in re.finditer(pat, text, re.IGNORECASE):
             comm_desc = match.group(1).strip()
-            norm_iso, raw_time = parse_relative_time_expression(comm_desc)
+            norm_iso, raw_time = parse_relative_time_expression(comm_desc, ref_dt)
             if not raw_time:
-                norm_iso, raw_time = parse_relative_time_expression(text)
+                norm_iso, raw_time = parse_relative_time_expression(text, ref_dt)
             commitments.append(SocialCommitment(
                 contact_name=person_name,
                 debtor="contact",
@@ -376,12 +377,14 @@ def node_extract_social(state: ExamenState) -> Dict[str, Any]:
     historical_context = state.get("historical_context")
     location = state.get("location")
     speaker_role = state.get("speaker_role")
+    # Relative deadlines ("tomorrow", "by Friday") are anchored on the utterance time
+    ref_dt = parse_reference_time(state.get("timestamp"))
 
     # Fallback if mock_ai or missing provider credentials
     if settings.mock_ai or not has_active_model_credentials(settings.gatekeeper_provider):
         logger.debug("Extracting social entity via heuristic fallback (mock_ai or no credentials).")
         social = _heuristic_extract_social(
-            transcript, historical_context=historical_context, speaker_role=speaker_role
+            transcript, historical_context=historical_context, speaker_role=speaker_role, ref_dt=ref_dt
         )
         if social:
             if location and not social.location_encountered and location.get("place_name"):
@@ -414,7 +417,7 @@ def node_extract_social(state: ExamenState) -> Dict[str, Any]:
             # If LLM left commitments empty, supplement with heuristic extraction
             if not result.commitments:
                 h_social = _heuristic_extract_social(
-                    transcript, historical_context=historical_context, speaker_role=speaker_role
+                    transcript, historical_context=historical_context, speaker_role=speaker_role, ref_dt=ref_dt
                 )
                 if h_social and h_social.commitments:
                     result.commitments = h_social.commitments
@@ -428,7 +431,7 @@ def node_extract_social(state: ExamenState) -> Dict[str, Any]:
                     c.debtor = "contact"
                 if not c.normalized_deadline:
                     probe_text = f"{c.due_date_raw or ''} {c.description} {transcript}"
-                    norm_iso, raw_time = parse_relative_time_expression(probe_text)
+                    norm_iso, raw_time = parse_relative_time_expression(probe_text, ref_dt)
                     if norm_iso:
                         c.normalized_deadline = norm_iso
                         if not c.due_date_raw:
@@ -445,7 +448,7 @@ def node_extract_social(state: ExamenState) -> Dict[str, Any]:
     except Exception as e:
         logger.warning(f"Social extraction model failed: {e}. Falling back to heuristic.")
         social = _heuristic_extract_social(
-            transcript, historical_context=historical_context, speaker_role=speaker_role
+            transcript, historical_context=historical_context, speaker_role=speaker_role, ref_dt=ref_dt
         )
         if social:
             if location and not social.location_encountered and location.get("place_name"):

@@ -18,6 +18,11 @@ from src.core.schemas import (
     SessionSegment,
     TopicProfile,
     ExamenState,
+    CoverageInterval,
+    CoverageGap,
+    BackfillEstimate,
+    BackfillPlan,
+    BackfillRun,
 )
 
 from src.core.models import (
@@ -49,5 +54,10 @@ __all__ = [
     "SessionSegment",
     "TopicProfile",
     "ExamenState",
+    "CoverageInterval",
+    "CoverageGap",
+    "BackfillEstimate",
+    "BackfillPlan",
+    "BackfillRun",
 ]
 

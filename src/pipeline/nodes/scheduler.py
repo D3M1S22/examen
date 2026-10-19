@@ -16,6 +16,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from src.core.config import settings
 from src.core.models import get_fast_model, has_active_model_credentials
 from src.core.schemas import ExamenState, PlannedTask, ScheduledTaskExtraction
+from src.core.time_utils import parse_local_iso
 
 logger = logging.getLogger("examen.pipeline.scheduler")
 
@@ -38,6 +39,11 @@ EXTRACTION GUIDELINES:
 5. recurrence: 'none', 'daily', 'weekdays', or 'weekly'.
 6. confidence: Float between 0.0 and 1.0 indicating certainty of intention.
 """
+
+
+def parse_reference_time(ref_time_iso: Optional[str]) -> Optional[datetime]:
+    """Parses the utterance time used as anchor for relative expressions (naive local time)."""
+    return parse_local_iso(ref_time_iso)
 
 
 def parse_relative_time_expression(
@@ -268,7 +274,10 @@ def node_extract_scheduled_task(state: ExamenState) -> Dict[str, Any]:
         scheduled_time = extracted.scheduled_time
         anchor = extracted.relative_time_anchor
         if not scheduled_time:
-            parsed_time, parsed_anchor = parse_relative_time_expression(transcript)
+            # Anchor on the utterance time, not on "now" (history backfill replays old speech)
+            parsed_time, parsed_anchor = parse_relative_time_expression(
+                transcript, parse_reference_time(ref_time_iso)
+            )
             scheduled_time = parsed_time
             if not anchor:
                 anchor = parsed_anchor

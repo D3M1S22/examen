@@ -12,6 +12,7 @@ from src.serving.tools.social_tools import (
     query_social_contact,
 )
 from src.serving.tools.topic_tools import get_topic_briefing
+from src.serving.tools.ingestion_tools import get_ingestion_coverage
 from src.serving.tools.session_tools import (
     get_live_event_outline,
     get_session_dossier,
@@ -19,6 +20,7 @@ from src.serving.tools.session_tools import (
 )
 
 __all__ = [
+    "get_ingestion_coverage",
     "create_planned_task",
     "get_upcoming_tasks",
     "verify_action_status",

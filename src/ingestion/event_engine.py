@@ -89,9 +89,10 @@ class EngineConfig:
         )
 
     @classmethod
-    def from_settings(cls, cfg: Optional[Settings] = None) -> "EngineConfig":
+    def from_settings(cls, cfg: Optional[Settings] = None, ignore_demo_profile: bool = False) -> "EngineConfig":
+        """ignore_demo_profile: history replays real time, so compressed demo timers would split it."""
         s = cfg or settings
-        if s.event_profile == "demo":
+        if s.event_profile == "demo" and not ignore_demo_profile:
             return cls.demo()
         return cls(
             t_soft=s.event_t_soft_seconds,
@@ -392,10 +393,17 @@ class EventEngine:
         clock: Optional[Clock] = None,
         synthesizer: Optional[Synthesizer] = None,
         continuity: Optional[TopicSimilarity] = None,
+        ingest_source: str = "live",
+        run_id: Optional[str] = None,
     ):
         """continuity: topic similarity for Phase C decisions (resume vs. split, drift, on-topic
-        windows). None keeps Phase A behaviour (resume on the first on-topic chunk)."""
+        windows). None keeps Phase A behaviour (resume on the first on-topic chunk).
+
+        ingest_source / run_id scope the events this engine owns: a history backfill runs its own
+        engine on a virtual clock and must never adopt (or be adopted by) the live open event."""
         self._store = store
+        self.ingest_source = ingest_source
+        self.run_id = run_id
         self.continuity = continuity
         self.config = config or EngineConfig.from_settings()
         self.clock: Clock = clock or time.time
@@ -464,7 +472,7 @@ class EventEngine:
                 return
             self._rehydrated = True
             try:
-                self._current = self.store.get_open_event()
+                self._current = self.store.get_open_event(ingest_source=self.ingest_source, run_id=self.run_id)
             except NotImplementedError:
                 self._current = None
             if self._current:
@@ -478,7 +486,7 @@ class EventEngine:
                     ]
                     self._pending_started = to_epoch(self._pending[0].timestamp) if self._pending else None
             try:
-                for ev in self.store.list_events_pending_final():
+                for ev in self.store.list_events_pending_final(ingest_source=self.ingest_source, run_id=self.run_id):
                     for seg in ev.segments:
                         if seg.status in ("closed", "synthesizing"):
                             self._enqueue(SynthesisJob("segment", ev.session_id, seg.segment_id))
@@ -624,6 +632,76 @@ class EventEngine:
                 self._save(self._current)
         return applied
 
+    def next_deadline(self) -> Optional[float]:
+        """Earliest engine time at which a timer rule (R1/R3/R5 or the pending-window decision) may fire."""
+        with self._lock:
+            snap = self._snapshot()
+            candidates: List[float] = []
+            if snap.status == "active":
+                if snap.last_on_topic_at is not None:
+                    candidates.append(snap.last_on_topic_at + self.config.t_soft)
+                if snap.segment_start is not None and snap.segment_words >= self.config.min_segment_words:
+                    candidates.append(snap.segment_start + self.config.t_checkpoint)
+            elif snap.status == "paused":
+                deadline = snap.effective_deadline(self.config)
+                if deadline is not None:
+                    candidates.append(deadline)
+                if self.continuity is not None and self._pending and self._pending_started is not None:
+                    candidates.append(self._pending_started + self.continuity.config.pending_max_age)
+            return min(candidates) if candidates else None
+
+    def advance_to(self, ts: float, max_steps: int = 64) -> List[Transition]:
+        """Virtual-clock replay (history backfill): fires every timer due up to ``ts`` at its own
+        deadline instead of ticking every ``tick_seconds``, then ticks at ``ts``."""
+        applied: List[Transition] = []
+        last: Optional[float] = None
+        for _ in range(max_steps):
+            nxt = self.next_deadline()
+            if nxt is None or nxt > ts or (last is not None and nxt <= last):
+                break
+            last = nxt
+            applied.extend(self.tick(now=nxt))
+        applied.extend(self.tick(now=ts))
+        with self._lock:
+            self._last_seen_ts = max(self._last_seen_ts, ts)
+        return applied
+
+    def release_open_event(
+        self,
+        ingest_source: str,
+        run_id: Optional[str],
+        rule: str = "B1",
+        reason: str = "handover",
+        detail: Optional[str] = None,
+    ) -> Optional[SessionDossier]:
+        """Hands the open event over to another engine scope (history backfill, doc 03 §7).
+
+        B1: the live engine hands its open event to the startup backfill run that replays the gap.
+        The event keeps its state; this engine forgets it and its in-memory continuity windows."""
+        self.rehydrate()
+        with self._lock:
+            ev = self._current
+            if ev is None:
+                return None
+            ev.ingest_source = ingest_source  # type: ignore[assignment]
+            ev.ingest_run_id = run_id
+            self._log(ev, ev.status, Transition(
+                rule, ev.status, reason, self.now(),
+                detail or f"Handed over to {ingest_source} ingestion (run {run_id})"))
+            self._save(ev)
+            self._current = None
+            self._reset_continuity_state()
+            return ev
+
+    def log_transition(self, session_id: str, rule: str, reason: str, detail: str = "") -> None:
+        """Appends an audit-trail entry (e.g. B2 backfill stitching) without changing the status."""
+        with self._lock:
+            ev = self._load(session_id)
+            if ev is None:
+                return
+            self._log(ev, ev.status, Transition(rule, ev.status, reason, self.now(), detail))
+            self._save(ev)
+
     def on_location(self, location: Optional[dict], now: Optional[float] = None) -> List[Transition]:
         """Handles standalone GPS fixes (Bee update-location) so walking away closes a silent event."""
         self.rehydrate()
@@ -741,6 +819,8 @@ class EventEngine:
                 status="concluded",
                 location=ev.location,
                 anchor_location=ev.anchor_location,
+                ingest_source=ev.ingest_source,
+                ingest_run_id=ev.ingest_run_id,
             )
             for c in moved:
                 if c.conversation_uuid and c.conversation_uuid not in new.conversation_uuids:
@@ -1246,6 +1326,8 @@ class EventEngine:
             anchor_location=location,
             last_on_topic_at=start_iso,
             conversation_uuids=[chunk.conversation_uuid] if chunk else [],
+            ingest_source=self.ingest_source,
+            ingest_run_id=self.run_id,
         )
         self._open_segment(ev, t.at)
         self._log(ev, None, t)

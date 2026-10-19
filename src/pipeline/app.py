@@ -148,6 +148,9 @@ def agent_invocation(payload: Dict[str, Any], context: Any = None) -> Dict[str, 
         "speaker": payload.get("speaker") or payload.get("speaker_id"),
         "speaker_role": payload.get("speaker_role"),
         "utterance_id": payload.get("utterance_id") or payload.get("chunk_id"),
+        "source_key": payload.get("source_key"),
+        "ingest_source": payload.get("ingest_source") or "live",
+        "ingest_run_id": payload.get("ingest_run_id"),
     }
 
     # 5. Execute LangGraph StateGraph
@@ -158,7 +161,7 @@ def agent_invocation(payload: Dict[str, Any], context: Any = None) -> Dict[str, 
         try:
             from src.core.storage import get_storage_store
             get_storage_store().record_latency(
-                event_type="agentcore_pipeline",
+                event_type="backfill_pipeline" if state["ingest_source"] == "backfill" else "agentcore_pipeline",
                 latency_ms=elapsed_ms,
                 model_id=None,
                 details={"categories": categories, "session_id": session_id},

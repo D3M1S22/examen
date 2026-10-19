@@ -125,6 +125,8 @@ python -m src.serving.mcp_server
 python scripts/replay_event_scenarios.py --calibrate
 ```
 
+> **History Sync:** if EXAMEN was offline, Bee conversations recorded meanwhile are recovered automatically on restart/reconnect (`BACKFILL_LOOKBACK_DAYS`). To analyse any past period, open *Overview → History Sync → Analyse past period…* (free preview first). Spec: [historical_backfill/](docs/next_steps/historical_backfill/00_overview.md).
+
 > **Event engine demo:** in the dashboard open *Ambient Simulator → Deep Topic Event Engine*, pick a scenario (e.g. "Single lecture interrupted by a coffee break"), press **Play scenario**, then **Close events** and open *Topic Dossiers → Events*. `EVENT_PROFILE=demo` compresses the timers (20 s / 90 s) for live typing.
 
 - **Web Dashboard & Echo Show Ext-App:** Open [http://localhost:8000/](http://localhost:8000/) or [http://localhost:8000/ext-app/](http://localhost:8000/ext-app/) to monitor verified Peace of Mind actions, daily routine checklists, social rolodex cards, and run ambient audio simulations.

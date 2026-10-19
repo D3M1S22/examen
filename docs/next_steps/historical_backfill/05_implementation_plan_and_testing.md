@@ -4,6 +4,37 @@
 
 ---
 
+## 0. Implementation status (2026-10-19, branch `feature/historical-backfill`)
+
+| Phase | Status | Code | Tests |
+|---|---|---|---|
+| 0 Verification spike | ⏳ **Pending** (physical device; the local bee-cli platform binary is not built either) | — | — |
+| 1 Coverage & ledger | ✅ Implemented | [coverage.py](../../../src/ingestion/coverage.py), [orchestrator.py](../../../src/ingestion/orchestrator.py), [stream_convo.py](../../../src/ingestion/stream_convo.py), [sqlite_store.py](../../../src/core/storage/sqlite_store.py) | `tests/test_backfill.py` (T-COV) |
+| 2 History source & planner | ✅ Implemented (CLI transport) | [bee_history.py](../../../src/ingestion/bee_history.py), [backfill.py](../../../src/ingestion/backfill.py) `BackfillPlanner` | T-DED, T-RDY |
+| 3 Replay executor | ✅ Implemented | `ReplayExecutor`, [event_engine.py](../../../src/ingestion/event_engine.py) (`ingest_source`/`run_id` scope, `advance_to`, `release_open_event`, `log_transition`), [persist.py](../../../src/pipeline/nodes/persist.py), [time_utils.py](../../../src/core/time_utils.py) | T-ISO, T-IDEM, T-TMP, T-CAN |
+| 4 Automatic triggers | ✅ Implemented | `BackfillService` (startup hand-over B1, reconnect debounce, deferred re-check, stitching B2, budget trim), [mcp_server.py](../../../src/serving/mcp_server.py) wiring | T-BND, T-TRG, T-BUD |
+| 5 UI | ✅ Implemented | `BackfillModal`, `RecoveredBadge`, Overview *History Sync* card, Status Dock ⏪ item, SSE `backfill_*` branch in `page.tsx`, [backfill.ts](../../../src/web_ui/src/utils/backfill.ts); MCP tool `get_ingestion_coverage` ([ingestion_tools.py](../../../src/serving/tools/ingestion_tools.py)) | `tests/test_backfill_api.py`, `src/web_ui/src/utils/backfill.test.ts` |
+| 6 Optimisations | ⏳ Not started | — | — |
+
+### 0.1 Deviations from the specification
+
+| Spec | Implementation | Reason |
+|---|---|---|
+| Temporal guard on `match_and_resolve_task` for every action (03 §4.1) | Applied to **backfill** actions only, plus a guard in `node_persist` on a `matched_task_id` pre-set by the action node | Live actions are spoken "now": the guard would only change live behaviour (and existing tests) without benefit |
+| `occurred_at` on actions and tasks (04 §1.2) | Not added. `VerifiedAction.timestamp` already holds the spoken time; backfilled tasks get `created_at = spoken time` | Avoids a redundant column |
+| Provenance on contacts and briefings | Only `verified_actions`, `planned_tasks` and `session_dossiers` carry `ingest_source`/`ingest_run_id` | Briefings belong to events (which carry it); contacts are merged by name across sources |
+| `backfill_runs` with one column per field (04 §2) | Indexed columns + `payload_json` (the whole `BackfillRun`) | Schema evolution without migrations |
+| `422` when the window ends after the live connection started (04 §3) | The end is **clamped** to the live start, with a warning in the plan; `422 window_covered_by_live` only if nothing remains | Presets like "last 24 h" work without the UI computing the bound |
+| Matching rule "realtime utterance matched → span" (02 §4) | **One-to-one** assignment (exact hash first, then fuzzy on unused rows) and **midpoint** overlap for final utterances | Repetitive speech let one live row explain two neighbouring sentences (caught by T-DED-5) |
+| `BACKFILL_ENRICH_CONTACTS_PER_RUN` cap (03 §4.1) | Setting exists, not enforced: contact web enrichment runs as on live | Enrichment lives inside the social node; contacts are rare in practice |
+| `discard_events` on cancel (03 §5) | Not implemented: events of a cancelled run are always concluded | Low value for v1 |
+| Live priority (03 §8) | Backfill dispatch waits while a live pipeline call is in flight; screening concurrency is not reduced | Simpler; live screening is a single call per utterance |
+| System Bar badge (04 §4.1) | ⏪ item in the left **Status Dock** (where the BEE/SSE badges actually live) | Matches the current dashboard layout |
+
+Additional settings introduced by the implementation: `BACKFILL_LOOKBACK_MARGIN_HOURS` (list paging margin, 6 h), `BACKFILL_HISTORY_CONCURRENCY` (4), and the estimate cost model `BACKFILL_COST_PER_GATEKEEPER_CALL` / `BACKFILL_COST_PER_PIPELINE_CALL` / `BACKFILL_COST_PER_EVENT`.
+
+---
+
 ## 1. Phased plan
 
 Each phase ships on its own and leaves the suite green (`.venv/bin/pytest tests/ -v`).

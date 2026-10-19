@@ -19,6 +19,8 @@ export interface VerifiedAction {
   confidence: number;
   elapsed_time_human?: string;
   matched_task_id?: string;
+  ingest_source?: IngestSource;
+  ingest_run_id?: string | null;
 }
 
 export interface PlannedTask {
@@ -31,6 +33,9 @@ export interface PlannedTask {
   verified_action_id?: string;
   created_at: string;
   completed_at?: string;
+  ingest_source?: IngestSource;
+  ingest_run_id?: string | null;
+  recovered?: boolean;
 }
 
 export interface SocialCommitment {
@@ -237,6 +242,8 @@ export interface EventSummary {
   transitions_count: number;
   top_terms: string[];
   transcript_chunks_count: number;
+  ingest_source?: IngestSource;
+  ingest_run_id?: string | null;
 }
 
 /** Full event returned by GET /api/sessions/{id} */
@@ -356,3 +363,133 @@ export interface EchoNotification {
 }
 
 
+
+// ============================================================================
+// Historical Transcript Backfill (docs/next_steps/historical_backfill/04)
+// ============================================================================
+
+/** Ingestion path that produced an entity. */
+export type IngestSource = "live" | "backfill" | "simulator";
+
+export interface CoverageInterval {
+  id: string;
+  source: "live" | "backfill";
+  start: string;
+  end: string;
+  is_open: boolean;
+  degraded: boolean;
+  run_id?: string | null;
+  utterances: number;
+  errors: number;
+}
+
+export interface CoverageGap {
+  start: string;
+  end: string;
+  seconds: number;
+}
+
+export interface CoverageSummary {
+  live_seconds: number;
+  backfill_seconds: number;
+  gap_seconds: number;
+}
+
+export interface CoverageBucket extends CoverageSummary {
+  start: string;
+  end: string;
+}
+
+/** GET /api/backfill/coverage */
+export interface CoverageResponse {
+  window_from: string;
+  window_to: string;
+  live_since?: string | null;
+  summary: CoverageSummary;
+  intervals: CoverageInterval[];
+  gaps: CoverageGap[];
+  buckets: CoverageBucket[];
+}
+
+export interface BackfillEstimate {
+  gatekeeper_calls: number;
+  expected_qualified: number;
+  events_expected: number;
+  cost_usd: number;
+  duration_s: number;
+}
+
+/** POST /api/backfill/preview (cost-free plan) */
+export interface BackfillPlan {
+  window_from: string;
+  window_to: string;
+  mode: "gaps_only";
+  retry_failed_live: boolean;
+  coverage: CoverageSummary;
+  gaps: CoverageGap[];
+  conversations: Record<string, number>;
+  utterances: Record<string, number>;
+  estimate: BackfillEstimate;
+  warnings: string[];
+  deferred_conversation_ids: number[];
+  over_budget?: boolean;
+}
+
+export type BackfillRunStatus =
+  | "planned"
+  | "fetching"
+  | "replaying"
+  | "synthesizing"
+  | "completed"
+  | "partial"
+  | "failed"
+  | "cancelled";
+
+export interface BackfillRun {
+  id: string;
+  trigger: "startup" | "reconnect" | "manual" | "deferred_recheck";
+  window_from: string;
+  window_to: string;
+  status: BackfillRunStatus;
+  retry_failed_live: boolean;
+  plan?: BackfillPlan | null;
+  counters: Record<string, number>;
+  last_source_key?: string | null;
+  last_ts?: string | null;
+  not_before?: string | null;
+  error?: string | null;
+  created_at: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+}
+
+/** SSE backfill_* payloads and /api/status telemetry.backfill.active_run */
+export interface BackfillProgress {
+  run_id: string;
+  trigger: BackfillRun["trigger"];
+  status: BackfillRunStatus;
+  window_from: string;
+  window_to: string;
+  processed: number;
+  selected: number;
+  qualified: number;
+  failed: number;
+  events: number;
+  progress: number;
+  eta_s?: number | null;
+  counters?: Record<string, number>;
+}
+
+/** /api/status telemetry.coverage + telemetry.backfill */
+export interface HistoryTelemetry {
+  coverage?: {
+    live_since?: string | null;
+    last_gap?: CoverageGap | null;
+    uncovered_seconds_7d?: number | null;
+  };
+  backfill?: {
+    enabled: boolean;
+    active_run: BackfillProgress | null;
+    queued: number;
+  };
+}

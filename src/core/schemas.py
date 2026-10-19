@@ -7,6 +7,10 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from typing_extensions import TypedDict
 
 
+# Provenance of an entity: which ingestion path produced it (docs/next_steps/historical_backfill/)
+IngestSource = Literal["live", "backfill", "simulator"]
+
+
 # ============================================================================
 # 0. Wearable Streaming & Multimodal Telemetry (Ingestion Layer)
 # ============================================================================
@@ -71,6 +75,13 @@ class UtteranceChunk(BaseModel):
         default_factory=list, description="Gatekeeper categories assigned to this utterance."
     )
     location: Optional[dict] = Field(default=None, description="LocationTelemetry dict at time of speech.")
+    source_key: Optional[str] = Field(
+        default=None,
+        description="Stable idempotency key of the source utterance (live:<conv>:<id> or bee:<conv>:<tx>:<utt>)."
+    )
+    bee_conversation_id: Optional[int] = Field(
+        default=None, description="Numeric Bee REST conversation id, when known (history backfill)."
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -385,6 +396,9 @@ class VerifiedAction(BaseModel):
         default=None,
         description="LocationTelemetry dict at time of action confirmation."
     )
+    ingest_source: IngestSource = Field(default="live", description="Ingestion path that produced the action.")
+    ingest_run_id: Optional[str] = Field(default=None, description="Backfill run that produced the action.")
+    source_key: Optional[str] = Field(default=None, description="Idempotency key of the source utterance.")
 
 
 class PlannedTask(BaseModel):
@@ -442,6 +456,13 @@ class PlannedTask(BaseModel):
     location: Optional[dict] = Field(
         default=None,
         description="LocationTelemetry dict at time of task scheduling."
+    )
+    ingest_source: IngestSource = Field(default="live", description="Ingestion path that produced the task.")
+    ingest_run_id: Optional[str] = Field(default=None, description="Backfill run that produced the task.")
+    source_key: Optional[str] = Field(default=None, description="Idempotency key of the source utterance.")
+    recovered: bool = Field(
+        default=False,
+        description="True when a history backfill created the task after its scheduled time had already passed."
     )
 
 
@@ -673,6 +694,8 @@ class SessionDossier(BaseModel):
     transitions: List[EventTransitionLog] = Field(
         default_factory=list, description="Lifecycle audit trail."
     )
+    ingest_source: IngestSource = Field(default="live", description="Ingestion path that owns this event.")
+    ingest_run_id: Optional[str] = Field(default=None, description="Backfill run that owns this event.")
 
     @property
     def open_segment(self) -> Optional[SessionSegment]:
@@ -705,3 +728,82 @@ class ExamenState(TypedDict, total=False):
     speaker: Optional[str]
     speaker_role: Optional[str]
     utterance_id: Optional[str]
+    # Historical Transcript Backfill
+    source_key: Optional[str]
+    ingest_source: str
+    ingest_run_id: Optional[str]
+
+
+# ============================================================================
+# 7. Historical Transcript Backfill (docs/next_steps/historical_backfill/)
+# ============================================================================
+class CoverageInterval(BaseModel):
+    """Time span during which an ingestion path reliably screened what Bee transcribed."""
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()), description="Interval identifier.")
+    source: Literal["live", "backfill"] = Field(description="Ingestion path that covered the span.")
+    start: str = Field(description="ISO start of the span.")
+    end: str = Field(description="ISO end of the span (advanced while open).")
+    is_open: bool = Field(default=False, description="True while the live stream is still connected.")
+    degraded: bool = Field(default=False, description="True when the error rate inside the span was high.")
+    run_id: Optional[str] = Field(default=None, description="Backfill run that produced the span.")
+    utterances: int = Field(default=0, description="Utterances processed inside the span.")
+    errors: int = Field(default=0, description="Utterances whose analysis failed inside the span.")
+
+
+class CoverageGap(BaseModel):
+    start: str = Field(description="ISO start of the uncovered span.")
+    end: str = Field(description="ISO end of the uncovered span.")
+    seconds: float = Field(description="Duration in seconds.")
+
+
+class BackfillEstimate(BaseModel):
+    gatekeeper_calls: int = 0
+    expected_qualified: int = 0
+    events_expected: int = 0
+    cost_usd: float = 0.0
+    duration_s: float = 0.0
+
+
+class BackfillPlan(BaseModel):
+    """Cost-free preview of a backfill run (REST calls to Bee only, no LLM)."""
+    window_from: str
+    window_to: str
+    mode: Literal["gaps_only"] = "gaps_only"
+    retry_failed_live: bool = True
+    coverage: Dict[str, float] = Field(default_factory=dict)
+    gaps: List[CoverageGap] = Field(default_factory=list)
+    conversations: Dict[str, int] = Field(default_factory=dict)
+    utterances: Dict[str, int] = Field(default_factory=dict)
+    estimate: BackfillEstimate = Field(default_factory=BackfillEstimate)
+    warnings: List[str] = Field(default_factory=list)
+    deferred_conversation_ids: List[int] = Field(default_factory=list)
+
+
+BackfillRunStatus = Literal[
+    "planned", "fetching", "replaying", "synthesizing", "completed", "partial", "failed", "cancelled"
+]
+
+
+class BackfillRun(BaseModel):
+    """One persisted, resumable execution that fills the gaps of a time window."""
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()), description="Run identifier.")
+    trigger: Literal["startup", "reconnect", "manual", "deferred_recheck"] = "manual"
+    window_from: str
+    window_to: str
+    status: BackfillRunStatus = "planned"
+    retry_failed_live: bool = True
+    plan: Optional[BackfillPlan] = None
+    counters: Dict[str, int] = Field(default_factory=dict)
+    last_source_key: Optional[str] = Field(default=None, description="Checkpoint: last committed utterance.")
+    last_ts: Optional[str] = Field(default=None, description="Checkpoint: spoken time of the last committed utterance.")
+    not_before: Optional[str] = Field(default=None, description="Earliest start (startup / reconnect delays).")
+    confirm_over_budget: bool = Field(default=False, description="Manual confirmation of an over-budget estimate.")
+    error: Optional[str] = None
+    requested_by: Optional[str] = None
+    created_at: str = Field(default_factory=lambda: datetime.now().isoformat())
+    started_at: Optional[str] = None
+    finished_at: Optional[str] = None
+
+    @property
+    def is_terminal(self) -> bool:
+        return self.status in ("completed", "partial", "failed", "cancelled")

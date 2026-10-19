@@ -9,6 +9,7 @@ import {
 } from "@/types/schemas";
 import { getApiBaseUrl } from "@/utils/api";
 import { speakAlexaReassurance } from "@/utils/audioEffects";
+import { RecoveredBadge } from "./RecoveredBadge";
 
 const fetcher = (url: string) => fetch(`${getApiBaseUrl()}${url}`).then((res) => res.json());
 
@@ -189,6 +190,7 @@ export function EventCard({
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2 mb-2">
             <EventStatusChip event={event} tHardSeconds={tHardSeconds} />
+            <RecoveredBadge entity={event} />
             <span className="px-2 py-1 rounded bg-[#1c1f26] border border-white/5 font-mono text-[9px] text-secondary tracking-widest uppercase">
               {event.domain === "general" ? "EVENT" : event.domain.replace(/_/g, " ")}
             </span>

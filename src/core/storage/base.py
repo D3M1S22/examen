@@ -196,11 +196,13 @@ class AbstractContextStore(ABC):
         raise NotImplementedError
 
     # --- Deep Topic Event Engine ---
-    def get_open_event(self) -> Optional[Any]:
+    def get_open_event(self, ingest_source: str = "live", run_id: Optional[str] = None) -> Optional[Any]:
         """Return the most recent engine-managed event that is active or paused."""
         raise NotImplementedError
 
-    def list_events_pending_final(self, limit: int = 20) -> List[Any]:
+    def list_events_pending_final(
+        self, limit: int = 20, ingest_source: Optional[str] = None, run_id: Optional[str] = None
+    ) -> List[Any]:
         """Return concluded events whose final briefing is still pending."""
         raise NotImplementedError
 
@@ -272,6 +274,56 @@ class AbstractContextStore(ABC):
             "min_ms": 0.0,
             "max_ms": 0.0,
         }
+
+    # -- Historical Transcript Backfill (optional for cloud backends) ---------------
+    def get_verified_action(self, action_id: str) -> Optional[Any]:
+        raise NotImplementedError
+
+    def save_coverage_interval(self, interval: Any) -> str:
+        raise NotImplementedError
+
+    def list_coverage(
+        self, start: Optional[str] = None, end: Optional[str] = None, source: Optional[str] = None
+    ) -> List[Any]:
+        raise NotImplementedError
+
+    def close_open_coverage_intervals(self, source: str = "live") -> int:
+        raise NotImplementedError
+
+    def last_coverage_end(self, source: Optional[str] = None) -> Optional[str]:
+        raise NotImplementedError
+
+    def record_ingested_utterance(self, entry: Dict[str, Any]) -> None:
+        raise NotImplementedError
+
+    def get_ledger_entry(self, source_key: str) -> Optional[Dict[str, Any]]:
+        raise NotImplementedError
+
+    def list_ledger_entries(
+        self, t_from: str, t_to: str, source: Optional[str] = None, status: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        raise NotImplementedError
+
+    def purge_ingest_ledger(self, before: str) -> int:
+        raise NotImplementedError
+
+    def map_bee_conversation(self, conv_uuid: str, conv_id: Optional[int]) -> None:
+        raise NotImplementedError
+
+    def get_bee_conversation_uuid(self, conv_id: int) -> Optional[str]:
+        raise NotImplementedError
+
+    def save_backfill_run(self, run: Any) -> str:
+        raise NotImplementedError
+
+    def get_backfill_run(self, run_id: str) -> Optional[Any]:
+        raise NotImplementedError
+
+    def list_backfill_runs(self, statuses: Optional[List[str]] = None, limit: int = 20) -> List[Any]:
+        raise NotImplementedError
+
+    def purge_ingestion_history(self) -> None:
+        raise NotImplementedError
 
     @abstractmethod
     def close(self) -> None:

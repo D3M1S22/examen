@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { PlannedTask } from "@/types/schemas";
 import { StatusBadge, DomainBadge } from "../ui/StatusBadge";
+import { RecoveredBadge } from "../ui/RecoveredBadge";
 import { CreateTaskModal } from "../ui/CreateTaskModal";
 import { playAcousticVerificationTone } from "@/utils/audioEffects";
 
@@ -369,8 +370,9 @@ export function DailyRoutines({
                     >
                       {task.title}
                     </h3>
-                    <div className="font-mono text-[9px] text-secondary tracking-widest uppercase mt-1">
-                      Recurrence: {task.recurrence || "daily"} • Created {task.created_at ? task.created_at.split("T")[0] : "today"}
+                    <div className="font-mono text-[9px] text-secondary tracking-widest uppercase mt-1 flex items-center gap-2 flex-wrap">
+                      <span>Recurrence: {task.recurrence || "daily"} • Created {task.created_at ? task.created_at.split("T")[0] : "today"}</span>
+                      <RecoveredBadge entity={task} />
                     </div>
                   </div>
 

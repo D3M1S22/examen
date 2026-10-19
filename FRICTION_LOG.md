@@ -74,3 +74,13 @@ Whenever a friction point or roadblock is encountered during development, docume
 * **Friction Encountered:** Typical "semantic similarity" thresholds (0.75–0.8) are far off for Titan V2 on spoken Italian: single sentences of the same subject score ~0.5, unrelated subjects ~0.2; ~120-word windows score 0.43–0.68 (same event) vs. 0.23–0.36 (different event). The usable gap is only ~0.07, and there is no published guidance on score distributions per language or dimension setting.
 * **Workaround / Resolution:** Built a replay & calibration tool (`scripts/replay_event_scenarios.py --calibrate`) over labelled scenarios; chose `TOPIC_SIM_SAME=0.42` / `TOPIC_SIM_DIFFERENT=0.37`, plus hysteresis (multi-window decisions, LLM tie-breaker, profile maturity) so the narrow gap does not cause flapping.
 * **Platform Feedback:** Publish reference similarity distributions for Titan Text Embeddings V2 (per language and per `dimensions` setting) or a small calibration notebook in the Bedrock documentation.
+
+### [2026-10-19] - Bee CLI / At-most-once stream & history de-duplication
+* **Context:** Recovering Bee conversations spoken while EXAMEN was offline (Historical Transcript Backfill, `docs/next_steps/historical_backfill/`).
+* **Friction Encountered:**
+  1. `bee stream` is real-time with **at-most-once** delivery: nothing is replayed after a disconnect, and there is no `Last-Event-ID`.
+  2. Live `new-utterance` payloads carry neither an utterance id nor a time, while the REST history identifies conversations by a numeric `id` (the stream uses `conversation_uuid`) and exposes two transcriptions (`realtime` and final). There is no shared key between what live analysed and what history returns.
+  3. A first token-similarity de-duplication let one live sentence "explain" two neighbouring REST sentences in repetitive speech (e.g. lecture enumerations).
+  4. `BeeClient.get_location` called `bee location current`, but the CLI command is `bee locations current`.
+* **Workaround / Resolution:** EXAMEN now keeps a per-utterance ingest ledger (noop included) and live coverage intervals. Live rows are matched **one-to-one** against the REST *realtime* transcription (exact hash first, fuzzy second), turned into "seen" time spans, and only final-transcription utterances outside those spans are replayed, on an isolated virtual-clock Event Engine. The CLI command was fixed.
+* **Platform Feedback:** Emit the REST utterance `id`, `spoken_at` and numeric `conversation_id` in `new-utterance`, support `Last-Event-ID` resume on `/v1/stream`, expose a `from`/`to` filter on `bee conversations list`, and document the conversation `state` values and when the final transcription replaces the realtime one.

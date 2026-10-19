@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { VerifiedAction } from "@/types/schemas";
 import { ScreenHeader } from "../ui/ScreenHeader";
 import { StatusBadge, DomainBadge } from "../ui/StatusBadge";
+import { RecoveredBadge } from "../ui/RecoveredBadge";
 import { CreateActionModal } from "../ui/CreateActionModal";
 import { playAcousticVerificationTone, speakAlexaReassurance } from "@/utils/audioEffects";
 
@@ -295,6 +296,7 @@ export function PeaceOfMind({ actionsData, statusData, onAddAction }: PeaceOfMin
                     <div>
                       <div className="flex items-center gap-2 mb-1">
                         <DomainBadge domain={action.domain} />
+                        <RecoveredBadge entity={action} />
                         <span className="font-mono text-[8px] text-secondary tracking-widest uppercase">
                           HASH: {action.id ? action.id.substring(0, 8) : "ACT_0" + idx}
                         </span>

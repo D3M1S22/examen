@@ -1,7 +1,22 @@
 import React from "react";
-import { PlannedTask, VerifiedAction, SocialEntity, BriefingReport, EventEngineStatus } from "@/types/schemas";
+import {
+  PlannedTask,
+  VerifiedAction,
+  SocialEntity,
+  BriefingReport,
+  EventEngineStatus,
+  BackfillProgress,
+  CoverageResponse,
+  HistoryTelemetry,
+} from "@/types/schemas";
+import useSWR from "swr";
 import { StatusBadge, DomainBadge } from "../ui/StatusBadge";
+import { RecoveredBadge } from "../ui/RecoveredBadge";
 import { speakAlexaReassurance } from "@/utils/audioEffects";
+import { getApiBaseUrl } from "@/utils/api";
+import { BUCKET_CLASS, bucketTone, formatDuration, formatRange, historyBadge } from "@/utils/backfill";
+
+const coverageFetcher = (url: string) => fetch(`${getApiBaseUrl()}${url}`).then((res) => res.json());
 
 interface OverviewHubProps {
   statusData?: any;
@@ -14,6 +29,8 @@ interface OverviewHubProps {
   setSimText: (text: string) => void;
   handleToggleRoutine: (task: PlannedTask) => void;
   onOpenEchoModal?: (tab?: string) => void;
+  backfillProgress?: BackfillProgress | null;
+  onOpenBackfill?: () => void;
 }
 
 export function OverviewHub({
@@ -27,8 +44,18 @@ export function OverviewHub({
   setSimText,
   handleToggleRoutine,
   onOpenEchoModal,
+  backfillProgress,
+  onOpenBackfill,
 }: OverviewHubProps) {
   const liveEvent = engineStatus?.active_event || null;
+  const history: HistoryTelemetry | undefined = statusData?.telemetry;
+  const historyState = historyBadge(history, backfillProgress);
+  // 7-day coverage strip (one bucket per day), refreshed with the status poll
+  const { data: weekCoverage } = useSWR<CoverageResponse>(
+    history?.backfill?.enabled ? "/api/backfill/coverage?bucket=day" : null,
+    coverageFetcher,
+    { refreshInterval: 60000 }
+  );
   const tasks = routinesData?.tasks || [];
   const actions = actionsData?.actions || [];
   const contacts = socialData?.contacts || [];
@@ -136,6 +163,53 @@ export function OverviewHub({
         </div>
       )}
 
+      {/* History Sync: coverage gaps & Bee history backfill */}
+      {history?.backfill?.enabled && (
+        <div className="card-elevated px-space-xl py-4 rounded-2xl border bg-surface-container-low border-surface-container-highest flex flex-col lg:flex-row lg:items-center gap-4">
+          <div className="flex items-center gap-4 min-w-0 lg:w-[34%]">
+            <span
+              className={`w-3 h-3 rounded-full shrink-0 ${
+                historyState.tone === "running"
+                  ? "bg-sky-400 animate-pulse"
+                  : historyState.tone === "gap"
+                  ? "bg-amber-400"
+                  : "bg-emerald-400"
+              }`}
+            />
+            <div className="min-w-0">
+              <div className="font-mono text-[9px] tracking-[0.2em] uppercase font-bold text-sky-300">
+                HISTORY SYNC // {historyState.label}
+              </div>
+              <div className="font-sans text-body-sm text-secondary truncate">
+                {historyState.tone === "running" && backfillProgress
+                  ? `Recovering ${formatRange(backfillProgress.window_from, backfillProgress.window_to)}`
+                  : history.coverage?.last_gap
+                  ? `Last gap ${formatRange(history.coverage.last_gap.start, history.coverage.last_gap.end)}`
+                  : "Every Bee conversation of the last 7 days has been analysed"}
+              </div>
+            </div>
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex h-3 rounded overflow-hidden gap-px bg-black/40 border border-white/5">
+              {(weekCoverage?.buckets || []).map((b) => (
+                <div
+                  key={b.start}
+                  className={`flex-1 ${BUCKET_CLASS[bucketTone(b)]}`}
+                  title={`${formatRange(b.start, b.end)} — gap ${formatDuration(b.gap_seconds)}`}
+                />
+              ))}
+            </div>
+            <div className="mt-1 font-mono text-[8px] text-secondary tracking-widest uppercase">LAST 7 DAYS · COVERAGE</div>
+          </div>
+          <button
+            onClick={onOpenBackfill}
+            className="px-4 py-2.5 rounded-xl border border-sky-500/40 bg-sky-950/30 hover:bg-sky-950/60 text-sky-300 font-mono text-[10px] font-bold tracking-widest uppercase transition-all shrink-0"
+          >
+            ⏪ ANALYSE PAST PERIOD…
+          </button>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-space-lg">
         {/* SECTOR 01: Peace of Mind */}
         <div className="lg:col-span-8 card-elevated p-space-xl bg-surface-container-low border-surface-container-highest rounded-2xl flex flex-col justify-between">
@@ -159,9 +233,12 @@ export function OverviewHub({
                   className="bg-[#121419] border border-surface-container-highest hover:border-emerald-500/40 rounded-xl p-space-lg flex flex-col justify-between transition-colors"
                 >
                   <div>
-                    <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center justify-between mb-2 gap-2">
                       <DomainBadge domain={action.domain} />
-                      <StatusBadge status="verified" size="sm" />
+                      <div className="flex items-center gap-1.5">
+                        <RecoveredBadge entity={action} />
+                        <StatusBadge status="verified" size="sm" />
+                      </div>
                     </div>
                     <div className="font-serif text-[20px] text-primary mb-2 capitalize">
                       {action.action_type.replace(/_/g, " ")}

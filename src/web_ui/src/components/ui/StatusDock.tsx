@@ -1,17 +1,23 @@
 "use client";
 
 import React, { useState, useRef } from "react";
+import { BackfillProgress, HistoryTelemetry } from "@/types/schemas";
+import { formatDuration, formatRange, historyBadge } from "@/utils/backfill";
 
 interface StatusDockProps {
   sseConnected?: boolean;
   statusData?: any;
   onOpenEchoModal?: () => void;
+  backfillProgress?: BackfillProgress | null;
+  onOpenBackfill?: () => void;
 }
 
 export function StatusDock({
   sseConnected = true,
   statusData,
   onOpenEchoModal,
+  backfillProgress,
+  onOpenBackfill,
 }: StatusDockProps) {
   const [isAreaHovered, setIsAreaHovered] = useState(false);
   const [isDockOpen, setIsDockOpen] = useState(false);
@@ -72,6 +78,18 @@ export function StatusDock({
   const reasonerModel = statusData?.config?.reasoner_model || "nvidia.nemotron-super-3-120b";
   const reasonerShort = reasonerModel.split(":").shift()?.split(".").pop()?.toUpperCase() || "ACTIVE";
   const gatekeeperModel = statusData?.config?.gatekeeper_model || "Dual-provider";
+
+  const history: HistoryTelemetry | undefined = statusData?.telemetry;
+  const historyState = historyBadge(history, backfillProgress);
+  const historyDotClass =
+    historyState.tone === "running"
+      ? "bg-sky-400 animate-pulse shadow-[0_0_6px_rgba(56,189,248,0.9)]"
+      : historyState.tone === "gap"
+      ? "bg-amber-400"
+      : historyState.tone === "ok"
+      ? "bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.8)]"
+      : "bg-zinc-600";
+  const historyActive = backfillProgress && historyState.tone === "running" ? backfillProgress : history?.backfill?.active_run;
 
   const sensorMesh = statusData?.telemetry?.sensor_mesh || "Bee Wearable Audio Mesh";
   const latencyMetrics = statusData?.telemetry?.latency;
@@ -436,6 +454,62 @@ export function StatusDock({
               </p>
             </div>
           </div>
+
+          {/* Dock Item 4b: History Sync (Bee history backfill) */}
+          {history?.backfill?.enabled && (
+            <div className="group relative flex items-center justify-center">
+              <button
+                onClick={onOpenBackfill}
+                aria-label={`History Sync: ${historyState.label}`}
+                className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-white/[0.04] hover:bg-white/[0.12] border border-white/5 hover:border-white/20 transition-all duration-200 transform hover:scale-110 sm:hover:scale-125 flex items-center justify-center cursor-pointer shadow-sm relative"
+              >
+                <span className="text-sm sm:text-base select-none">⏪</span>
+                <span className={`absolute top-1 right-1 w-2 h-2 rounded-full ${historyDotClass}`} />
+              </button>
+
+              <div className="pointer-events-none group-hover:pointer-events-auto opacity-0 -translate-x-3 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-200 ease-out absolute left-full ml-3.5 top-1/2 -translate-y-1/2 z-50 w-72 p-4 rounded-xl bg-[#0e1117]/95 backdrop-blur-2xl border border-white/15 shadow-[0_20px_45px_rgba(0,0,0,0.9)] text-left before:absolute before:-left-4 before:top-0 before:w-4 before:h-full">
+                <div className="absolute -left-1.5 top-1/2 -translate-y-1/2 w-3 h-3 bg-[#0e1117] border-l border-b border-white/15 rotate-45" />
+
+                <div className="flex items-center justify-between mb-2">
+                  <span className="font-mono text-[9px] text-zinc-400 uppercase tracking-widest font-semibold">
+                    HISTORY SYNC
+                  </span>
+                  <span className="font-mono text-[9px] px-2 py-0.5 rounded-full bg-sky-950/70 text-sky-300 border border-sky-500/40 uppercase font-bold tracking-wider">
+                    {historyState.label}
+                  </span>
+                </div>
+
+                <div className="space-y-1 text-[11px] font-mono text-zinc-300 border-t border-white/5 pt-2">
+                  <div className="flex justify-between">
+                    <span className="text-zinc-500">UNCOVERED (7D):</span>
+                    <span className="text-amber-300">{formatDuration(history.coverage?.uncovered_seconds_7d || 0)}</span>
+                  </div>
+                  {history.coverage?.last_gap && (
+                    <div className="flex justify-between gap-2">
+                      <span className="text-zinc-500">LAST GAP:</span>
+                      <span className="truncate">{formatRange(history.coverage.last_gap.start, history.coverage.last_gap.end)}</span>
+                    </div>
+                  )}
+                  {historyActive && (
+                    <div className="flex justify-between">
+                      <span className="text-zinc-500">RECOVERING:</span>
+                      <span className="text-sky-300">
+                        {historyActive.processed}/{historyActive.selected}
+                      </span>
+                    </div>
+                  )}
+                  <div className="flex justify-between">
+                    <span className="text-zinc-500">QUEUED RUNS:</span>
+                    <span>{history.backfill.queued}</span>
+                  </div>
+                </div>
+
+                <p className="mt-2 text-[10px] text-zinc-400 font-sans leading-relaxed">
+                  Recovers Bee conversations recorded while EXAMEN was offline. Click to analyse a past period.
+                </p>
+              </div>
+            </div>
+          )}
 
           {/* Divider Bar */}
           <div className="w-6 h-px bg-white/10 my-0.5" />

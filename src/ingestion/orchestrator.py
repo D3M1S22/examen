@@ -3,7 +3,7 @@ import time
 import argparse
 import signal
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import sys
 from pathlib import Path
@@ -12,6 +12,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from src.ingestion.stream_convo import BeeClient
+from src.ingestion.coverage import (
+    CoverageTracker,
+    ledger_entry_for_chunk,
+    live_source_key,
+    stable_chunk_id,
+)
 from src.ingestion.debug import Debug
 from src.ingestion.event_engine import (
     EventEngine,
@@ -23,7 +29,7 @@ from src.ingestion.gatekeeper import aclassify_chunk, is_noop
 from src.ingestion.ring_buffer import ContextRingBuffer
 from src.core.config import settings
 from src.core.storage import get_storage_store
-from src.core.schemas import LocationTelemetry, UtteranceChunk
+from src.core.schemas import CoverageGap, CoverageInterval, LocationTelemetry, UtteranceChunk
 
 
 class BeeStreamOrchestrator(Debug):
@@ -58,6 +64,19 @@ class BeeStreamOrchestrator(Debug):
         else:
             self.engine = get_event_engine()
 
+        # Historical Transcript Backfill: live coverage intervals + per-utterance ingest ledger
+        # (docs/next_steps/historical_backfill/02). Callbacks are wired by the serving layer.
+        self.on_coverage_gap: Optional[Callable[[CoverageGap], None]] = None
+        self.on_coverage_open: Optional[Callable[[CoverageInterval, Optional[CoverageGap]], None]] = None
+        self.coverage = CoverageTracker(
+            store_getter=lambda: self.store or get_storage_store(),
+            on_gap=lambda gap: self.on_coverage_gap(gap) if self.on_coverage_gap else None,
+            on_open=lambda iv, gap: self.on_coverage_open(iv, gap) if self.on_coverage_open else None,
+        )
+
+        # Live pipeline dispatches in flight: history backfill yields to live while > 0
+        self.inflight_dispatches = 0
+
         # Real-time state & telemetry tracking
         self.is_running = False
         self.last_heartbeat_time: Optional[float] = None
@@ -86,6 +105,10 @@ class BeeStreamOrchestrator(Debug):
             "last_input_time": self.last_input_time,
             "has_location": self.latest_telemetry is not None,
             "event_engine": self.engine.status_summary() if self.engine_enabled else None,
+            "coverage": {
+                "live_since": self.coverage.current.start if self.coverage.current else None,
+                "connected": self.coverage.current is not None,
+            },
             "detail": f"Orchestrator {status_label.lower()}; {self.chunk_counter} chunks screened",
         }
 
@@ -135,11 +158,16 @@ class BeeStreamOrchestrator(Debug):
 
     def buffer_incoming_utterance(self, utterance_data: dict) -> Optional[UtteranceChunk]:
         """Synchronously parses, attaches current telemetry, and pushes utterance to the ring buffer."""
-        chunk_id = str(utterance_data.get("id") or utterance_data.get("chunk_id") or time.time())
         conv_uuid = utterance_data.get("conversation_uuid") or utterance_data.get("session_id") or "default_session"
         text = (utterance_data.get("text") or "").strip()
         if not text:
             return None
+        # Stable fallback id (not time.time()) so a re-delivered utterance keeps its identity
+        chunk_id = str(
+            utterance_data.get("id")
+            or utterance_data.get("chunk_id")
+            or stable_chunk_id(conv_uuid, utterance_data.get("received_at"), text)
+        )
 
         speaker = utterance_data.get("speaker") or utterance_data.get("speaker_id")
         speaker_role = utterance_data.get("speaker_role")
@@ -161,6 +189,7 @@ class BeeStreamOrchestrator(Debug):
             received_at=received_at,
             spoken_at=spoken_at,
             location=self.latest_telemetry.model_dump() if self.latest_telemetry else None,
+            source_key=utterance_data.get("source_key") or live_source_key(conv_uuid, chunk_id),
         )
         self.ring_buffer.push(chunk)
         return chunk
@@ -213,6 +242,7 @@ class BeeStreamOrchestrator(Debug):
 
         if is_noop(classification):
             self.debug(f"Chunk '{chunk_id}' screened -> DROPPED (noop)")
+            self._record_ledger(chunk, "screened_noop")
             return None
 
         self.debug(f"Chunk '{chunk_id}' screened -> QUALIFIED {classification.categories}")
@@ -231,15 +261,36 @@ class BeeStreamOrchestrator(Debug):
             "session_id": event_id or chunk.conversation_uuid,
             "timestamp": chunk.timestamp,
             "event_managed": event_id is not None,
+            "source_key": chunk.source_key,
+            "ingest_source": "live",
         }
 
         try:
             from src.pipeline.app import agent_invocation
             # agent_invocation is synchronous: keep it off the event loop (SSE/REST stay responsive)
-            return await asyncio.to_thread(agent_invocation, payload)
+            self.inflight_dispatches += 1
+            try:
+                result = await asyncio.to_thread(agent_invocation, payload)
+            finally:
+                self.inflight_dispatches -= 1
         except Exception as e:
             self.debug(f"Pipeline dispatch error: {e}")
+            self._record_ledger(chunk, "failed")
             return None
+        failed = isinstance(result, dict) and result.get("status") == "error"
+        self._record_ledger(chunk, "failed" if failed else "qualified")
+        return result
+
+    def _record_ledger(self, chunk: UtteranceChunk, status: str) -> None:
+        """Ledger evidence that this utterance was analysed (or failed and must be retried)."""
+        self.coverage.record_utterance(failed=status == "failed")
+        try:
+            store = self.store or get_storage_store()
+            store.record_ingested_utterance(ledger_entry_for_chunk(chunk, status, source="live"))
+        except NotImplementedError:
+            pass
+        except Exception as e:
+            self.debug(f"Ingest ledger write error: {e}")
 
     async def handle_event(self, event: dict) -> Optional[Any]:
         """Dispatches an incoming SSE event to the appropriate handler."""
@@ -253,11 +304,22 @@ class BeeStreamOrchestrator(Debug):
             spk = data.get("speaker", "")
             return self.patch_diarization(uid, spk)
         elif evt_type in ("new-conversation", "update-conversation", "update-conversation-summary"):
+            conv = data.get("conversation") if isinstance(data.get("conversation"), dict) else {}
+            if conv.get("uuid") and conv.get("id") is not None:
+                try:
+                    (self.store or get_storage_store()).map_bee_conversation(str(conv["uuid"]), int(conv["id"]))
+                except (NotImplementedError, ValueError, TypeError):
+                    pass
+                except Exception as e:
+                    self.debug(f"Conversation map error: {e}")
             if self.engine_enabled:
                 try:
                     await asyncio.to_thread(self.engine.on_bee_conversation, evt_type, data)
                 except Exception as e:
                     self.debug(f"Event engine conversation event error: {e}")
+            return None
+        elif evt_type == "stream-disconnected":
+            self.coverage.mark_disconnected()
             return None
         elif evt_type == "new-utterance":
             self.total_utterances_received += 1
@@ -283,6 +345,7 @@ class BeeStreamOrchestrator(Debug):
 
         self.debug("Starting Bee stream ingestion...")
         bee = BeeClient(debug_mode=self.debug_mode)
+        self.coverage.recover_after_crash()
 
         try:
             async for event in bee.stream_events():
@@ -290,10 +353,13 @@ class BeeStreamOrchestrator(Debug):
                 self.debug(f"⚡ Received event: {evt_name}")
                 if evt_name == "stream-heartbeat":
                     self.last_heartbeat_time = time.time()
+                if evt_name != "stream-disconnected":
+                    self.coverage.mark_alive()
                 await self.handle_event(event)
         except asyncio.CancelledError:
             pass
         finally:
+            self.coverage.mark_disconnected()
             self.is_running = False
             self.status = "STOPPED"
             bee.stop()

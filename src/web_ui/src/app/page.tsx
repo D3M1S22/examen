@@ -11,6 +11,7 @@ import {
   EchoNotification,
   EventEngineStatus,
   EventSummary,
+  BackfillProgress,
 } from "@/types/schemas";
 import { EventAction } from "@/components/ui/EventCard";
 
@@ -25,6 +26,8 @@ import { TopicDossiers } from "@/components/views/TopicDossiers";
 import { AmbientSimulator } from "@/components/views/AmbientSimulator";
 import { EchoShowModal } from "@/components/ui/EchoShowModal";
 import { LoginModal } from "@/components/ui/LoginModal";
+import { BackfillModal } from "@/components/ui/BackfillModal";
+import { formatDuration, mergeProgress } from "@/utils/backfill";
 import { getApiBaseUrl } from "@/utils/api";
 import { getLocalUser, logoutUser, disconnectBee, purgeUserData } from "@/utils/auth";
 
@@ -47,6 +50,8 @@ export default function Dashboard() {
   const [echoNotification, setEchoNotification] = useState<EchoNotification | null>(null);
   const echoNotifTimerRef = useRef<NodeJS.Timeout | null>(null);
   const [eventMode, setEventMode] = useState(false);
+  const [showBackfillModal, setShowBackfillModal] = useState(false);
+  const [backfillProgress, setBackfillProgress] = useState<BackfillProgress | null>(null);
   const { mutate: globalMutate } = useSWRConfig();
 
   const handleOpenEchoModal = useCallback((tab: string = "overview") => {
@@ -182,6 +187,33 @@ export default function Dashboard() {
 
           // Revalidate status on any backend change
           mutateStatus();
+
+          // History backfill: one progress indicator and one completion toast per run (no per-entity toasts)
+          if (eventType.startsWith("backfill_")) {
+            if (eventPayload.run_id) {
+              setBackfillProgress((prev) => mergeProgress(prev, eventPayload as BackfillProgress));
+            }
+            if (eventType === "backfill_completed") {
+              const c = eventPayload.counters || {};
+              mutateActions();
+              mutateRoutines();
+              mutateSocial();
+              refreshEvents();
+              markTabUpdated("overview");
+              showToast(
+                eventPayload.status === "cancelled"
+                  ? "⏪ History analysis stopped"
+                  : `⏪ History recovered: ${c.actions || 0} actions · ${c.contacts || 0} contacts · ${c.tasks || 0} tasks · ${c.events || 0} events`
+              );
+            } else if (eventType === "backfill_failed") {
+              showToast(`⏪ History analysis failed: ${eventPayload.error || "unknown error"}`);
+            }
+            return;
+          }
+          if (eventType === "coverage_gap_detected") {
+            showToast(`⏪ Offline gap detected (${formatDuration(eventPayload.seconds)}): it will be recovered automatically`);
+            return;
+          }
 
           // Intelligent routing of SSE cache invalidation and UI notification triggers
           if (eventType.includes("action")) {
@@ -691,6 +723,20 @@ export default function Dashboard() {
         sseConnected={sseConnected}
         statusData={statusData}
         onOpenEchoModal={() => handleOpenEchoModal("overview")}
+        backfillProgress={backfillProgress}
+        onOpenBackfill={() => setShowBackfillModal(true)}
+      />
+
+      {/* History Sync: analyse a past period from Bee history */}
+      <BackfillModal
+        isOpen={showBackfillModal}
+        onClose={() => setShowBackfillModal(false)}
+        history={statusData?.telemetry}
+        liveProgress={backfillProgress}
+        onRunQueued={() => {
+          mutateStatus();
+          showToast("⏪ History analysis queued");
+        }}
       />
 
       <div>
@@ -728,6 +774,8 @@ export default function Dashboard() {
               setSimText={setSimText}
               handleToggleRoutine={handleToggleRoutine}
               onOpenEchoModal={handleOpenEchoModal}
+              backfillProgress={backfillProgress}
+              onOpenBackfill={() => setShowBackfillModal(true)}
             />
           )}
 

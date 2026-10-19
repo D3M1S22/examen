@@ -81,7 +81,7 @@ class BeeClient(Debug):
 
     async def get_location(self):
         """Fetches the current location from the Bee CLI."""
-        cmd = self._build_cmd(['location', 'current', '--json'])
+        cmd = self._build_cmd(['locations', 'current', '--json'])
         process = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
@@ -103,10 +103,15 @@ class BeeClient(Debug):
             return None
 
     async def stream_events(self):
-        """Spawns the stream, yields parsed SSE events (utterances, location, diarization updates)."""
+        """Spawns the stream, yields parsed SSE events (utterances, location, diarization updates).
+
+        Also yields synthetic lifecycle events used by the coverage tracker (historical backfill):
+        ``stream-alive`` for any other line read and ``stream-disconnected`` before each reconnect.
+        """
         retry_delay = 1
 
         while True:
+            disconnect_reason = "spawn_failed"
             try:
                 cmd = self._build_cmd(['stream', '--json'])
                 self.process = await asyncio.create_subprocess_exec(
@@ -119,6 +124,7 @@ class BeeClient(Debug):
                 
                 self.debug("Connected to Bee stream.")
                 retry_delay = 1
+                disconnect_reason = "unknown"
                 
                 while True:
                     try:
@@ -128,10 +134,12 @@ class BeeClient(Debug):
                         )
                     except asyncio.TimeoutError:
                         self.debug("Stream timed out (no data for 330s). Assuming dead connection.")
+                        disconnect_reason = "timeout"
                         break
 
                     if not line_bytes:
                         self.debug("Stream process ended unexpectedly. Reconnecting...")
+                        disconnect_reason = "eof"
                         break 
                     
                     received_at = datetime.now().isoformat()
@@ -189,7 +197,11 @@ class BeeClient(Debug):
                                 "event": "stream-heartbeat",
                                 "data": data
                             }
+                        else:
+                            # Unknown payload: still proof that the connection is alive
+                            yield {"event": "stream-alive", "data": {}}
                     except json.JSONDecodeError:
+                        # stderr is merged into stdout: non-JSON lines may be CLI errors, not liveness
                         continue
                         
             except asyncio.CancelledError:
@@ -197,8 +209,10 @@ class BeeClient(Debug):
                 raise
             except Exception as e:
                 self.debug(f"Connection error: {e}")
+                disconnect_reason = f"error: {e}"
                 
             self.stop() 
+            yield {"event": "stream-disconnected", "data": {"reason": disconnect_reason}}
             self.debug(f"Retrying connection in {retry_delay} seconds...")
             await asyncio.sleep(retry_delay)
             retry_delay = min(retry_delay * 2, 60)

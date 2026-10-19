@@ -8,7 +8,10 @@ import uuid
 from typing import Any, Dict, List, Optional, Union
 
 from src.core.schemas import (
+    BackfillPlan,
+    BackfillRun,
     BriefingReport,
+    CoverageInterval,
     EventTransitionLog,
     MicroEventRef,
     PlannedTask,
@@ -22,6 +25,7 @@ from src.core.schemas import (
     VerifiedAction,
 )
 from src.core.storage.base import AbstractContextStore
+from src.core.time_utils import historical_action_may_resolve
 
 logger = logging.getLogger("examen.storage.sqlite")
 
@@ -309,6 +313,75 @@ class SQLiteContextStore(AbstractContextStore):
                 )
             """)
 
+            # 3f. Historical Transcript Backfill: provenance, coverage ledger, utterance ledger, runs
+            for ddl in (
+                "ALTER TABLE verified_actions ADD COLUMN ingest_source TEXT NOT NULL DEFAULT 'live';",
+                "ALTER TABLE verified_actions ADD COLUMN ingest_run_id TEXT;",
+                "ALTER TABLE verified_actions ADD COLUMN source_key TEXT;",
+                "ALTER TABLE planned_tasks ADD COLUMN ingest_source TEXT NOT NULL DEFAULT 'live';",
+                "ALTER TABLE planned_tasks ADD COLUMN ingest_run_id TEXT;",
+                "ALTER TABLE planned_tasks ADD COLUMN source_key TEXT;",
+                "ALTER TABLE planned_tasks ADD COLUMN recovered INTEGER NOT NULL DEFAULT 0;",
+                "ALTER TABLE session_dossiers ADD COLUMN ingest_source TEXT NOT NULL DEFAULT 'live';",
+                "ALTER TABLE session_dossiers ADD COLUMN ingest_run_id TEXT;",
+            ):
+                try:
+                    cursor.execute(ddl)
+                except Exception:
+                    pass
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_sessions_ingest ON session_dossiers (ingest_source, ingest_run_id);")
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS ingest_coverage (
+                    id TEXT PRIMARY KEY,
+                    source TEXT NOT NULL,
+                    start_ts TEXT NOT NULL,
+                    end_ts TEXT NOT NULL,
+                    is_open INTEGER NOT NULL DEFAULT 0,
+                    degraded INTEGER NOT NULL DEFAULT 0,
+                    run_id TEXT,
+                    utterances INTEGER NOT NULL DEFAULT 0,
+                    errors INTEGER NOT NULL DEFAULT 0
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_coverage_time ON ingest_coverage (start_ts, end_ts);")
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS ingest_ledger (
+                    source_key TEXT PRIMARY KEY,
+                    source TEXT NOT NULL,
+                    bee_conversation_uuid TEXT,
+                    bee_conversation_id INTEGER,
+                    ts TEXT NOT NULL,
+                    received_at TEXT,
+                    text_norm TEXT,
+                    text_hash TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    categories_json TEXT,
+                    run_id TEXT
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_ledger_hash_time ON ingest_ledger (text_hash, received_at);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_ledger_ts ON ingest_ledger (ts);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_ledger_status ON ingest_ledger (status);")
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS bee_conversation_map (
+                    uuid TEXT PRIMARY KEY,
+                    id INTEGER,
+                    first_seen_at TEXT NOT NULL
+                )
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS backfill_runs (
+                    id TEXT PRIMARY KEY,
+                    trigger TEXT NOT NULL,
+                    window_from TEXT NOT NULL,
+                    window_to TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_backfill_runs_status ON backfill_runs (status, created_at DESC);")
+
             # 4. System Telemetry Table (Real Execution Latencies & Averages)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS system_telemetry (
@@ -360,8 +433,9 @@ class SQLiteContextStore(AbstractContextStore):
             cursor.execute("""
                 INSERT OR REPLACE INTO planned_tasks
                 (id, title, domain, scheduled_time, recurrence, status, completed_at, verified_action_id, created_at,
-                 origin, raw_statement, confidence, relative_time_anchor, session_id, location_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 origin, raw_statement, confidence, relative_time_anchor, session_id, location_json,
+                 ingest_source, ingest_run_id, source_key, recovered)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 rec_id,
                 task.title.strip(),
@@ -378,40 +452,60 @@ class SQLiteContextStore(AbstractContextStore):
                 task.relative_time_anchor,
                 task.session_id,
                 loc_str,
+                task.ingest_source,
+                task.ingest_run_id,
+                task.source_key,
+                1 if task.recovered else 0,
             ))
             conn.commit()
         return rec_id
+
+    @staticmethod
+    def _row_to_planned_task(r: sqlite3.Row) -> PlannedTask:
+        keys = r.keys()
+        loc = json.loads(r["location_json"]) if ("location_json" in keys and r["location_json"]) else None
+        return PlannedTask(
+            id=r["id"],
+            title=r["title"],
+            domain=r["domain"],
+            scheduled_time=r["scheduled_time"],
+            recurrence=r["recurrence"],
+            status=r["status"],
+            completed_at=r["completed_at"],
+            verified_action_id=r["verified_action_id"],
+            created_at=r["created_at"],
+            origin=r["origin"] if ("origin" in keys and r["origin"]) else "manual",
+            raw_statement=r["raw_statement"] if "raw_statement" in keys else None,
+            confidence=r["confidence"] if ("confidence" in keys and r["confidence"] is not None) else 1.0,
+            relative_time_anchor=r["relative_time_anchor"] if "relative_time_anchor" in keys else None,
+            session_id=r["session_id"] if "session_id" in keys else None,
+            location=loc,
+            ingest_source=(r["ingest_source"] if "ingest_source" in keys and r["ingest_source"] else "live"),
+            ingest_run_id=r["ingest_run_id"] if "ingest_run_id" in keys else None,
+            source_key=r["source_key"] if "source_key" in keys else None,
+            recovered=bool(r["recovered"]) if "recovered" in keys and r["recovered"] else False,
+        )
 
     def get_planned_task(self, task_id: str) -> Optional[PlannedTask]:
         with self._get_connection() as conn:
             cursor = conn.cursor()
             row = cursor.execute("SELECT * FROM planned_tasks WHERE id = ?", (task_id,)).fetchone()
             if row:
-                loc = json.loads(row["location_json"]) if ("location_json" in row.keys() and row["location_json"]) else None
-                return PlannedTask(
-                    id=row["id"],
-                    title=row["title"],
-                    domain=row["domain"],
-                    scheduled_time=row["scheduled_time"],
-                    recurrence=row["recurrence"],
-                    status=row["status"],
-                    completed_at=row["completed_at"],
-                    verified_action_id=row["verified_action_id"],
-                    created_at=row["created_at"],
-                    origin=row["origin"] if ("origin" in row.keys() and row["origin"]) else "manual",
-                    raw_statement=row["raw_statement"] if "raw_statement" in row.keys() else None,
-                    confidence=row["confidence"] if ("confidence" in row.keys() and row["confidence"] is not None) else 1.0,
-                    relative_time_anchor=row["relative_time_anchor"] if "relative_time_anchor" in row.keys() else None,
-                    session_id=row["session_id"] if "session_id" in row.keys() else None,
-                    location=loc,
-                )
+                return self._row_to_planned_task(row)
         return None
 
     def list_planned_tasks(
-        self, status: Optional[str] = None, domain: Optional[str] = None, origin: Optional[str] = None
+        self,
+        status: Optional[str] = None,
+        domain: Optional[str] = None,
+        origin: Optional[str] = None,
+        ingest_source: Optional[str] = None,
     ) -> List[PlannedTask]:
         sql = "SELECT * FROM planned_tasks WHERE 1=1"
         params = []
+        if ingest_source:
+            sql += " AND ingest_source = ?"
+            params.append(ingest_source)
         if status:
             sql += " AND status = ?"
             params.append(status)
@@ -428,24 +522,7 @@ class SQLiteContextStore(AbstractContextStore):
             cursor = conn.cursor()
             rows = cursor.execute(sql, params).fetchall()
             for r in rows:
-                loc = json.loads(r["location_json"]) if ("location_json" in r.keys() and r["location_json"]) else None
-                results.append(PlannedTask(
-                    id=r["id"],
-                    title=r["title"],
-                    domain=r["domain"],
-                    scheduled_time=r["scheduled_time"],
-                    recurrence=r["recurrence"],
-                    status=r["status"],
-                    completed_at=r["completed_at"],
-                    verified_action_id=r["verified_action_id"],
-                    created_at=r["created_at"],
-                    origin=r["origin"] if ("origin" in r.keys() and r["origin"]) else "manual",
-                    raw_statement=r["raw_statement"] if "raw_statement" in r.keys() else None,
-                    confidence=r["confidence"] if ("confidence" in r.keys() and r["confidence"] is not None) else 1.0,
-                    relative_time_anchor=r["relative_time_anchor"] if "relative_time_anchor" in r.keys() else None,
-                    session_id=r["session_id"] if "session_id" in r.keys() else None,
-                    location=loc,
-                ))
+                results.append(self._row_to_planned_task(r))
         return results
 
     def complete_planned_task(
@@ -503,6 +580,12 @@ class SQLiteContextStore(AbstractContextStore):
 
     def match_and_resolve_task(self, action: VerifiedAction) -> Optional[PlannedTask]:
         pending_tasks = self.list_planned_tasks(status="pending")
+        historical = action.ingest_source == "backfill"
+        if historical:
+            pending_tasks = [
+                t for t in pending_tasks
+                if historical_action_may_resolve(action.timestamp, t.created_at, t.recurrence)
+            ]
         if not pending_tasks:
             return None
 
@@ -536,6 +619,10 @@ class SQLiteContextStore(AbstractContextStore):
 
         # Also check open user commitments directly
         open_commitments = self.list_social_commitments(debtor="user", status="open")
+        if historical:
+            open_commitments = [
+                c for c in open_commitments if historical_action_may_resolve(action.timestamp, c.created_at)
+            ]
         for com in open_commitments:
             stop_words = {"the", "and", "for", "with", "this", "that", "from", "into", "over", "take", "make", "turn", "out"}
             com_words = [w for w in re.findall(r"\b[a-zA-Z]{3,}\b", com.description.lower()) if w not in stop_words]
@@ -569,9 +656,10 @@ class SQLiteContextStore(AbstractContextStore):
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                INSERT OR REPLACE INTO verified_actions 
-                (id, action_type, domain, raw_statement, confidence, timestamp, is_revoked, matched_task_id, location_json, session_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT OR REPLACE INTO verified_actions
+                (id, action_type, domain, raw_statement, confidence, timestamp, is_revoked, matched_task_id, location_json,
+                 session_id, ingest_source, ingest_run_id, source_key)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 rec_id,
                 action.action_type.lower(),
@@ -583,6 +671,9 @@ class SQLiteContextStore(AbstractContextStore):
                 action.matched_task_id,
                 loc_str,
                 action.session_id,
+                action.ingest_source,
+                action.ingest_run_id,
+                action.source_key,
             ))
             if self._has_fts:
                 cursor.execute("""
@@ -592,6 +683,31 @@ class SQLiteContextStore(AbstractContextStore):
             conn.commit()
         return rec_id
 
+
+    @staticmethod
+    def _row_to_action(row: sqlite3.Row) -> VerifiedAction:
+        keys = row.keys()
+        loc = json.loads(row["location_json"]) if ("location_json" in keys and row["location_json"]) else None
+        return VerifiedAction(
+            id=row["id"],
+            action_type=row["action_type"],
+            domain=row["domain"],
+            raw_statement=row["raw_statement"],
+            confidence=row["confidence"],
+            timestamp=row["timestamp"],
+            is_revoked=bool(row["is_revoked"]),
+            matched_task_id=row["matched_task_id"] if "matched_task_id" in keys else None,
+            session_id=row["session_id"] if "session_id" in keys else None,
+            location=loc,
+            ingest_source=(row["ingest_source"] if "ingest_source" in keys and row["ingest_source"] else "live"),
+            ingest_run_id=row["ingest_run_id"] if "ingest_run_id" in keys else None,
+            source_key=row["source_key"] if "source_key" in keys else None,
+        )
+
+    def get_verified_action(self, action_id: str) -> Optional[VerifiedAction]:
+        with self._get_connection() as conn:
+            row = conn.cursor().execute("SELECT * FROM verified_actions WHERE id = ?", (action_id,)).fetchone()
+            return self._row_to_action(row) if row else None
 
     def get_action_status(
         self, action_query: str, target_date: Optional[str] = None
@@ -614,29 +730,20 @@ class SQLiteContextStore(AbstractContextStore):
             cursor = conn.cursor()
             row = cursor.execute(sql, params).fetchone()
             if row:
-                loc = json.loads(row["location_json"]) if ("location_json" in row.keys() and row["location_json"]) else None
-                return VerifiedAction(
-                    id=row["id"],
-                    action_type=row["action_type"],
-                    domain=row["domain"],
-                    raw_statement=row["raw_statement"],
-                    confidence=row["confidence"],
-                    timestamp=row["timestamp"],
-                    is_revoked=bool(row["is_revoked"]),
-                    matched_task_id=row["matched_task_id"] if "matched_task_id" in row.keys() else None,
-                    session_id=row["session_id"] if "session_id" in row.keys() else None,
-                    location=loc,
-                )
+                return self._row_to_action(row)
         return None
 
     def list_recent_actions(
-        self, limit: int = 10, domain: Optional[str] = None
+        self, limit: int = 10, domain: Optional[str] = None, ingest_source: Optional[str] = None
     ) -> List[VerifiedAction]:
         sql = "SELECT * FROM verified_actions WHERE is_revoked = 0"
         params = []
         if domain and domain != "all":
             sql += " AND domain = ?"
             params.append(domain)
+        if ingest_source:
+            sql += " AND ingest_source = ?"
+            params.append(ingest_source)
         sql += " ORDER BY timestamp DESC LIMIT ?"
         params.append(limit)
 
@@ -645,21 +752,7 @@ class SQLiteContextStore(AbstractContextStore):
             cursor = conn.cursor()
             rows = cursor.execute(sql, params).fetchall()
             for row in rows:
-                loc = json.loads(row["location_json"]) if ("location_json" in row.keys() and row["location_json"]) else None
-                results.append(
-                    VerifiedAction(
-                        id=row["id"],
-                        action_type=row["action_type"],
-                        domain=row["domain"],
-                        raw_statement=row["raw_statement"],
-                        confidence=row["confidence"],
-                        timestamp=row["timestamp"],
-                        is_revoked=bool(row["is_revoked"]),
-                        matched_task_id=row["matched_task_id"] if "matched_task_id" in row.keys() else None,
-                        session_id=row["session_id"] if "session_id" in row.keys() else None,
-                        location=loc,
-                    )
-                )
+                results.append(self._row_to_action(row))
         return results
 
     # =========================================================================
@@ -1223,8 +1316,8 @@ class SQLiteContextStore(AbstractContextStore):
                  linked_micro_events_json, final_briefing_id, created_at,
                  conversation_uuids_json, segments_json, anchor_location_json, last_on_topic_at,
                  paused_at, hard_close_deadline, final_status, final_revision, transitions_json,
-                 research_ledger_json, topic_profile_json, pending_chunk_ids_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 research_ledger_json, topic_profile_json, pending_chunk_ids_json, ingest_source, ingest_run_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 dossier.session_id,
                 dossier.title,
@@ -1251,6 +1344,8 @@ class SQLiteContextStore(AbstractContextStore):
                 _dump(dossier.research_ledger),
                 dossier.topic_profile.model_dump_json() if dossier.topic_profile else None,
                 _dump(dossier.pending_chunk_ids),
+                dossier.ingest_source,
+                dossier.ingest_run_id,
             ))
             conn.commit()
         return dossier.session_id
@@ -1338,6 +1433,8 @@ class SQLiteContextStore(AbstractContextStore):
             research_ledger=_load("research_ledger_json", []),
             topic_profile=_load_profile(_load("topic_profile_json", None)),
             pending_chunk_ids=_load("pending_chunk_ids_json", []),
+            ingest_source=(row["ingest_source"] if "ingest_source" in keys and row["ingest_source"] else "live"),
+            ingest_run_id=row["ingest_run_id"] if "ingest_run_id" in keys else None,
         )
 
     def get_session_dossier(self, session_id: Optional[str] = None) -> Optional[SessionDossier]:
@@ -1357,13 +1454,23 @@ class SQLiteContextStore(AbstractContextStore):
             return self._row_to_session_dossier(row, cursor)
 
     def list_session_dossiers(
-        self, status: Optional[str] = None, limit: int = 10
+        self,
+        status: Optional[str] = None,
+        limit: int = 10,
+        ingest_source: Optional[str] = None,
+        ingest_run_id: Optional[str] = None,
     ) -> List[SessionDossier]:
-        sql = "SELECT * FROM session_dossiers "
-        params = []
+        sql = "SELECT * FROM session_dossiers WHERE 1=1 "
+        params: List[Any] = []
         if status:
-            sql += "WHERE status = ? "
+            sql += "AND status = ? "
             params.append(status)
+        if ingest_source:
+            sql += "AND ingest_source = ? "
+            params.append(ingest_source)
+        if ingest_run_id:
+            sql += "AND ingest_run_id = ? "
+            params.append(ingest_run_id)
         sql += "ORDER BY start_time DESC LIMIT ?"
         params.append(limit)
 
@@ -1372,27 +1479,49 @@ class SQLiteContextStore(AbstractContextStore):
             rows = cursor.execute(sql, params).fetchall()
             return [self._row_to_session_dossier(row, cursor) for row in rows]
 
-    def get_open_event(self) -> Optional[SessionDossier]:
-        """Returns the most recent engine-managed event that is still active or paused."""
+    def get_open_event(
+        self, ingest_source: str = "live", run_id: Optional[str] = None
+    ) -> Optional[SessionDossier]:
+        """Returns the most recent engine-managed event that is still active or paused.
+
+        Scoped by ingestion path so the live engine never adopts a backfill event (and vice versa).
+        """
+        sql = (
+            "SELECT * FROM session_dossiers WHERE status IN ('active', 'paused') "
+            "AND segments_json IS NOT NULL AND COALESCE(ingest_source, 'live') = ? "
+        )
+        params: List[Any] = [ingest_source]
+        if run_id:
+            sql += "AND ingest_run_id = ? "
+            params.append(run_id)
+        sql += "ORDER BY last_updated_at DESC LIMIT 1"
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            row = cursor.execute(
-                "SELECT * FROM session_dossiers WHERE status IN ('active', 'paused') "
-                "AND segments_json IS NOT NULL ORDER BY last_updated_at DESC LIMIT 1"
-            ).fetchone()
+            row = cursor.execute(sql, params).fetchone()
             if not row:
                 return None
             return self._row_to_session_dossier(row, cursor)
 
-    def list_events_pending_final(self, limit: int = 20) -> List[SessionDossier]:
+    def list_events_pending_final(
+        self, limit: int = 20, ingest_source: Optional[str] = None, run_id: Optional[str] = None
+    ) -> List[SessionDossier]:
         """Returns concluded events whose final briefing has not been produced yet."""
+        sql = (
+            "SELECT * FROM session_dossiers WHERE status = 'concluded' "
+            "AND final_status IN ('pending', 'synthesizing') "
+        )
+        params: List[Any] = []
+        if ingest_source:
+            sql += "AND COALESCE(ingest_source, 'live') = ? "
+            params.append(ingest_source)
+        if run_id:
+            sql += "AND ingest_run_id = ? "
+            params.append(run_id)
+        sql += "ORDER BY last_updated_at ASC LIMIT ?"
+        params.append(limit)
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            rows = cursor.execute(
-                "SELECT * FROM session_dossiers WHERE status = 'concluded' "
-                "AND final_status IN ('pending', 'synthesizing') ORDER BY last_updated_at ASC LIMIT ?",
-                (limit,),
-            ).fetchall()
+            rows = cursor.execute(sql, params).fetchall()
             return [self._row_to_session_dossier(row, cursor) for row in rows]
 
     def append_session_chunk(
@@ -1679,9 +1808,11 @@ class SQLiteContextStore(AbstractContextStore):
                         (event_type, limit),
                     ).fetchall()
                 else:
+                    # Backfill runs are excluded so they do not skew the live rolling average
                     rows = cursor.execute(
                         """
                         SELECT latency_ms FROM system_telemetry
+                        WHERE event_type NOT LIKE 'backfill%'
                         ORDER BY timestamp DESC LIMIT ?
                         """,
                         (limit,),
@@ -1713,6 +1844,199 @@ class SQLiteContextStore(AbstractContextStore):
                 "min_ms": 0.0,
                 "max_ms": 0.0,
             }
+
+    # =========================================================================
+    # Historical Transcript Backfill (docs/next_steps/historical_backfill/)
+    # =========================================================================
+    @staticmethod
+    def _row_to_coverage(row: sqlite3.Row) -> CoverageInterval:
+        return CoverageInterval(
+            id=row["id"],
+            source=row["source"],
+            start=row["start_ts"],
+            end=row["end_ts"],
+            is_open=bool(row["is_open"]),
+            degraded=bool(row["degraded"]),
+            run_id=row["run_id"],
+            utterances=row["utterances"] or 0,
+            errors=row["errors"] or 0,
+        )
+
+    def save_coverage_interval(self, interval: CoverageInterval) -> str:
+        with self._get_connection() as conn:
+            conn.cursor().execute("""
+                INSERT OR REPLACE INTO ingest_coverage
+                (id, source, start_ts, end_ts, is_open, degraded, run_id, utterances, errors)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                interval.id, interval.source, interval.start, interval.end, 1 if interval.is_open else 0,
+                1 if interval.degraded else 0, interval.run_id, interval.utterances, interval.errors,
+            ))
+            conn.commit()
+        return interval.id
+
+    def list_coverage(
+        self, start: Optional[str] = None, end: Optional[str] = None, source: Optional[str] = None
+    ) -> List[CoverageInterval]:
+        """Coverage intervals overlapping [start, end], oldest first."""
+        sql = "SELECT * FROM ingest_coverage WHERE 1=1"
+        params: List[Any] = []
+        if start:
+            sql += " AND end_ts >= ?"
+            params.append(start)
+        if end:
+            sql += " AND start_ts <= ?"
+            params.append(end)
+        if source:
+            sql += " AND source = ?"
+            params.append(source)
+        sql += " ORDER BY start_ts ASC"
+        with self._get_connection() as conn:
+            rows = conn.cursor().execute(sql, params).fetchall()
+            return [self._row_to_coverage(r) for r in rows]
+
+    def close_open_coverage_intervals(self, source: str = "live") -> int:
+        """Marks intervals left open by a crash as closed (their end is the last persisted flush)."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("UPDATE ingest_coverage SET is_open = 0 WHERE is_open = 1 AND source = ?", (source,))
+            conn.commit()
+            return cursor.rowcount
+
+    def last_coverage_end(self, source: Optional[str] = None) -> Optional[str]:
+        sql = "SELECT MAX(end_ts) AS last_end FROM ingest_coverage"
+        params: List[Any] = []
+        if source:
+            sql += " WHERE source = ?"
+            params.append(source)
+        with self._get_connection() as conn:
+            row = conn.cursor().execute(sql, params).fetchone()
+            return row["last_end"] if row else None
+
+    def record_ingested_utterance(self, entry: Dict[str, Any]) -> None:
+        """Upserts one utterance into the ingest ledger (keyed on source_key)."""
+        with self._get_connection() as conn:
+            conn.cursor().execute("""
+                INSERT OR REPLACE INTO ingest_ledger
+                (source_key, source, bee_conversation_uuid, bee_conversation_id, ts, received_at,
+                 text_norm, text_hash, status, categories_json, run_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                entry["source_key"],
+                entry.get("source", "live"),
+                entry.get("bee_conversation_uuid"),
+                entry.get("bee_conversation_id"),
+                entry["ts"],
+                entry.get("received_at"),
+                entry.get("text_norm"),
+                entry["text_hash"],
+                entry.get("status", "screened_noop"),
+                json.dumps(entry.get("categories") or [], ensure_ascii=False),
+                entry.get("run_id"),
+            ))
+            conn.commit()
+
+    @staticmethod
+    def _row_to_ledger(row: sqlite3.Row) -> Dict[str, Any]:
+        data = dict(row)
+        try:
+            data["categories"] = json.loads(data.pop("categories_json") or "[]")
+        except (TypeError, ValueError):
+            data["categories"] = []
+        return data
+
+    def get_ledger_entry(self, source_key: str) -> Optional[Dict[str, Any]]:
+        with self._get_connection() as conn:
+            row = conn.cursor().execute(
+                "SELECT * FROM ingest_ledger WHERE source_key = ?", (source_key,)
+            ).fetchone()
+            return self._row_to_ledger(row) if row else None
+
+    def list_ledger_entries(
+        self,
+        t_from: str,
+        t_to: str,
+        source: Optional[str] = None,
+        status: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Ledger rows whose receive time (live) or spoken time falls within [t_from, t_to]."""
+        sql = "SELECT * FROM ingest_ledger WHERE COALESCE(received_at, ts) >= ? AND COALESCE(received_at, ts) <= ?"
+        params: List[Any] = [t_from, t_to]
+        if source:
+            sql += " AND source = ?"
+            params.append(source)
+        if status:
+            sql += " AND status = ?"
+            params.append(status)
+        sql += " ORDER BY COALESCE(received_at, ts) ASC"
+        with self._get_connection() as conn:
+            rows = conn.cursor().execute(sql, params).fetchall()
+            return [self._row_to_ledger(r) for r in rows]
+
+    def purge_ingest_ledger(self, before: str) -> int:
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM ingest_ledger WHERE COALESCE(received_at, ts) < ?", (before,))
+            conn.commit()
+            return cursor.rowcount
+
+    def map_bee_conversation(self, conv_uuid: str, conv_id: Optional[int]) -> None:
+        if not conv_uuid:
+            return
+        with self._get_connection() as conn:
+            conn.cursor().execute("""
+                INSERT INTO bee_conversation_map (uuid, id, first_seen_at) VALUES (?, ?, ?)
+                ON CONFLICT(uuid) DO UPDATE SET id = COALESCE(excluded.id, bee_conversation_map.id)
+            """, (conv_uuid, conv_id, datetime.now().isoformat()))
+            conn.commit()
+
+    def get_bee_conversation_uuid(self, conv_id: int) -> Optional[str]:
+        with self._get_connection() as conn:
+            row = conn.cursor().execute(
+                "SELECT uuid FROM bee_conversation_map WHERE id = ? LIMIT 1", (conv_id,)
+            ).fetchone()
+            return row["uuid"] if row else None
+
+    def save_backfill_run(self, run: BackfillRun) -> str:
+        with self._get_connection() as conn:
+            conn.cursor().execute("""
+                INSERT OR REPLACE INTO backfill_runs (id, trigger, window_from, window_to, status, payload_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                run.id, run.trigger, run.window_from, run.window_to, run.status,
+                run.model_dump_json(), run.created_at,
+            ))
+            conn.commit()
+        return run.id
+
+    def get_backfill_run(self, run_id: str) -> Optional[BackfillRun]:
+        with self._get_connection() as conn:
+            row = conn.cursor().execute(
+                "SELECT payload_json FROM backfill_runs WHERE id = ?", (run_id,)
+            ).fetchone()
+            return BackfillRun.model_validate_json(row["payload_json"]) if row else None
+
+    def list_backfill_runs(
+        self, statuses: Optional[List[str]] = None, limit: int = 20
+    ) -> List[BackfillRun]:
+        sql = "SELECT payload_json FROM backfill_runs"
+        params: List[Any] = []
+        if statuses:
+            sql += f" WHERE status IN ({','.join('?' for _ in statuses)})"
+            params.extend(statuses)
+        sql += " ORDER BY created_at DESC LIMIT ?"
+        params.append(limit)
+        with self._get_connection() as conn:
+            rows = conn.cursor().execute(sql, params).fetchall()
+            return [BackfillRun.model_validate_json(r["payload_json"]) for r in rows]
+
+    def purge_ingestion_history(self) -> None:
+        """GDPR erasure of the backfill bookkeeping (coverage, ledger text, conversation map, runs)."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            for table in ("ingest_coverage", "ingest_ledger", "bee_conversation_map", "backfill_runs"):
+                cursor.execute(f"DELETE FROM {table}")
+            conn.commit()
 
     def close(self) -> None:
         """Close connection pools or resources if applicable."""

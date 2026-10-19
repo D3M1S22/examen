@@ -16,8 +16,8 @@ import re
 import shutil
 import subprocess
 import uuid
-from datetime import datetime
-from typing import Any, Dict, List, Optional
+from datetime import datetime, timedelta
+from typing import Any, Dict, List, Optional, Tuple
 
 import uvicorn
 from mcp.server.fastmcp import FastMCP
@@ -33,6 +33,7 @@ from src.core.storage import get_storage_store
 from src.pipeline.app import agent_invocation
 from src.serving.tools import (
     create_planned_task,
+    get_ingestion_coverage,
     get_live_event_outline,
     get_contact_profile,
     get_daily_actions_recap,
@@ -71,6 +72,7 @@ def broadcast_event(event_type: str, data: Optional[Dict[str, Any]] = None) -> N
 
 
 _engine_listener_registered = False
+_backfill_prepared = False
 
 
 def _ensure_event_engine() -> Any:
@@ -83,9 +85,38 @@ def _ensure_event_engine() -> Any:
     if not _engine_listener_registered:
         runtime.add_listener(lambda event_type, payload: broadcast_event(event_type, payload))
         _engine_listener_registered = True
+    # History backfill: the startup hand-over must happen before the live engine starts ticking
+    _ensure_backfill_service(runtime.engine)
     if settings.event_engine_enabled:
         runtime.ensure_started()
     return runtime.engine
+
+
+def _ensure_backfill_service(live_engine: Any = None) -> Any:
+    """Wires the Historical Transcript Backfill service to the live ingestion and starts it.
+
+    On the first call it runs the startup catch-up (docs/next_steps/historical_backfill/03 §6-7)."""
+    global _backfill_prepared
+    from src.ingestion.backfill import get_backfill_service
+
+    service = get_backfill_service()
+    if not settings.backfill_enabled:
+        return service
+    if not _backfill_prepared:
+        _backfill_prepared = True
+        mgr = OrchestratorManager.get_instance()
+        service.broadcast = broadcast_event
+        service.live_engine_getter = (lambda: live_engine) if live_engine is not None else None
+        service.live_since_getter = mgr.live_since
+        service.live_busy = mgr.live_busy
+        try:
+            run = service.prepare_startup(live_engine if settings.event_engine_enabled else None)
+            if run is not None:
+                logger.info(f"History backfill: startup catch-up queued for {run.window_from} → {run.window_to}")
+        except Exception as e:
+            logger.warning(f"History backfill startup preparation failed: {e}")
+    service.ensure_started()
+    return service
 
 
 # Register the 10 core MCP tools for Alexa+
@@ -100,6 +131,7 @@ mcp.tool()(get_topic_briefing)
 mcp.tool()(get_session_dossier)
 mcp.tool()(list_session_dossiers)
 mcp.tool()(get_live_event_outline)
+mcp.tool()(get_ingestion_coverage)
 
 
 # ---------------------------------------------------------------------------
@@ -141,6 +173,12 @@ class OrchestratorManager:
             self.orchestrator = BeeStreamOrchestrator(
                 debug_mode="none", store=store, engine=_ensure_event_engine()
             )
+            from src.ingestion.backfill import get_backfill_service
+
+            self.orchestrator.on_coverage_gap = lambda gap: broadcast_event(
+                "coverage_gap_detected", gap.model_dump()
+            )
+            self.orchestrator.on_coverage_open = get_backfill_service().on_live_coverage_open
             logger.info("Ingestion Orchestrator background service started.")
             await self.orchestrator.run()
         except asyncio.CancelledError:
@@ -149,6 +187,17 @@ class OrchestratorManager:
             logger.warning(f"Ingestion Orchestrator background service error: {e}")
         finally:
             self.is_started = False
+
+    def live_since(self) -> Optional[str]:
+        """Start of the current live coverage interval (history backfill windows end there)."""
+        orch = self.orchestrator
+        if orch is None or not hasattr(orch, "coverage") or orch.coverage.current is None:
+            return None
+        return orch.coverage.current.start
+
+    def live_busy(self) -> bool:
+        orch = self.orchestrator
+        return bool(orch is not None and getattr(orch, "inflight_dispatches", 0) > 0)
 
     def stop(self) -> None:
         """Stops the running orchestrator background task."""
@@ -541,6 +590,12 @@ async def api_auth_gdpr_purge(request: Request) -> JSONResponse:
         del _user_sessions[user_id]
 
     _disconnect_bee_device()
+    try:
+        get_storage_store().purge_ingestion_history()
+    except NotImplementedError:
+        pass
+    except Exception as e:
+        logger.warning(f"Failed to purge ingestion history: {e}")
     broadcast_event("gdpr_data_purged", {"user_id": user_id})
     return JSONResponse({
         "success": True,
@@ -554,7 +609,9 @@ async def api_auth_gdpr_purge(request: Request) -> JSONResponse:
 async def api_orchestrator_status(request: Request) -> JSONResponse:
     """Returns the live status of the Ingestion Orchestrator background stream."""
     mgr = OrchestratorManager.get_instance()
-    return JSONResponse(mgr.get_status())
+    status = mgr.get_status()
+    status.update(_history_status())
+    return JSONResponse(status)
 
 
 @mcp.custom_route("/api/orchestrator/start", methods=["POST"])
@@ -591,6 +648,7 @@ async def api_status(request: Request) -> JSONResponse:
     latency_metrics = store.get_latency_metrics()
     bee_telemetry = _get_bee_device_telemetry()
     orch_status = OrchestratorManager.get_instance().get_status()
+    history_status = _history_status()
 
     # Dynamic sensor mesh description based on live hardware & orchestrator state
     if bee_telemetry.get("status") == "STREAMING":
@@ -618,6 +676,8 @@ async def api_status(request: Request) -> JSONResponse:
                 "active_runtime": "AWS Bedrock AgentCore",
             },
             "latency": latency_metrics,
+            "coverage": history_status["coverage"],
+            "backfill": history_status["backfill"],
         },
         "config": {
             "gatekeeper_provider": settings.gatekeeper_provider,
@@ -649,7 +709,8 @@ async def api_actions(request: Request) -> JSONResponse:
     domain = request.query_params.get("domain")
     filter_domain = None if (not domain or domain.lower() == "all") else domain.lower()
 
-    actions = store.list_recent_actions(limit=limit, domain=filter_domain)
+    ingest_source = request.query_params.get("ingest_source") or None
+    actions = store.list_recent_actions(limit=limit, domain=filter_domain, ingest_source=ingest_source)
     result = []
     for a in actions:
         result.append({
@@ -661,6 +722,8 @@ async def api_actions(request: Request) -> JSONResponse:
             "raw_statement": a.raw_statement,
             "confidence": round(a.confidence, 2),
             "matched_task_id": a.matched_task_id,
+            "ingest_source": a.ingest_source,
+            "ingest_run_id": a.ingest_run_id,
         })
 
     return JSONResponse({"actions": result, "count": len(result)})
@@ -771,6 +834,7 @@ async def api_routines(request: Request) -> JSONResponse:
         domain=filter_domain,
         status=filter_status,
         origin=filter_origin,
+        ingest_source=request.query_params.get("ingest_source") or None,
     )
     result = []
     for t in tasks:
@@ -789,6 +853,9 @@ async def api_routines(request: Request) -> JSONResponse:
             "completed_at": t.completed_at,
             "verified_action_id": t.verified_action_id,
             "created_at": t.created_at,
+            "ingest_source": t.ingest_source,
+            "ingest_run_id": t.ingest_run_id,
+            "recovered": t.recovered,
         })
     return JSONResponse({"tasks": result, "count": len(result)})
 
@@ -1437,7 +1504,12 @@ async def api_sessions(request: Request) -> JSONResponse:
     status = request.query_params.get("status")
     limit = int(request.query_params.get("limit", "10"))
     events_only = request.query_params.get("events_only", "").lower() in ("1", "true", "yes")
-    dossiers = store.list_session_dossiers(status=status, limit=limit * 3 if events_only else limit)
+    dossiers = store.list_session_dossiers(
+        status=status,
+        limit=limit * 3 if events_only else limit,
+        ingest_source=request.query_params.get("ingest_source") or None,
+        ingest_run_id=request.query_params.get("ingest_run_id") or None,
+    )
     if events_only:
         dossiers = [d for d in dossiers if d.segments][:limit]
     result = [_session_summary(d) for d in dossiers]
@@ -1470,6 +1542,8 @@ def _session_summary(d: Any) -> Dict[str, Any]:
         "transitions_count": len(d.transitions),
         "top_terms": _top_terms(d, 6),
         "transcript_chunks_count": len(d.transcript_chunks),
+        "ingest_source": d.ingest_source,
+        "ingest_run_id": d.ingest_run_id,
     }
 
 
@@ -1781,6 +1855,161 @@ async def api_simulate(request: Request) -> JSONResponse:
             "success": False,
             "error": str(e),
         }, status_code=500)
+
+
+# ---------------------------------------------------------------------------
+# Historical Transcript Backfill (docs/next_steps/historical_backfill/04 §3)
+# ---------------------------------------------------------------------------
+
+def _history_status() -> Dict[str, Any]:
+    """Coverage + backfill summary shared by /api/status and /api/orchestrator/status."""
+    from src.ingestion.coverage import compute_gaps
+
+    store = get_storage_store()
+    mgr = OrchestratorManager.get_instance()
+    now = datetime.now().replace(microsecond=0)
+    week_ago = (now - timedelta(days=7)).isoformat()
+    coverage: Dict[str, Any] = {"live_since": mgr.live_since(), "last_gap": None, "uncovered_seconds_7d": None}
+    try:
+        intervals = store.list_coverage(week_ago, now.isoformat())
+        if intervals:
+            first_start = min(i.start for i in intervals)
+            gaps = compute_gaps(first_start, mgr.live_since() or now.isoformat(), intervals,
+                                min_gap_seconds=settings.backfill_min_gap_seconds)
+            coverage["last_gap"] = gaps[-1].model_dump() if gaps else None
+            coverage["uncovered_seconds_7d"] = round(sum(g.seconds for g in gaps), 1)
+    except NotImplementedError:
+        pass
+    backfill: Dict[str, Any] = {"enabled": settings.backfill_enabled, "active_run": None, "queued": 0}
+    if settings.backfill_enabled:
+        from src.ingestion.backfill import get_backfill_service
+
+        backfill = get_backfill_service().status_summary()
+    return {"coverage": coverage, "backfill": backfill}
+
+
+def _backfill_error(e: Exception) -> JSONResponse:
+    from src.ingestion.backfill import BackfillRequestError
+
+    if isinstance(e, BackfillRequestError):
+        return JSONResponse({"error": e.code, "message": str(e), **e.extra}, status_code=e.status)
+    logger.warning(f"History backfill request failed: {e}")
+    return JSONResponse({"error": "backfill_failed", "message": str(e)}, status_code=502)
+
+
+def _backfill_window(params: Dict[str, Any], default_days: float = 1.0) -> Tuple[str, str]:
+    now = datetime.now().replace(microsecond=0)
+    window_to = params.get("to") or params.get("window_to") or now.isoformat()
+    window_from = params.get("from") or params.get("window_from") or (now - timedelta(days=default_days)).isoformat()
+    return str(window_from), str(window_to)
+
+
+@mcp.custom_route("/api/backfill/coverage", methods=["GET"])
+async def api_backfill_coverage(request: Request) -> JSONResponse:
+    """Coverage timeline: live/backfill intervals, gaps and per-hour/day buckets."""
+    from src.ingestion.coverage import compute_gaps, coverage_buckets, coverage_summary
+
+    store = get_storage_store()
+    window_from, window_to = _backfill_window(dict(request.query_params), default_days=7)
+    bucket = request.query_params.get("bucket", "hour")
+    intervals = store.list_coverage(window_from, window_to)
+    return JSONResponse({
+        "window_from": window_from,
+        "window_to": window_to,
+        "live_since": OrchestratorManager.get_instance().live_since(),
+        "summary": coverage_summary(window_from, window_to, intervals),
+        "intervals": [i.model_dump() for i in intervals],
+        "gaps": [g.model_dump() for g in compute_gaps(window_from, window_to, intervals)],
+        "buckets": coverage_buckets(window_from, window_to, intervals, "day" if bucket == "day" else "hour"),
+    })
+
+
+@mcp.custom_route("/api/backfill/preview", methods=["POST"])
+async def api_backfill_preview(request: Request) -> JSONResponse:
+    """Cost-free plan of a window: Bee REST calls only, no LLM."""
+    if not settings.backfill_enabled:
+        return JSONResponse({"error": "disabled"}, status_code=404)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    window_from, window_to = _backfill_window(body)
+    service = _ensure_backfill_service()
+    try:
+        result = await service.preview(window_from, window_to, bool(body.get("retry_failed_live", True)))
+    except Exception as e:
+        return _backfill_error(e)
+    from src.ingestion.backfill import over_budget
+
+    return JSONResponse({**result.plan.model_dump(), "over_budget": over_budget(result.plan)})
+
+
+@mcp.custom_route("/api/backfill/runs", methods=["GET", "POST"])
+async def api_backfill_runs(request: Request) -> JSONResponse:
+    """Lists runs (GET) or queues a manual run (POST, 202)."""
+    if not settings.backfill_enabled:
+        return JSONResponse({"error": "disabled"}, status_code=404)
+    service = _ensure_backfill_service()
+    if request.method == "GET":
+        status = request.query_params.get("status")
+        limit = int(request.query_params.get("limit", "20"))
+        runs = service.list_runs(statuses=[status] if status else None, limit=limit)
+        return JSONResponse({"runs": [r.model_dump() for r in runs], "count": len(runs)})
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    window_from, window_to = _backfill_window(body)
+    try:
+        run = await service.create_run(
+            window_from,
+            window_to,
+            retry_failed_live=bool(body.get("retry_failed_live", True)),
+            confirm_over_budget=bool(body.get("confirm_over_budget", False)),
+            requested_by=body.get("user_id") or request.headers.get("x-user-id"),
+        )
+    except Exception as e:
+        return _backfill_error(e)
+    return JSONResponse({"run": run.model_dump()}, status_code=202)
+
+
+@mcp.custom_route("/api/backfill/runs/{run_id}", methods=["GET"])
+async def api_backfill_run_detail(request: Request) -> JSONResponse:
+    """One run with links to what it produced."""
+    run_id = request.path_params.get("run_id")
+    service = _ensure_backfill_service()
+    run = service.get_run(run_id)
+    if run is None:
+        return JSONResponse({"error": f"Backfill run '{run_id}' not found"}, status_code=404)
+    store = get_storage_store()
+    events = store.list_session_dossiers(limit=100, ingest_run_id=run_id)
+    return JSONResponse({
+        "run": run.model_dump(),
+        "progress": service.progress_payload(run),
+        "links": {
+            "events": [_session_summary(d) for d in events],
+            "actions": run.counters.get("actions", 0),
+            "contacts": run.counters.get("contacts", 0),
+            "tasks": run.counters.get("tasks", 0),
+        },
+    })
+
+
+@mcp.custom_route("/api/backfill/runs/{run_id}/cancel", methods=["POST"])
+async def api_backfill_run_cancel(request: Request) -> JSONResponse:
+    """Cancels a queued run, or stops a running one after the in-flight utterance."""
+    run_id = request.path_params.get("run_id")
+    run = _ensure_backfill_service().cancel(run_id)
+    if run is None:
+        return JSONResponse({"error": f"Backfill run '{run_id}' not found"}, status_code=404)
+    return JSONResponse({"run": run.model_dump()})
+
+
+@mcp.custom_route("/api/backfill/settings", methods=["GET"])
+async def api_backfill_settings(request: Request) -> JSONResponse:
+    """Effective BACKFILL_* configuration (read-only)."""
+    data = {k: v for k, v in settings.model_dump().items() if k.startswith(("backfill_", "coverage_"))}
+    return JSONResponse({"settings": data})
 
 
 # ---------------------------------------------------------------------------
