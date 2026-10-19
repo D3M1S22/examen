@@ -2,7 +2,7 @@
 
 > **Status:** live since 2026-10-19
 > **Purpose:** a long-running test instance with the real Bee account and real Bedrock models, before the AWS deployment of [06_aws_cloud_deployment_architecture.md](06_aws_cloud_deployment_architecture.md).
-> **Files:** [deploy/homelab/deploy.sh](../deploy/homelab/deploy.sh), [deploy/homelab/examen.service](../deploy/homelab/examen.service)
+> **Files:** [deploy/homelab/update.sh](../deploy/homelab/update.sh) (pull `main`), [deploy/homelab/deploy.sh](../deploy/homelab/deploy.sh) (push a working copy / bootstrap), [examen.service](../deploy/homelab/examen.service), [examen-update.service](../deploy/homelab/examen-update.service) + [.timer](../deploy/homelab/examen-update.timer)
 
 ---
 
@@ -14,7 +14,7 @@
 | LAN address | `192.168.1.192`, service on port `8000` |
 | URL | `http://examen.deggio.local/` (Pi-hole record → Nginx Proxy Manager → `192.168.1.192:8000`) |
 | Endpoints | Dashboard `/`, Echo Show `/ext-app/`, MCP `/mcp`, REST `/api/*`, SSE `/api/events` |
-| Service | systemd `examen.service`, user `examen`, code in `/opt/examen`, venv `/opt/examen/.venv` (uv, Python 3.12) |
+| Service | systemd `examen.service`, user `examen`, code in `/opt/examen` (git checkout of `origin/main`), venv `/opt/examen/.venv` (uv, Python 3.12); Bun 1.4 for dashboard builds |
 | Bee CLI | `/usr/local/bin/bee` (0.7.3); token in `/var/lib/examen/.bee/` (the service user's home) |
 | Secrets | `/opt/examen/.env` (mode 600, owner `examen`): AWS credentials and model settings |
 | Data | SQLite `/opt/examen/examen.db` |
@@ -25,19 +25,27 @@ The reverse proxy disables buffering (`proxy_buffering off`, 1 h read timeout), 
 
 ---
 
-## 2. Redeploy from a workstation
+## 2. Updates: the server tracks `main`
 
-```bash
-EXAMEN_DEPLOY_HOST=root@192.168.1.192 deploy/homelab/deploy.sh             # build UI, sync code, restart
-EXAMEN_DEPLOY_HOST=root@192.168.1.192 SYNC_ENV=1 deploy/homelab/deploy.sh  # also push ./.env
-EXAMEN_DEPLOY_HOST=root@192.168.1.192 SKIP_UI_BUILD=1 deploy/homelab/deploy.sh
-```
+`/opt/examen` is a git checkout of **`origin/main`**, read through a read-only GitHub deploy key of the `examen` user (`/var/lib/examen/.ssh/id_ed25519`). Pushing to `main` is enough:
 
-The script is idempotent. On a fresh Ubuntu/Debian host it also creates the `examen` user, installs `uv` + Python 3.12, copies the Bee binary (`resources/bee-cli/dist/platforms/linux-x64/bee`, see [AGENTS.MD](../AGENTS.MD) §7) and installs the systemd unit. It syncs the **working tree**, uncommitted changes included, and never copies `.git`, `.venv`, `.bee-spike/` (personal captures) or databases.
+| What | How |
+|---|---|
+| Automatic | `examen-update.timer` runs [deploy/homelab/update.sh](../deploy/homelab/update.sh) every 5 minutes |
+| Manual | `ssh root@192.168.1.192 examen-update` (`--force` reinstalls deps, rebuilds the UI and the units) |
+| Logs | `ssh root@192.168.1.192 'journalctl -u examen-update -n 50'` |
+| Pause | `systemctl stop examen-update.timer` (e.g. while testing a working copy, below) |
 
-Note: `scripts/build_ui.sh` may rewrite `src/web_ui/bun.lock` with an older Bun; revert it with `git checkout src/web_ui/bun.lock` if the change is only the lockfile version.
+`update.sh` does nothing if `origin/main` has not moved. Otherwise it hard-resets to it, reinstalls Python deps only when `requirements.txt` / `pyproject.toml` changed, rebuilds the dashboard (Bun) only when `src/web_ui/` changed, reinstalls the systemd units when they changed, restarts `examen` and waits for `/api/status`. If the health check fails it rolls back to the previous commit. `.env`, `.venv`, `examen.db` and `src/web_ui/out` are untracked and survive updates.
 
----
+**Testing uncommitted work:** `EXAMEN_DEPLOY_HOST=root@192.168.1.192 deploy/homelab/deploy.sh` still pushes the local working copy (rsync, `.git` untouched). Stop the timer first: the next update resets the server to `main`.
+
+### 2.1 First-time setup of a new server
+
+1. `EXAMEN_DEPLOY_HOST=root@<host> SYNC_ENV=1 deploy/homelab/deploy.sh`: user, uv/Python 3.12, Bee binary, venv, service.
+2. Deploy key: `sudo -u examen -H ssh-keygen -t ed25519 -N "" -f /var/lib/examen/.ssh/id_ed25519`, add the public key to the GitHub repository (*Settings → Deploy keys*, read-only), `ssh-keyscan -t ed25519 github.com` into `/var/lib/examen/.ssh/known_hosts`.
+3. Turn `/opt/examen` into a checkout: `git init`, `git remote add origin git@github.com:<owner>/<repo>.git`, `git fetch origin main`, `git reset --hard origin/main` (as `examen`).
+4. Install Bun (`curl -fsSL https://bun.sh/install | BUN_INSTALL=/usr/local bash`), link `examen-update` → `/opt/examen/deploy/homelab/update.sh`, install and enable `examen-update.timer`, run `examen-update --force`.
 
 ## 3. Bee login on the server
 
