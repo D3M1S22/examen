@@ -29,9 +29,16 @@
 │    ├─ M4.2: Part & consolidated synthesis          │ P1       │ Medium │ DTEE 03, 04 │ ✅ DONE   │
 │    ├─ M4.3: Topic continuity (Titan V2 embeddings) │ P1       │ High   │ DTEE 02     │ ✅ DONE   │
 │    └─ M4.4: Event serving & dashboard timeline     │ P2       │ Medium │ DTEE 06     │ ✅ DONE   │
+│  Phase 5: Historical Transcript Backfill           │ High     │ High   │ HTB 00-05   │ 📝 SPEC   │
+│    ├─ M5.1: Coverage ledger & gap detection        │ P1       │ Medium │ HTB 02, 04  │ ⏳ PLANNED│
+│    ├─ M5.2: History source & free preview          │ P1       │ Medium │ HTB 01, 02  │ ⏳ PLANNED│
+│    ├─ M5.3: Replay executor & temporal guards      │ P1       │ High   │ HTB 03      │ ⏳ PLANNED│
+│    ├─ M5.4: Startup / reconnect auto catch-up      │ P2       │ Medium │ HTB 03      │ ⏳ PLANNED│
+│    └─ M5.5: History Sync UI                        │ P2       │ Medium │ HTB 04      │ ⏳ PLANNED│
 └──────────────────────────────────────────────────────────────────────────────────────────────────┘
 
 > **DTEE** = [docs/next_steps/deep_topic_event_engine/](deep_topic_event_engine/00_overview.md)
+> **HTB** = [docs/next_steps/historical_backfill/](historical_backfill/00_overview.md)
 ```
 
 ---
@@ -277,6 +284,16 @@
 #### ⏭️ Open items
 * [ ] Capture real `bee stream --json` payloads (event type field, utterance time, conversation events) with the physical device.
 * [ ] Record real lectures as replay scenarios and re-run `scripts/replay_event_scenarios.py --calibrate`.
+
+### Phase 5: Historical Transcript Backfill (SPECIFIED 📝)
+> **Goal:** Never lose ambient context because EXAMEN was offline. Detect coverage gaps, fill them automatically after a restart/reconnect (bounded look-back), and let the user analyse any past period from the UI, skipping what was already analysed live.
+> **Specification:** [historical_backfill/](historical_backfill/00_overview.md).
+
+* [ ] **M5.1 Coverage ledger:** live coverage intervals, per-utterance ingest ledger (noop included), Bee uuid↔id map, idempotent `source_key` ids.
+* [ ] **M5.2 History source & preview:** `BeeHistorySource` over `bee conversations list/get --json`, final-transcription selection, live/backfill de-duplication, free `POST /api/backfill/preview`.
+* [ ] **M5.3 Replay executor:** isolated `EventEngine` on a virtual clock, ordered parallel screening, as-of temporal guards (task resolution, relative times, notifications), resumable runs.
+* [ ] **M5.4 Auto catch-up:** startup and reconnect triggers, open-event hand-over and boundary stitching, budget guards.
+* [ ] **M5.5 UI:** History Sync card, coverage strip, preview → run modal, progress badge, `⏪ Recovered` provenance badges.
 
 ---
 

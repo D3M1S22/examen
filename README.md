@@ -156,6 +156,7 @@ Detailed technical, architectural, and operational documentation is organized ac
 * 📄 [08_real_telemetry_and_bee_hardware_spec.md](docs/08_real_telemetry_and_bee_hardware_spec.md): Real hardware telemetry integration, Bee Wearable CLI capabilities, latency tracking architecture, and sector-by-sector frontend data contracts.
 * 🚀 [ROADMAP.md](docs/next_steps/ROADMAP.md): Evolution Roadmap, pipeline refinements status dashboard, and execution plan for Next Steps.
 * 🧠 [deep_topic_event_engine/](docs/next_steps/deep_topic_event_engine/00_overview.md): Deep Topic Event Engine specification, state machine, topic continuity calibration, synthesis scheduling, serving/UI and test plan.
+* ⏪ [historical_backfill/](docs/next_steps/historical_backfill/00_overview.md): Historical Transcript Backfill specification: coverage ledger, gap detection, live/backfill de-duplication, virtual-clock replay, auto catch-up and the History Sync UI.
 
 ---
 
