@@ -483,6 +483,12 @@ async def api_orchestrator_stop(request: Request) -> JSONResponse:
     return JSONResponse({"success": True, "status": "STOPPED"})
 
 
+@mcp.custom_route("/api/health", methods=["GET"])
+async def api_health(request: Request) -> JSONResponse:
+    """Unauthenticated liveness probe (deploy/homelab/update.sh health check)."""
+    return JSONResponse({"status": "ok", "timestamp": datetime.now().isoformat()})
+
+
 @mcp.custom_route("/api/status", methods=["GET"])
 async def api_status(request: Request) -> JSONResponse:
     """Returns system status, active models/providers, real telemetry averages, and entity counts."""

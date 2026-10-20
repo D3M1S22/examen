@@ -36,7 +36,7 @@ The reverse proxy disables buffering (`proxy_buffering off`, 1 h read timeout), 
 | Logs | `ssh root@192.168.1.192 'journalctl -u examen-update -n 50'` |
 | Pause | `systemctl stop examen-update.timer` (e.g. while testing a working copy, below) |
 
-`update.sh` does nothing if `origin/main` has not moved. Otherwise it hard-resets to it, reinstalls Python deps only when `requirements.txt` / `pyproject.toml` changed, rebuilds the dashboard (Bun) only when `src/web_ui/` changed, reinstalls the systemd units when they changed, restarts `examen` and waits for `/api/status`. If the health check fails it rolls back to the previous commit. `.env`, `.venv`, `examen.db` and `src/web_ui/out` are untracked and survive updates.
+`update.sh` does nothing if `origin/main` has not moved. Otherwise it hard-resets to it, reinstalls Python deps only when `requirements.txt` / `pyproject.toml` changed, rebuilds the dashboard (Bun) only when `src/web_ui/` changed, reinstalls the systemd units when they changed, restarts `examen` and waits for `/api/health` (unauthenticated; `/api/status` needs a session since multi-user). If the health check fails it rolls back to the previous commit. `.env`, `.venv`, `examen.db` and `src/web_ui/out` are untracked and survive updates.
 
 **Testing uncommitted work:** `EXAMEN_DEPLOY_HOST=root@192.168.1.192 deploy/homelab/deploy.sh` still pushes the local working copy (rsync, `.git` untouched). Stop the timer first: the next update resets the server to `main`.
 

@@ -135,6 +135,7 @@ def test_protected_routes_and_mcp_require_auth(app):
     assert res.status_code == 401
     assert "bearer" in res.headers.get("www-authenticate", "").lower()
     assert c.get("/api/auth/config").json()["auth_enabled"] is True
+    assert c.get("/api/health").json()["status"] == "ok"  # deploy health check stays public
 
 
 def test_cross_site_post_is_rejected(app):

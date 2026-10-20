@@ -29,6 +29,7 @@ PUBLIC_API_PATHS: Set[str] = {
     "/api/auth/login",
     "/api/auth/logout",
     "/api/auth/session",
+    "/api/health",
 }
 
 _UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
