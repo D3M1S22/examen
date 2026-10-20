@@ -85,6 +85,7 @@ The goal is for several people, each with their **own Bee account**, to use the 
 | [03_tenant_isolation_and_runtime.md](03_tenant_isolation_and_runtime.md) | `UserContext`, scoped storage, migration, per-user ingestion runtime, pipeline and AgentCore payloads, shared resources and limits |
 | [04_serving_api_ui_aws.md](04_serving_api_ui_aws.md) | REST and SSE authorisation, MCP / Alexa+ auth, dashboard changes, local vs homelab vs AWS mapping |
 | [05_implementation_plan_and_testing.md](05_implementation_plan_and_testing.md) | Phases, test matrix (isolation tests first), acceptance criteria, open questions |
+| [06_branch_comparison.md](06_branch_comparison.md) | `sessions` vs `feature/multi-user-auth`: differences, verified defects, what to port |
 
 ---
 
