@@ -1,7 +1,9 @@
 """Password hashing with scrypt (hashlib, no extra dependency).
 
-scrypt is memory-hard and recommended by OWASP for password storage. Parameters follow OWASP's
-minimum (N=2^17, r=8, p=1, ~128 MiB) unless overridden for tests. Hash format::
+scrypt is memory-hard and recommended by OWASP for password storage. Parameters are one of OWASP's
+equivalent minimums, N=2^16, r=8, p=2 (~64 MiB per hash instead of ~128 MiB for N=2^17, p=1: several
+concurrent logins stay affordable on the 2 GB homelab container); older hashes are upgraded at the
+next login (``needs_rehash``). Tests lower N. Hash format::
 
     scrypt$<log2 N>$<r>$<p>$<salt b64>$<hash b64>
 
@@ -16,9 +18,9 @@ import hmac
 import os
 from typing import Optional
 
-_LOG2_N = 17
+_LOG2_N = 16
 _R = 8
-_P = 1
+_P = 2
 _DKLEN = 32
 _SALT_BYTES = 16
 

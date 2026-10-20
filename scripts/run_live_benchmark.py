@@ -761,4 +761,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    from src.core.cli import ephemeral_tenant
+
+    with ephemeral_tenant():  # isolated temporary store; tenant-aware code needs a user
+        main()

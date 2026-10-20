@@ -13,7 +13,9 @@ from typing import Any, Dict, List, Optional
 
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
 
+from src.core.config import settings
 from src.core.schemas import ExamenState
+from src.core.tenancy import get_tenant_id, is_valid_user_id, tenant_scope
 from src.ingestion.gatekeeper import classify_chunk
 from src.pipeline.graph import pipeline_graph
 
@@ -61,8 +63,32 @@ def _build_summary(result_state: Dict[str, Any]) -> str:
     return " ; ".join(summaries)
 
 
+def _tenant_error(message: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    logger.error(f"AgentCore invocation rejected: {message}")
+    return {"status": "error", "session_id": payload.get("session_id"), "error": message}
+
+
 @app.entrypoint
 def agent_invocation(payload: Dict[str, Any], context: Any = None) -> Dict[str, Any]:
+    """Runs the pipeline for the user named in ``payload["user_id"]`` (docs/13_multi_user_accounts.md).
+
+    Locally the caller's tenant is already set and must match; on a remote AgentCore runtime the payload
+    is the only carrier of the tenant. With accounts enabled a payload without a user is rejected.
+    """
+    current = get_tenant_id()
+    requested = payload.get("user_id") or None
+    if requested is not None and not is_valid_user_id(requested):
+        return _tenant_error("invalid user_id", payload)
+    if requested is not None and current is not None and requested != current:
+        return _tenant_error("user_id does not match the caller's tenant", payload)
+    user_id = requested or current
+    if user_id is None and settings.auth_enabled:
+        return _tenant_error("missing user_id", payload)
+    with tenant_scope(user_id):
+        return _run_pipeline(payload, context)
+
+
+def _run_pipeline(payload: Dict[str, Any], context: Any = None) -> Dict[str, Any]:
     """Main AWS Bedrock AgentCore entrypoint for incoming agent requests.
 
     Args:

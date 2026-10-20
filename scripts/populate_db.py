@@ -92,4 +92,7 @@ def populate_mock_data():
     print("Data Population Complete!")
 
 if __name__ == "__main__":
-    populate_mock_data()
+    from src.core.cli import cli_tenant
+
+    with cli_tenant():  # EXAMEN_CLI_USER=<email> when accounts are enabled
+        populate_mock_data()

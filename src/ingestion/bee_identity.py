@@ -66,9 +66,9 @@ def get_wearer_identity() -> WearerIdentity:
     """The wearer of the current tenant's Bee (read from their own `bee me`), or the legacy singleton.
 
     ``BEE_WEARER_NAME`` is a host-wide override, so it only applies in single-user mode."""
-    from src.core.tenancy import get_tenant_id
+    from src.core.tenancy import resolve_tenant
 
-    tenant = get_tenant_id()
+    tenant = resolve_tenant()
     if tenant is not None:
         identity = _tenant_identities.get(tenant)
         if identity is None:

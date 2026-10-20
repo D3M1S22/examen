@@ -162,6 +162,15 @@ class Settings(BaseSettings):
     auth_min_password_length: int = Field(default=10, alias="AUTH_MIN_PASSWORD_LENGTH")
     auth_max_login_failures: int = Field(default=5, alias="AUTH_MAX_LOGIN_FAILURES")
     auth_lockout_minutes: float = Field(default=15.0, alias="AUTH_LOCKOUT_MINUTES")
+    # Self-registration from the sign-in page (false = accounts are created by an admin or the CLI)
+    auth_allow_signup: bool = Field(default=True, alias="AUTH_ALLOW_SIGNUP")
+    # Successful registrations per client address per hour (mass account creation guard)
+    auth_signup_max_per_ip: int = Field(default=5, alias="AUTH_SIGNUP_MAX_PER_IP")
+    # Security audit log (no email, name or IP) is purged after this many days
+    auth_audit_retention_days: int = Field(default=90, alias="AUTH_AUDIT_RETENTION_DAYS")
+    # Created at start-up while no admin exists (password from the next variable, or printed once)
+    examen_bootstrap_admin: Optional[str] = Field(default=None, alias="EXAMEN_BOOTSTRAP_ADMIN")
+    examen_bootstrap_admin_password: Optional[str] = Field(default=None, alias="EXAMEN_BOOTSTRAP_ADMIN_PASSWORD")
     # Version of the privacy notice users accept at registration (bump it to ask again)
     privacy_notice_version: str = Field(default="2026-10-20", alias="PRIVACY_NOTICE_VERSION")
     # Comma-separated browser origins allowed to call the API with cookies (the dashboard's own
@@ -172,6 +181,10 @@ class Settings(BaseSettings):
     mcp_allowed_hosts: str = Field(default="localhost:*,127.0.0.1:*,localhost,127.0.0.1", alias="MCP_ALLOWED_HOSTS")
     # Start every paired user's ingestion at server start (ambient listening without the dashboard open)
     auto_start_user_orchestrators: bool = Field(default=True, alias="AUTO_START_USER_ORCHESTRATORS")
+    # Live Bee streams running at once (each is a private `bee proxy` + stream; 2 GB homelab ≈ 5)
+    max_active_users: int = Field(default=5, alias="MAX_ACTIVE_USERS")
+    # Concurrent LLM calls (gatekeeper + pipeline, live and backfill) across all users
+    max_concurrent_llm_calls: int = Field(default=8, alias="MAX_CONCURRENT_LLM_CALLS")
 
     @property
     def has_aws_credentials(self) -> bool:

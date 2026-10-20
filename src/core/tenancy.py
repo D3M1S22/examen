@@ -13,6 +13,10 @@ event engine, backfill) are created inside ``tenant_scope(user_id)`` so asyncio 
 ``AUTH_ENABLED=false``) keeps the legacy single-user behaviour: ``SQLITE_DB_PATH`` and the host's
 default bee-cli login.
 
+With ``AUTH_ENABLED=true`` the accessors of user data and per-user runtimes resolve the tenant with
+``resolve_tenant()``, which raises ``MissingTenant`` instead of falling back to the legacy store or the
+host's Bee login: a forgotten ``tenant_scope`` becomes an error, never a write into shared data.
+
 GDPR: erasing a user is deleting one folder (see ``delete_tenant_data``).
 """
 
@@ -38,9 +42,27 @@ def is_valid_user_id(user_id: Optional[str]) -> bool:
     return bool(user_id) and bool(_USER_ID_RE.match(user_id))
 
 
+class MissingTenant(RuntimeError):
+    """User data or a per-user runtime was requested with no tenant while accounts are enabled."""
+
+
 def get_tenant_id() -> Optional[str]:
     """The user the current code works for, or None in legacy single-user mode."""
     return _current_tenant.get()
+
+
+def resolve_tenant() -> Optional[str]:
+    """The current tenant for code that touches user data; fail-closed when accounts are enabled.
+
+    Returns None (legacy single-user objects) only with ``AUTH_ENABLED=false``.
+    """
+    tenant = _current_tenant.get()
+    if tenant is None and settings.auth_enabled:
+        raise MissingTenant(
+            "No user in context: run this inside tenant_scope(user_id) "
+            "(scripts: EXAMEN_CLI_USER=<email>, see src/core/cli.py)"
+        )
+    return tenant
 
 
 @contextlib.contextmanager
@@ -136,7 +158,7 @@ def bee_subprocess_env(user_id: Optional[str] = None) -> Optional[Dict[str, str]
     would overwrite each other's login. For a tenant we force the file store and point it at the
     user's private folder. Returns None (inherit the parent environment) in single-user mode.
     """
-    uid = user_id if user_id is not None else get_tenant_id()
+    uid = user_id if user_id is not None else resolve_tenant()
     if uid is None:
         return None
     env = dict(os.environ)

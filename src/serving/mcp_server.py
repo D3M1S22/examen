@@ -32,8 +32,9 @@ from starlette.staticfiles import StaticFiles
 from src.core.config import settings
 from src.core.schemas import PlannedTask, SocialCommitment
 from src.core.storage import get_storage_store
-from src.core.tenancy import bee_subprocess_env, get_tenant_id, tenant_has_bee_login, tenant_scope
+from src.core.tenancy import bee_subprocess_env, get_tenant_id, resolve_tenant, tenant_has_bee_login, tenant_scope
 from src.serving.auth_middleware import AuthMiddleware, allowed_origins
+from src.serving.admin_routes import register_admin_routes
 from src.serving.auth_routes import TenantHooks, register_auth_routes
 from src.pipeline.app import agent_invocation
 from src.serving.tools import (
@@ -189,10 +190,12 @@ class OrchestratorManager:
         self.orchestrator = None
         self.task: Optional[asyncio.Task] = None
         self.is_started = False
+        # Set when MAX_ACTIVE_USERS live streams already run: the Bee stays paired, the stream waits
+        self.capacity_blocked = False
 
     @classmethod
     def get_instance(cls) -> "OrchestratorManager":
-        tenant = get_tenant_id()
+        tenant = resolve_tenant()
         if tenant is not None:
             mgr = cls._tenant_instances.get(tenant)
             if mgr is None:
@@ -217,10 +220,26 @@ class OrchestratorManager:
         """A user's orchestrator only runs once that user has paired their Bee."""
         return self.tenant is None or tenant_has_bee_login(self.tenant)
 
+    @property
+    def running(self) -> bool:
+        return self.task is not None and not self.task.done()
+
+    @classmethod
+    def active_streams(cls) -> int:
+        return sum(1 for mgr in cls._tenant_instances.values() if mgr.running)
+
     def ensure_started(self) -> None:
-        """Launches the background orchestrator task if not already active."""
+        """Launches the background orchestrator task if not already active (within MAX_ACTIVE_USERS)."""
         if not self.can_start():
             return
+        if self.tenant is not None and not self.running \
+                and self.active_streams() >= max(1, settings.max_active_users):
+            if not self.capacity_blocked:
+                logger.warning(f"MAX_ACTIVE_USERS={settings.max_active_users} live streams already running: "
+                               "a user's Bee stream waits for a free slot")
+            self.capacity_blocked = True
+            return
+        self.capacity_blocked = False
         if self.task is None or self.task.done():
             try:
                 loop = asyncio.get_running_loop()
@@ -276,6 +295,17 @@ class OrchestratorManager:
             st = self.orchestrator.get_status_dict()
             st["service_managed"] = True
             return st
+        if self.capacity_blocked and not self.running:
+            return {
+                "running": False,
+                "status": "CAPACITY",
+                "mode": "ambient_sse",
+                "chunks_screened": 0,
+                "utterances_received": 0,
+                "detail": f"Server at capacity ({settings.max_active_users} live Bee streams): "
+                          "listening starts when a slot frees up",
+                "service_managed": True,
+            }
         if not self.can_start():
             return {
                 "running": False,
@@ -317,7 +347,7 @@ def _get_bee_device_telemetry() -> Dict[str, Any]:
             res["status"] = "LISTENING"
             res["connected"] = False
             res["detail"] = f"Bee account verified as {res['account']}; orchestrator listening for audio stream"
-        return res
+        return _with_capacity(res, orch_status)
 
     from src.ingestion.stream_convo import BeeClient, get_bee_binary_path
     bee_bin = get_bee_binary_path()
@@ -369,6 +399,15 @@ def _get_bee_device_telemetry() -> Dict[str, Any]:
                     ),
                 }
             elif "Not logged in" in out:
+                if tenant is not None and tenant_has_bee_login(tenant):
+                    # A token file the Bee API no longer accepts (revoked or expired): ask to reconnect
+                    from src.core.auth import get_auth_store
+
+                    store = get_auth_store()
+                    link = store.get_bee_link(tenant)
+                    if link.state == "linked":
+                        link.state, link.last_error = "invalid", "The Bee login is no longer valid: connect your Bee again."
+                        store.save_bee_link(link)
                 res = {
                     "connected": False,
                     "status": "DISCONNECTED",
@@ -395,6 +434,13 @@ def _get_bee_device_telemetry() -> Dict[str, Any]:
 
     _bee_status_cache["timestamp"] = now
     _bee_status_cache["data"] = res
+    return _with_capacity(res, orch_status)
+
+
+def _with_capacity(res: Dict[str, Any], orch_status: Dict[str, Any]) -> Dict[str, Any]:
+    """Surfaces MAX_ACTIVE_USERS: the Bee is paired but this user's stream waits for a free slot."""
+    if orch_status.get("status") == "CAPACITY":
+        return {**res, "status": "CAPACITY", "connected": False, "detail": orch_status.get("detail")}
     return res
 
 
@@ -449,13 +495,37 @@ def start_paired_user_runtimes() -> int:
     return started
 
 
-register_auth_routes(mcp, TenantHooks(
+def _tenant_streaming(user_id: str) -> bool:
+    mgr = OrchestratorManager._tenant_instances.get(user_id)
+    return bool(mgr is not None and mgr.running)
+
+
+_tenant_hooks = TenantHooks(
     start_runtime=start_tenant_runtime,
     stop_runtime=stop_tenant_runtime,
     broadcast=broadcast_event,
     invalidate_bee_status=invalidate_bee_status,
     bee_telemetry=lambda: _get_bee_device_telemetry(),
-))
+    is_streaming=_tenant_streaming,
+)
+register_auth_routes(mcp, _tenant_hooks)
+register_admin_routes(mcp, _tenant_hooks)
+
+
+def ensure_bootstrap_admin() -> None:
+    """Start-up: creates ``EXAMEN_BOOTSTRAP_ADMIN`` while the instance has no admin."""
+    if not settings.auth_enabled or not settings.examen_bootstrap_admin:
+        return
+    from src.core.auth import get_auth_store
+
+    try:
+        generated = get_auth_store().ensure_bootstrap_admin(settings.examen_bootstrap_admin,
+                                                            settings.examen_bootstrap_admin_password)
+    except Exception as e:
+        logger.error(f"Bootstrap admin not created: {e}")
+        return
+    if generated:
+        logger.warning(f"Bootstrap admin created with one-time password: {generated} (change it after signing in)")
 
 
 @mcp.custom_route("/api/orchestrator/status", methods=["GET"])
@@ -1896,6 +1966,7 @@ def create_app() -> Starlette:
     @contextlib.asynccontextmanager
     async def lifespan(app_):
         async with original_lifespan(app_) as state:
+            ensure_bootstrap_admin()
             start_paired_user_runtimes()
             yield state
 

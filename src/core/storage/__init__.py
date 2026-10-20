@@ -11,7 +11,7 @@ from typing import Dict, Optional
 from src.core.config import Settings, settings
 from src.core.storage.base import AbstractContextStore
 from src.core.storage.sqlite_store import SQLiteContextStore
-from src.core.tenancy import get_tenant_id, tenant_db_path
+from src.core.tenancy import resolve_tenant, tenant_db_path
 
 _store_instance: Optional[AbstractContextStore] = None
 _tenant_stores: Dict[str, AbstractContextStore] = {}
@@ -52,8 +52,10 @@ def drop_tenant_store(user_id: str) -> None:
 
 
 def get_storage_store(custom_settings: Optional[Settings] = None) -> AbstractContextStore:
-    """Return the store of the current tenant, or the legacy singleton when there is none."""
-    tenant = get_tenant_id()
+    """Return the store of the current tenant, or the legacy singleton in single-user mode.
+
+    With accounts enabled and no tenant in context it raises ``MissingTenant`` (fail-closed)."""
+    tenant = resolve_tenant()
     if tenant is not None:
         return get_tenant_store(tenant, custom_settings)
 

@@ -1,8 +1,9 @@
 """In-memory brute-force protection for login and registration.
 
 Failures are counted per email (limit ``AUTH_MAX_LOGIN_FAILURES``) and per client address (5x that)
-within ``AUTH_LOCKOUT_MINUTES``; beyond the limit attempts are refused until the window passes. Single-process only;
-the AWS deployment should move this to a shared store.
+within ``AUTH_LOCKOUT_MINUTES``; beyond the limit attempts are refused until the window passes.
+Successful registrations are counted per client address (``signup-ip:`` keys, ``AUTH_SIGNUP_MAX_PER_IP``
+per hour). Single-process only; the AWS deployment should move this to a shared store.
 """
 
 from __future__ import annotations
@@ -20,12 +21,15 @@ class FailureLimiter:
         self._events: Dict[str, Deque[float]] = defaultdict(deque)
         self._lock = threading.Lock()
 
-    def _window(self) -> float:
+    @staticmethod
+    def _window(key: str = "") -> float:
+        if key.startswith("signup-ip:"):
+            return 3600.0
         return settings.auth_lockout_minutes * 60.0
 
     def _prune(self, key: str, now: float) -> Deque[float]:
         q = self._events[key]
-        cutoff = now - self._window()
+        cutoff = now - self._window(key)
         while q and q[0] < cutoff:
             q.popleft()
         return q
@@ -34,6 +38,8 @@ class FailureLimiter:
     def _limit(key: str) -> int:
         # A client address is shared by everyone behind the same NAT: allow it more failures than
         # a single account, while still stopping a password-spraying client.
+        if key.startswith("signup-ip:"):
+            return max(1, settings.auth_signup_max_per_ip)
         base = settings.auth_max_login_failures
         return base * 5 if key.startswith("ip:") else base
 
@@ -45,7 +51,7 @@ class FailureLimiter:
             for key in keys:
                 q = self._prune(key, now)
                 if len(q) >= self._limit(key):
-                    wait = max(wait, q[0] + self._window() - now)
+                    wait = max(wait, q[0] + self._window(key) - now)
         return wait
 
     def fail(self, keys: Iterable[str]) -> None:
@@ -53,6 +59,8 @@ class FailureLimiter:
         with self._lock:
             for key in keys:
                 self._prune(key, now).append(now)
+
+    record = fail  # successful events counted against a limit (registrations per address)
 
     def clear(self, keys: Iterable[str]) -> None:
         with self._lock:

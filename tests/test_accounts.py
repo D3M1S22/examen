@@ -61,7 +61,7 @@ def _register(client: TestClient, email: str, password: str = PASSWORD, consent:
 def test_password_hash_roundtrip(monkeypatch):
     monkeypatch.setattr(passwords, "_LOG2_N", 10)
     encoded = hash_password(PASSWORD)
-    assert encoded.startswith("scrypt$10$8$1$")
+    assert encoded.startswith("scrypt$10$8$2$")  # N=2^16-class parameters: r=8, p=2
     assert PASSWORD not in encoded
     assert verify_password(PASSWORD, encoded)
     assert not verify_password("wrong password!", encoded)
@@ -444,3 +444,339 @@ def test_mcp_endpoint_end_to_end_is_tenant_scoped(app):
         owner.post("/api/auth/login", json={"email": "mcp-a@example.com", "password": PASSWORD})
         assert "Take vitamins" in [t["title"] for t in owner.get("/api/routines").json()["tasks"]]
         assert other.get("/api/routines").json()["tasks"] == []
+
+        # Regression (comparison doc §5.1): another user's token on this MCP session sees only its data
+        other.post("/api/routines", json={"title": "Water the plants"})
+        other_secret = other.post("/api/account/tokens", json={"name": "b"}).json()["token"]["token"]
+        own = c.post("/mcp", headers=headers, json={
+            "jsonrpc": "2.0", "id": 4, "method": "tools/call",
+            "params": {"name": "get_upcoming_tasks", "arguments": {}},
+        })
+        assert "Take vitamins" in own.text  # the owner of the session does see it
+        reused = c.post("/mcp", headers={**headers, "Authorization": f"Bearer {other_secret}"}, json={
+            "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+            "params": {"name": "get_upcoming_tasks", "arguments": {}},
+        })
+        assert reused.status_code == 200, reused.text
+        assert "Take vitamins" not in reused.text
+
+
+# ---------------------------------------------------------------------------
+# Fail-closed tenancy, pipeline payload, token scope, shared limits (ported from `sessions`)
+# ---------------------------------------------------------------------------
+
+def test_user_data_without_a_tenant_fails_closed(multi_user):
+    from src.core.storage import get_storage_store
+    from src.core.tenancy import MissingTenant
+    from src.ingestion.backfill import get_backfill_service
+    from src.ingestion.bee_identity import get_wearer_identity
+    from src.ingestion.event_engine import get_event_engine
+
+    for accessor in (get_storage_store, get_event_engine, get_backfill_service, get_wearer_identity,
+                     multi_user.OrchestratorManager.get_instance, bee_subprocess_env):
+        with pytest.raises(MissingTenant):
+            accessor()
+    with tenant_scope("usr_" + "5" * 32):
+        assert get_storage_store() is not None  # inside a tenant everything resolves
+
+
+def test_legacy_mode_keeps_the_single_user_store(monkeypatch):
+    from src.core.storage import get_storage_store
+
+    monkeypatch.setattr(settings, "auth_enabled", False)
+    assert get_tenant_id() is None and get_storage_store() is not None
+    assert bee_subprocess_env() is None
+
+
+def test_pipeline_payload_carries_and_checks_the_user(multi_user):
+    from src.pipeline.app import agent_invocation
+
+    a, b = "usr_" + "6" * 32, "usr_" + "7" * 32
+    base = {"raw_transcript": "I locked the front door.", "categories": ["action"]}
+    assert agent_invocation(dict(base))["error"] == "missing user_id"
+    assert agent_invocation({**base, "user_id": "../etc"})["error"] == "invalid user_id"
+    with tenant_scope(a):
+        assert "does not match" in agent_invocation({**base, "user_id": b})["error"]
+
+
+def test_dispatch_payloads_name_the_tenant(multi_user, monkeypatch, tmp_path):
+    import importlib
+
+    from src.core.schemas import ChunkClassification
+    from src.core.storage.sqlite_store import SQLiteContextStore
+    from src.ingestion.orchestrator import BeeStreamOrchestrator
+
+    seen = []
+    importlib.import_module("src.pipeline.app")
+    monkeypatch.setattr(sys.modules["src.pipeline.app"], "agent_invocation",
+                        lambda payload: seen.append(payload) or {"ok": True})
+
+    async def _classify(transcript, active_tasks=None, prior_context=None):
+        return ChunkClassification(categories=["action"], confidence=0.9, summary_hint="door")
+
+    monkeypatch.setattr("src.ingestion.orchestrator.aclassify_chunk", _classify)
+    uid = "usr_" + "8" * 32
+
+    async def main():
+        with tenant_scope(uid):
+            orch = BeeStreamOrchestrator(store=SQLiteContextStore(str(tmp_path / "o.db")), engine=None)
+            orch.engine_enabled = False
+            orch.speaker_tag_wait = 0
+            await orch.process_incoming_utterance(
+                {"id": "u1", "text": "I locked the front door.", "received_at": "2026-10-20T10:00:00"})
+
+    asyncio.run(main())
+    assert seen and seen[0]["user_id"] == uid
+
+
+def test_access_tokens_cannot_manage_the_account(app):
+    alice = _client(app)
+    _register(alice, "scope@example.com")
+    secret = alice.post("/api/account/tokens", json={"name": "Alexa+"}).json()["token"]["token"]
+    machine = TestClient(app, headers={"Authorization": f"Bearer {secret}"})
+    assert machine.get("/api/routines").status_code == 200  # data access is the token's job
+    for method, path in (("GET", "/api/account/export"), ("POST", "/api/account/tokens"),
+                         ("DELETE", "/api/account"), ("PATCH", "/api/account"), ("POST", "/api/bee/pair"),
+                         ("POST", "/api/bee/disconnect")):
+        res = machine.request(method, path, json={})
+        assert res.status_code == 403 and res.json()["error"] == "session_required", path
+
+
+def test_llm_calls_share_one_limit_across_users(monkeypatch):
+    from src.core.limits import llm_slot
+
+    monkeypatch.setattr(settings, "max_concurrent_llm_calls", 2)
+    peak, running = [0], [0]
+
+    async def call(uid):
+        with tenant_scope(uid):
+            async with llm_slot():
+                running[0] += 1
+                peak[0] = max(peak[0], running[0])
+                await asyncio.sleep(0.01)
+                running[0] -= 1
+
+    async def main():
+        await asyncio.gather(*(call("usr_" + str(i % 2) * 32) for i in range(8)))
+
+    asyncio.run(main())
+    assert peak[0] == 2
+
+
+def test_live_streams_are_capped(multi_user, monkeypatch):
+    from src.core.tenancy import tenant_bee_dir
+
+    Mgr = multi_user.OrchestratorManager
+    monkeypatch.setattr(settings, "max_active_users", 1)
+    a, b = "usr_" + "a1" * 16, "usr_" + "b2" * 16
+    for uid in (a, b):
+        (tenant_bee_dir(uid) / "token-production").write_text("t")
+
+    async def main():
+        gate = asyncio.Event()
+
+        async def _fake_run(self):
+            await gate.wait()
+
+        monkeypatch.setattr(Mgr, "_run_orchestrator", _fake_run)
+        with tenant_scope(a):
+            Mgr.get_instance().ensure_started()
+        with tenant_scope(b):
+            mgr_b = Mgr.get_instance()
+            mgr_b.ensure_started()
+            assert mgr_b.capacity_blocked and mgr_b.get_status()["status"] == "CAPACITY"
+        Mgr.drop_tenant(a)
+        await asyncio.sleep(0)
+        with tenant_scope(b):
+            mgr_b.ensure_started()
+            assert mgr_b.running and not mgr_b.capacity_blocked
+        Mgr.drop_tenant(b)
+        gate.set()
+
+    asyncio.run(main())
+
+
+# ---------------------------------------------------------------------------
+# Admin, account status, registration control, sessions, audit (ported from `sessions`)
+# ---------------------------------------------------------------------------
+
+def _admin_client(app, email="root@example.com"):
+    from src.core.auth import get_auth_store
+
+    c = _client(app)
+    uid = _register(c, email).json()["user"]["id"]
+    get_auth_store().set_admin(uid, True)
+    return c, uid
+
+
+def test_admin_manages_accounts_but_not_their_data(app):
+    admin, admin_id = _admin_client(app)
+    user = _client(app)
+    _register(user, "plain@example.com")
+    user.post("/api/routines", json={"title": "Private routine"})
+    assert user.get("/api/admin/users").status_code == 403
+
+    listed = {u["email"]: u for u in admin.get("/api/admin/users").json()["users"]}
+    assert set(listed) == {"root@example.com", "plain@example.com"}
+    assert listed["plain@example.com"]["bee_link_state"] == "unlinked" and not listed["plain@example.com"]["streaming"]
+    assert "Private routine" not in admin.get("/api/admin/users").text
+    assert "Private routine" not in str(admin.get("/api/routines").json())  # admin sees only their own data
+
+    created = admin.post("/api/admin/users", json={"email": "carol@example.com", "is_admin": False})
+    assert created.status_code == 201
+    one_time = created.json()["initial_password"]
+    carol = TestClient(app)
+    assert carol.post("/api/auth/login", json={"email": "carol@example.com", "password": one_time}).status_code == 200
+
+
+def test_disabled_accounts_are_signed_out_everywhere(app):
+    admin, admin_id = _admin_client(app)
+    user = _client(app)
+    uid = _register(user, "dis@example.com").json()["user"]["id"]
+    secret = user.post("/api/account/tokens", json={"name": "Alexa+"}).json()["token"]["token"]
+    assert admin.post(f"/api/admin/users/{admin_id}/status", json={"status": "disabled"}).status_code == 403
+    assert admin.post(f"/api/admin/users/{uid}/status", json={"status": "disabled"}).status_code == 200
+    assert user.get("/api/routines").status_code == 401
+    assert TestClient(app).get("/api/routines", headers={"Authorization": f"Bearer {secret}"}).status_code == 401
+    assert _client(app).post("/api/auth/login", json={"email": "dis@example.com", "password": PASSWORD}).status_code == 401
+    assert admin.post(f"/api/admin/users/{uid}/status", json={"status": "active"}).status_code == 200
+    assert _client(app).post("/api/auth/login", json={"email": "dis@example.com", "password": PASSWORD}).status_code == 200
+
+
+def test_admin_password_reset_issues_a_one_time_password(app):
+    admin, _ = _admin_client(app)
+    user = _client(app)
+    uid = _register(user, "forgot@example.com").json()["user"]["id"]
+    res = admin.post(f"/api/admin/users/{uid}/reset-password")
+    assert res.status_code == 200
+    assert user.get("/api/routines").status_code == 401  # old sessions end
+    login = _client(app).post("/api/auth/login", json={"email": "forgot@example.com",
+                                                        "password": res.json()["initial_password"]})
+    assert login.status_code == 200
+
+
+def test_bootstrap_admin_is_created_once_and_never_promotes(multi_user):
+    from src.core.auth import get_auth_store
+
+    store = get_auth_store()
+    taken = store.create_user("owner@example.com", PASSWORD)
+    assert store.ensure_bootstrap_admin("owner@example.com") is None  # registered first: not promoted
+    assert store.get_user(taken.id).is_admin is False
+    generated = store.ensure_bootstrap_admin("admin@example.com")
+    assert generated and store.get_user_by_email("admin@example.com").is_admin
+    assert store.ensure_bootstrap_admin("second@example.com") is None  # an admin exists
+    assert store.count_admins() == 1
+
+
+def test_registration_can_be_closed(app, monkeypatch):
+    monkeypatch.setattr(settings, "auth_allow_signup", False)
+    c = _client(app)
+    assert c.get("/api/auth/config").json()["signup_enabled"] is False
+    res = _register(c, "closed@example.com")
+    assert res.status_code == 403 and res.json()["error"] == "signup_disabled"
+
+
+def test_successful_registrations_are_limited_per_address(app, monkeypatch):
+    monkeypatch.setattr(settings, "auth_signup_max_per_ip", 3)
+    for i in range(3):
+        assert _register(_client(app), f"bulk{i}@example.com").status_code == 201
+    res = _register(_client(app), "bulk3@example.com")
+    assert res.status_code == 429
+
+
+def test_sign_out_everywhere_revokes_sessions_and_tokens(app):
+    first, second = _client(app), _client(app)
+    _register(first, "every@example.com")
+    second.post("/api/auth/login", json={"email": "every@example.com", "password": PASSWORD})
+    secret = first.post("/api/account/tokens", json={"name": "Alexa+"}).json()["token"]["token"]
+    machine = TestClient(app, headers={"Authorization": f"Bearer {secret}"})
+    assert machine.post("/api/auth/sessions/revoke-all").status_code == 403  # a token cannot do it
+    assert first.post("/api/auth/sessions/revoke-all").status_code == 200
+    for client in (first, second, machine):
+        assert client.get("/api/routines").status_code == 401
+
+
+def test_sessions_slide_when_used(multi_user, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    from src.core.auth import get_auth_store
+    from src.core.auth.store import digest, iso
+
+    store = get_auth_store()
+    user = store.create_user("slide@example.com", PASSWORD)
+    token = store.create_session(user.id)
+    soon = iso(datetime.now(timezone.utc) + timedelta(hours=1))
+    with store._conn() as conn:
+        conn.execute("UPDATE sessions SET expires_at = ? WHERE token_hash = ?", (soon, digest(token)))
+    assert store.user_for_session(token) is not None
+    with store._conn() as conn:
+        renewed = conn.execute("SELECT expires_at FROM sessions WHERE token_hash = ?", (digest(token),)).fetchone()[0]
+    assert renewed > soon
+
+
+def test_audit_log_holds_no_personal_data_and_is_erased(app):
+    from src.core.auth import get_auth_store
+
+    admin, admin_id = _admin_client(app)
+    user = _client(app)
+    uid = _register(user, "audited@example.com").json()["user"]["id"]
+    _client(app).post("/api/auth/login", json={"email": "audited@example.com", "password": "wrong password 1"})
+    admin.post(f"/api/admin/users/{uid}/status", json={"status": "disabled"})
+    store = get_auth_store()
+    events = [e["event"] for e in store.list_audit(user_id=uid)]
+    assert "login_failed" in events and "admin_user_disabled" in events
+    dump = json.dumps(store.list_audit(limit=1000))
+    assert "audited@example.com" not in dump and "testclient" not in dump
+    store.delete_user(uid)
+    assert store.list_audit(user_id=uid) == []
+
+
+def test_password_hashes_use_64_mib_scrypt_and_upgrade(multi_user, monkeypatch):
+    from src.core.auth import get_auth_store
+
+    monkeypatch.setattr(passwords, "_LOG2_N", 10)
+    monkeypatch.setattr(passwords, "_P", 1)
+    store = get_auth_store()
+    user = store.create_user("hash@example.com", PASSWORD)
+    monkeypatch.setattr(passwords, "_P", 2)  # parameters changed since the hash was made
+    assert store.authenticate("hash@example.com", PASSWORD) is not None
+    with store._conn() as conn:
+        upgraded = conn.execute("SELECT password_hash FROM users WHERE id = ?", (user.id,)).fetchone()[0]
+    assert upgraded.startswith("scrypt$10$8$2$")
+
+
+# ---------------------------------------------------------------------------
+# One Bee account per EXAMEN user (ported from `sessions`)
+# ---------------------------------------------------------------------------
+
+def test_a_bee_account_links_to_one_user_only(multi_user, monkeypatch):
+    from src.core.auth import get_auth_store
+    from src.core.tenancy import tenant_bee_dir
+    from src.ingestion.stream_convo import BeeClient
+    from src.serving import auth_routes
+
+    store = get_auth_store()
+    alice = store.create_user("bee-a@example.com", PASSWORD)
+    bob = store.create_user("bee-b@example.com", PASSWORD)
+    logged_out = []
+
+    async def _me(self, args, timeout=None):
+        return {"id": 4242, "first_name": "Ada"}  # both logged into the same Bee account
+
+    async def _logout(user_id=None, build_cmd=None):
+        logged_out.append(user_id)
+        return True
+
+    monkeypatch.setattr(BeeClient, "run_json", _me)
+    monkeypatch.setattr(auth_routes, "bee_logout", _logout)
+    for uid in (alice.id, bob.id):
+        (tenant_bee_dir(uid) / "token-production").write_text("t")
+
+    first = asyncio.run(auth_routes.link_bee_account(alice.id))
+    assert first.state == "linked" and first.bee_user_id == 4242 and first.bee_first_name == "Ada"
+    second = asyncio.run(auth_routes.link_bee_account(bob.id))
+    assert second.state == "conflict" and second.bee_user_id is None
+    assert logged_out == [bob.id]  # only the second user's folder is logged out
+    assert store.get_bee_link(alice.id).state == "linked"
+    store.delete_user(alice.id)  # erasure frees the Bee account
+    assert store.find_bee_link(4242) is None

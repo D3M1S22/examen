@@ -1811,9 +1811,9 @@ _tenant_runtimes: Dict[str, "EventEngineRuntime"] = {}
 def get_event_engine() -> EventEngine:
     """The event engine of the current tenant (one per user), or the legacy singleton."""
     from src.core.storage import get_storage_store
-    from src.core.tenancy import get_tenant_id
+    from src.core.tenancy import resolve_tenant
 
-    tenant = get_tenant_id()
+    tenant = resolve_tenant()
     if tenant is not None:
         engine = _tenant_engines.get(tenant)
         if engine is None:
@@ -1828,9 +1828,9 @@ def get_event_engine() -> EventEngine:
 
 
 def get_event_engine_runtime() -> EventEngineRuntime:
-    from src.core.tenancy import get_tenant_id
+    from src.core.tenancy import resolve_tenant
 
-    tenant = get_tenant_id()
+    tenant = resolve_tenant()
     if tenant is not None:
         runtime = _tenant_runtimes.get(tenant)
         if runtime is None:

@@ -27,6 +27,8 @@ from datetime import datetime, timedelta
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Set, Tuple
 
 from src.core.config import settings
+from src.core.limits import llm_slot
+from src.core.tenancy import get_tenant_id
 from src.core.schemas import (
     BackfillEstimate,
     BackfillPlan,
@@ -625,11 +627,12 @@ class ReplayExecutor:
             prior = "\n".join(p for p in (prior, hint) if p)
         active = tasks_active_at(tasks, item.ts)
         try:
-            return await self.classify(
-                transcript=item.utterance.text,
-                active_tasks=active or None,
-                prior_context=prior or None,
-            )
+            async with llm_slot():  # shared with the live ingestion of every user
+                return await self.classify(
+                    transcript=item.utterance.text,
+                    active_tasks=active or None,
+                    prior_context=prior or None,
+                )
         except Exception as e:
             logger.warning(f"Backfill screening failed for {item.source_key}: {e}")
             return None
@@ -735,9 +738,11 @@ class ReplayExecutor:
                     "source_key": item.source_key,
                     "ingest_source": "backfill",
                     "ingest_run_id": run.id,
+                    "user_id": get_tenant_id(),
                 }
                 try:
-                    result = await asyncio.to_thread(self.dispatch, payload)
+                    async with llm_slot():
+                        result = await asyncio.to_thread(self.dispatch, payload)
                 except Exception as e:
                     logger.warning(f"Backfill dispatch failed for {item.source_key}: {e}")
                     result = {"status": "error"}
@@ -884,7 +889,9 @@ class ReplayExecutor:
             hint = self.engine.active_event_hint()
             prior = "\n".join(p for p in (prior, hint) if p)
         try:
-            return await self.classify(transcript=transcript, active_tasks=active or None, prior_context=prior or None)
+            async with llm_slot():  # shared with the live ingestion of every user
+                return await self.classify(transcript=transcript, active_tasks=active or None,
+                                           prior_context=prior or None)
         except Exception as e:
             logger.warning(f"Backfill screening failed for {key}: {e}")
             return None
@@ -1439,9 +1446,9 @@ _tenant_services: Dict[str, BackfillService] = {}
 
 def get_backfill_service() -> BackfillService:
     """The backfill service of the current tenant (one per user), or the legacy singleton."""
-    from src.core.tenancy import get_tenant_id
+    from src.core.tenancy import resolve_tenant
 
-    tenant = get_tenant_id()
+    tenant = resolve_tenant()
     if tenant is not None:
         service = _tenant_services.get(tenant)
         if service is None:

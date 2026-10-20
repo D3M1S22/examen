@@ -5,6 +5,7 @@
 | ``GET  /api/auth/config`` | Whether accounts are enabled, password policy, privacy-notice version |
 | ``POST /api/auth/register`` | Create an account (email, password, explicit privacy consent) and sign in |
 | ``POST /api/auth/login`` / ``POST /api/auth/logout`` | Sign in / out (HttpOnly session cookie) |
+| ``POST /api/auth/sessions/revoke-all`` | Sign out everywhere: every session and MCP access token |
 | ``GET  /api/auth/session`` | Who is signed in, with their Bee state |
 | ``GET/PATCH/DELETE /api/account`` | Profile; erasure of the whole account (Art. 17) |
 | ``POST /api/account/password`` | Change password (other sessions are signed out) |
@@ -29,7 +30,7 @@ from typing import Any, Callable, Dict, Optional
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
-from src.core.auth import AuthError, User, get_auth_store
+from src.core.auth import AuthError, BeeLink, User, get_auth_store
 from src.core.auth.rate_limit import login_limiter
 from src.core.config import settings
 from src.core.tenancy import delete_tenant_data, get_tenant_id, tenant_has_bee_login, tenant_scope
@@ -47,9 +48,47 @@ class TenantHooks:
     broadcast: Callable[..., None]
     invalidate_bee_status: Callable[..., None]
     bee_telemetry: Callable[[], Dict[str, Any]]
+    # True while the user's live Bee stream runs (admin overview); never touches the user's data
+    is_streaming: Callable[[str], bool] = lambda _uid: False
 
 
 _pairings: Dict[Optional[str], BeePairing] = {}
+
+BEE_ACCOUNT_TAKEN = "This Bee account is already connected to another EXAMEN account."
+
+
+async def link_bee_account(user_id: str) -> BeeLink:
+    """After a successful `bee login`: identify the Bee account (`bee me`) and bind it to the user.
+
+    A Bee account belongs to at most one EXAMEN user (two accounts reading one Bee would duplicate
+    every action, contact and event). On a conflict the new login is removed from this user's folder
+    only; the account that already holds the Bee is untouched.
+    """
+    from src.ingestion.stream_convo import BeeClient
+
+    store = get_auth_store()
+    link = store.get_bee_link(user_id)
+    with tenant_scope(user_id):
+        client = BeeClient()  # captures this user's BEE_CONFIG_DIR
+    me = await client.run_json(["me"])
+    if not me or me.get("id") is None:
+        link.state, link.last_error = "invalid", "Bee login saved but the account could not be verified: try again."
+        return store.save_bee_link(link)
+    bee_user_id = int(me["id"])
+    owner = store.find_bee_link(bee_user_id)
+    if owner is not None and owner.user_id != user_id:
+        await bee_logout(user_id)
+        link.state, link.last_error = "conflict", BEE_ACCOUNT_TAKEN
+        link.bee_user_id = link.bee_first_name = None
+        store.audit("bee_conflict", user_id=user_id)
+        return store.save_bee_link(link)
+    newly = link.state != "linked" or link.bee_user_id != bee_user_id
+    link.state, link.last_error = "linked", None
+    link.bee_user_id, link.bee_first_name = bee_user_id, (me.get("first_name") or "").strip() or None
+    if newly:
+        link.linked_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        store.audit("bee_linked", user_id=user_id)
+    return store.save_bee_link(link)
 
 
 def _pairing_for(tenant: Optional[str], hooks: TenantHooks) -> BeePairing:
@@ -58,6 +97,10 @@ def _pairing_for(tenant: Optional[str], hooks: TenantHooks) -> BeePairing:
         async def on_connected(snapshot: Dict[str, Any], _t=tenant) -> None:
             hooks.invalidate_bee_status(tenant=_t)
             if _t is not None:
+                link = await link_bee_account(_t)
+                if link.state != "linked":
+                    hooks.broadcast("bee_link_error", {"state": link.state, "message": link.last_error}, tenant=_t)
+                    return
                 hooks.start_runtime(_t)
             hooks.broadcast("bee_connected", {"account": snapshot.get("account")}, tenant=_t)
 
@@ -116,11 +159,27 @@ def _current_user() -> Optional[User]:
 
 def register_auth_routes(mcp: Any, hooks: TenantHooks) -> None:
 
-    def bee_state(tenant: Optional[str]) -> Dict[str, Any]:
-        pairing = _pairings.get(tenant)
+    def pairing_snapshot(tenant: Optional[str], pairing: Optional[BeePairing]) -> Dict[str, Any]:
+        """The pairing state, with the outcome of the Bee-account check (conflict / invalid) on top."""
         snap = pairing.snapshot() if pairing else {"status": "idle", "connected": False}
+        if tenant is None or snap.get("status") in ("starting", "pending"):
+            return snap
+        link = get_auth_store().get_bee_link(tenant)
+        if link.state in ("conflict", "invalid"):
+            return {**snap, "status": link.state, "connected": False, "pairing_url": None, "error": link.last_error}
+        if snap.get("status") == "connected" and link.state != "linked":
+            # `bee login` finished; `bee me` and the one-Bee-per-user check are still running
+            return {**snap, "status": "verifying", "connected": False}
+        return snap
+
+    def bee_state(tenant: Optional[str]) -> Dict[str, Any]:
+        snap = pairing_snapshot(tenant, _pairings.get(tenant))
         paired = tenant_has_bee_login(tenant) if tenant else None
-        return {"pairing": snap, "linked": bool(paired) if tenant else None}
+        state: Dict[str, Any] = {"pairing": snap, "linked": bool(paired) if tenant else None}
+        if tenant is not None:
+            link = get_auth_store().get_bee_link(tenant)
+            state["link"] = {"state": link.state, "account": link.bee_first_name, "error": link.last_error}
+        return state
 
     # ------------------------------------------------------------------
     # Sign up / in / out
@@ -132,15 +191,21 @@ def register_auth_routes(mcp: Any, hooks: TenantHooks) -> None:
             "auth_enabled": settings.auth_enabled,
             "min_password_length": settings.auth_min_password_length,
             "privacy_notice_version": settings.privacy_notice_version,
+            "signup_enabled": settings.auth_allow_signup,
         })
 
     @mcp.custom_route("/api/auth/register", methods=["POST"])
     async def api_auth_register(request: Request) -> JSONResponse:
         if not settings.auth_enabled:
             return _disabled()
+        if not settings.auth_allow_signup:
+            return JSONResponse({"error": "signup_disabled",
+                                 "message": "Registration is closed on this server: ask an administrator."},
+                                status_code=403)
         body = await _json(request)
         keys = [_client_key(request)]
-        wait = login_limiter.blocked(keys)
+        signup_key = "signup-" + keys[0]  # successful registrations per address (AUTH_SIGNUP_MAX_PER_IP)
+        wait = login_limiter.blocked([*keys, signup_key])
         if wait:
             return JSONResponse({"error": "rate_limited", "message": "Too many attempts. Try again later.",
                                  "retry_after_seconds": int(wait) + 1}, status_code=429)
@@ -156,6 +221,7 @@ def register_auth_routes(mcp: Any, hooks: TenantHooks) -> None:
         except AuthError as e:
             login_limiter.fail(keys)
             return _error(e)
+        login_limiter.record([signup_key])
         token = store.create_session(user.id)
         hooks.start_runtime(user.id)
         response = JSONResponse({"authenticated": True, "user": user.public()}, status_code=201)
@@ -178,6 +244,9 @@ def register_auth_routes(mcp: Any, hooks: TenantHooks) -> None:
         user = await asyncio.to_thread(store.authenticate, email, str(body.get("password") or ""))
         if user is None:
             login_limiter.fail(keys)
+            known = store.get_user_by_email(email)
+            if known is not None:
+                store.audit("login_failed", user_id=known.id)
             return JSONResponse({"error": "invalid_credentials", "message": "Invalid email or password."},
                                 status_code=401)
         login_limiter.clear([f"email:{email}"])
@@ -197,6 +266,22 @@ def register_auth_routes(mcp: Any, hooks: TenantHooks) -> None:
             return JSONResponse({"success": True})
         get_auth_store().revoke_session(read_cookie(request.scope))
         response = JSONResponse({"success": True, "message": "Signed out. Your Bee keeps listening for you."})
+        _clear_session_cookie(response, request)
+        return response
+
+    @mcp.custom_route("/api/auth/sessions/revoke-all", methods=["POST"])
+    async def api_auth_revoke_all(request: Request) -> JSONResponse:
+        """Signs the caller out everywhere: every browser session and every MCP access token."""
+        if not settings.auth_enabled:
+            return _disabled()
+        user = _current_user()
+        if user is None:
+            return JSONResponse({"error": "authentication_required"}, status_code=401)
+        store = get_auth_store()
+        store.revoke_user_sessions(user.id)
+        store.revoke_user_tokens(user.id)
+        store.audit("sessions_revoked", user_id=user.id, actor_id=user.id)
+        response = JSONResponse({"success": True, "message": "Signed out on every device; access tokens revoked."})
         _clear_session_cookie(response, request)
         return response
 
@@ -278,6 +363,7 @@ def register_auth_routes(mcp: Any, hooks: TenantHooks) -> None:
         drop_tenant_store(user_id)
         await asyncio.to_thread(delete_tenant_data, user_id)
         get_auth_store().delete_user(user_id)
+        get_auth_store().audit("account_erased")  # no user reference survives the erasure
         logger.info("Account erased")
 
     @mcp.custom_route("/api/account/password", methods=["POST"])
@@ -362,13 +448,18 @@ def register_auth_routes(mcp: Any, hooks: TenantHooks) -> None:
             if tenant is not None and tenant_has_bee_login(tenant):
                 return JSONResponse({"bee_pairing": {"status": "connected", "connected": True},
                                      "message": "A Bee is already connected to this account."})
+            if tenant is not None:
+                link = get_auth_store().get_bee_link(tenant)
+                if link.state in ("conflict", "invalid"):  # a new attempt clears the previous outcome
+                    link.state, link.last_error = "unlinked", None
+                    get_auth_store().save_bee_link(link)
             snap = await pairing.start()
             return JSONResponse({"bee_pairing": snap}, status_code=200 if snap["status"] != "failed" else 502)
         if request.method == "DELETE":
             await pairing.cancel()
             return JSONResponse({"bee_pairing": pairing.snapshot()})
-        snap = pairing.snapshot()
-        if tenant is not None and tenant_has_bee_login(tenant) and snap["status"] != "pending":
+        snap = pairing_snapshot(tenant, pairing)
+        if tenant is not None and tenant_has_bee_login(tenant) and snap["status"] not in ("pending", "invalid"):
             snap = {**snap, "status": "connected", "connected": True}
         return JSONResponse({"bee_pairing": snap})
 
@@ -383,6 +474,8 @@ def register_auth_routes(mcp: Any, hooks: TenantHooks) -> None:
             if task is not None:
                 await asyncio.wait({task}, timeout=10)
         ok = await bee_logout(tenant)
+        if tenant is not None:
+            get_auth_store().delete_bee_link(tenant)
         hooks.invalidate_bee_status(tenant=tenant)
         hooks.broadcast("bee_disconnected", {}, tenant=tenant)
         return JSONResponse({"success": ok, "connected": False,

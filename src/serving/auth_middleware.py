@@ -34,6 +34,14 @@ PUBLIC_API_PATHS: Set[str] = {
 
 _UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
+# Account, Bee and admin management need the dashboard session: an MCP access token (Alexa+, a script)
+# must not mint tokens, export or erase the account, or pair / disconnect the Bee
+SESSION_ONLY_PREFIXES = ("/api/account", "/api/bee/", "/api/auth/bee-", "/api/auth/sessions/", "/api/admin/")
+
+
+def is_session_only(path: str) -> bool:
+    return path.startswith(SESSION_ONLY_PREFIXES)
+
 
 def allowed_origins() -> Set[str]:
     return {o.strip().rstrip("/") for o in (settings.cors_allowed_origins or "").split(",") if o.strip()}
@@ -121,12 +129,18 @@ class AuthMiddleware:
             await self._reject(send, 401, "authentication_required", "Sign in to continue.",
                                bearer=path.startswith("/mcp"))
             return
+        if user is not None and not via_cookie and is_session_only(path):
+            await self._reject(send, 403, "session_required", "Sign in on the dashboard for this action.")
+            return
         if via_cookie and scope.get("method") in _UNSAFE_METHODS and not origin_allowed(scope):
             await self._reject(send, 403, "origin_not_allowed", "Request origin not allowed.")
             return
 
         state = scope.setdefault("state", {})
         state["examen_user_id"] = user.id if user else None
+        # "session" (dashboard cookie) or "token" (MCP access token): account and Bee management
+        # routes accept only a session (src/serving/auth_routes.py)
+        state["examen_auth_method"] = None if user is None else ("session" if via_cookie else "token")
         tenant_token = set_tenant(user.id if user else None)
         try:
             await self.app(scope, receive, send)

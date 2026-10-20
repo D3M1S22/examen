@@ -67,7 +67,8 @@ BASELINE_SEED_TASKS = [
 
 def reset_database(backup: bool = True, seed: bool = False, db_path: str | None = None) -> None:
     """Removes the existing database file and reinitializes a fresh schema."""
-    target_path = db_path or settings.sqlite_db_path
+    # Multi-user: the current user's database (EXAMEN_CLI_USER); legacy mode: SQLITE_DB_PATH
+    target_path = db_path or getattr(get_storage_store(), "db_path", None) or settings.sqlite_db_path
 
     print(f"\n{BOLD}{CYAN}=== EXAMEN Database Reset ==={RESET}")
     print(f"Target Database: {BOLD}{target_path}{RESET}")
@@ -134,4 +135,7 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    from src.core.cli import cli_tenant
+
+    with cli_tenant():  # resets this user's database only (EXAMEN_CLI_USER=<email>)
+        main()

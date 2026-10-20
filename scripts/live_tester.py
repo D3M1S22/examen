@@ -728,4 +728,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    from src.core.cli import cli_tenant
+
+    with cli_tenant():  # EXAMEN_CLI_USER=<email> when accounts are enabled
+        main()

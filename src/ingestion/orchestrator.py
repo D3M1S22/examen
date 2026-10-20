@@ -31,6 +31,8 @@ from src.ingestion.gatekeeper import aclassify_chunk, is_noop
 from src.ingestion.ring_buffer import ContextRingBuffer
 from src.core.config import settings
 from src.core.storage import get_storage_store
+from src.core.limits import llm_slot
+from src.core.tenancy import get_tenant_id
 from src.core.schemas import CoverageGap, CoverageInterval, LocationTelemetry, UtteranceChunk
 
 # Bounded caches keyed by Bee utterance id (speaker tags, utterance → conversation uuid)
@@ -269,11 +271,12 @@ class BeeStreamOrchestrator(Debug):
         event_hint = self.engine.active_event_hint() if self.engine_enabled else ""
         prior_context = "\n".join(part for part in (rolling_hint, event_hint) if part) or None
 
-        classification = await aclassify_chunk(
-            transcript=chunk.text,
-            active_tasks=active_task_titles if active_task_titles else None,
-            prior_context=prior_context,
-        )
+        async with llm_slot():  # shared across users (MAX_CONCURRENT_LLM_CALLS)
+            classification = await aclassify_chunk(
+                transcript=chunk.text,
+                active_tasks=active_task_titles if active_task_titles else None,
+                prior_context=prior_context,
+            )
         chunk.categories = list(classification.categories)
 
         # Feed the event engine BEFORE the pipeline, so a chunk that opens an event is already
@@ -313,6 +316,8 @@ class BeeStreamOrchestrator(Debug):
             "event_managed": event_id is not None,
             "source_key": chunk.source_key,
             "ingest_source": "live",
+            # The tenant must travel with the payload: a remote AgentCore runtime has no request context
+            "user_id": get_tenant_id(),
         }
 
         try:
@@ -320,7 +325,8 @@ class BeeStreamOrchestrator(Debug):
             # agent_invocation is synchronous: keep it off the event loop (SSE/REST stay responsive)
             self.inflight_dispatches += 1
             try:
-                result = await asyncio.to_thread(agent_invocation, payload)
+                async with llm_slot():
+                    result = await asyncio.to_thread(agent_invocation, payload)
             finally:
                 self.inflight_dispatches -= 1
         except Exception as e:
