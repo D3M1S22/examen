@@ -135,3 +135,9 @@ Whenever a friction point or roadblock is encountered during development, docume
 * **Friction Encountered:** `FastMCP(...)` enables DNS-rebinding protection with an allow-list of `localhost` / `127.0.0.1` only, so any other `Host` header gets `421 Invalid Host header`, with only a warning in the logs.
 * **Workaround / Resolution:** `MCP_ALLOWED_HOSTS` builds a `TransportSecuritySettings` allow-list (`"*"` disables the check).
 * **Platform Feedback:** Mention the default allow-list prominently in the FastMCP deployment docs and include the rejected host in the HTTP response body.
+
+### [2026-10-20] - MCP Python SDK / Tool calls keep the context of the request that opened the session
+* **Context:** Resolving the EXAMEN user of each MCP tool call (`sessions` branch, compared with `feature/multi-user-auth`).
+* **Friction Encountered:** In stateful streamable HTTP, tools run in the session's task, created during the `initialize` request: `contextvars` set by an ASGI middleware on later requests do not reach them. A different user who reuses an `mcp-session-id` was served the data of the user who opened the session. A test that opens a new session per call cannot see it.
+* **Workaround / Resolution:** `tenant_tool` reads the user from the HTTP request that carries each call (`ctx.request_context.request.state`) and enters `tenant_scope` per call; a regression test reuses one session with two users' tokens.
+* **Platform Feedback:** Document that request-scoped context does not propagate into tool handlers, or bind sessions to the authenticated principal by default.

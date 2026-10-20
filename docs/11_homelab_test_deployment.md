@@ -49,7 +49,7 @@ The reverse proxy disables buffering (`proxy_buffering off`, 1 h read timeout), 
 
 ## 3. Accounts and Bee login on the server
 
-Since 2026-10-20 the instance is multi-user ([13_multi_user_accounts.md](13_multi_user_accounts.md)): each person creates an account in the dashboard and pairs **their own** Bee from *Account → Bee device* by scanning a QR code. Tokens and data live under `/var/lib/examen/data/users/<id>/` (`EXAMEN_DATA_DIR`, set in the systemd unit); nobody logs in to Bee from the shell any more. The redeploy script never touches `/data/` and the old single-user token in `/var/lib/examen/.bee/` is no longer used.
+Once the multi-user code is on `main` and rolled out (§3.1), the instance is multi-user ([13_multi_user_accounts.md](13_multi_user_accounts.md)): each person creates an account in the dashboard (unless `AUTH_ALLOW_SIGNUP=false`) and pairs **their own** Bee from *Account → Bee device* by scanning a QR code. One Bee account can belong to one EXAMEN account only. The admin (`EXAMEN_BOOTSTRAP_ADMIN`) manages accounts from *Account → Admin*: disable, reset a password (one-time password), create an account. Tokens and data live under `/var/lib/examen/data/users/<id>/` (`EXAMEN_DATA_DIR`, set in the systemd unit); nobody logs in to Bee from the shell any more. The redeploy script never touches `/data/` and the old single-user token in `/var/lib/examen/.bee/` is no longer used.
 
 ```bash
 # Move the data collected before accounts existed into the owner's account (once):
@@ -62,13 +62,30 @@ ssh -t root@192.168.1.192 'cd /opt/examen && sudo -u examen -H EXAMEN_DATA_DIR=/
 
 Add the LAN host name to `MCP_ALLOWED_HOSTS` in `/opt/examen/.env` (`examen.deggio.local,examen.deggio.local:*`), otherwise `/mcp` answers `421` behind Nginx Proxy Manager. With `AUTH_ENABLED=false` the old single-user behaviour (one shell `bee login` for the host) still applies.
 
+### 3.1 Rolling out multi-user on the running instance (once)
+
+The instance runs the single-user `main` until then. Its `update.sh` checks `/api/status`, which answers `401` with accounts on, so the first update must be told to check `/api/health`:
+
+1. `ssh root@192.168.1.192 'systemctl stop examen-update.timer'`.
+2. In `/opt/examen/.env`:
+   - `AUTH_ENABLED=true`;
+   - `EXAMEN_BOOTSTRAP_ADMIN=<admin email>` (optionally `EXAMEN_BOOTSTRAP_ADMIN_PASSWORD`);
+   - `AUTH_ALLOW_SIGNUP=true|false`;
+   - `MCP_ALLOWED_HOSTS=localhost:*,127.0.0.1:*,examen.deggio.local,examen.deggio.local:*`.
+3. `ssh root@192.168.1.192 'EXAMEN_HEALTH_URL=http://127.0.0.1:8000/api/health examen-update --force'`: pulls `main`, rebuilds the dashboard (new `qrcode` dependency), installs the unit with `EXAMEN_DATA_DIR`, restarts and checks `/api/health`. Without `EXAMEN_BOOTSTRAP_ADMIN_PASSWORD`, read the one-time admin password with `journalctl -u examen | grep "Bootstrap admin"`.
+4. The owner registers (or signs in as admin), runs `claim-legacy-db` (above), then pairs the Bee again with the QR code. Delete the old host token: `rm -rf /var/lib/examen/.bee`.
+5. Remove the temporary drop-in `/etc/systemd/system/examen-update.service.d/health.conf`, then `systemctl daemon-reload && systemctl start examen-update.timer`. Later updates use the new script, which checks `/api/health`.
+
 ## 4. Operations
 
 ```bash
 ssh root@192.168.1.192 'journalctl -u examen -f'                          # logs
-curl -s http://examen.deggio.local/api/orchestrator/status | jq             # stream, transport, speaker tags, location
-curl -s http://examen.deggio.local/api/backfill/coverage | jq '.gaps'
-ssh root@192.168.1.192 'systemctl stop examen && rm /opt/examen/examen.db && systemctl start examen'   # reset data
+curl -s http://examen.deggio.local/api/health                              # liveness (public)
+# Per-user endpoints need that user's MCP access token (Account → MCP access tokens):
+curl -s -H "Authorization: Bearer $EXAMEN_TOKEN" http://examen.deggio.local/api/orchestrator/status | jq
+curl -s -H "Authorization: Bearer $EXAMEN_TOKEN" http://examen.deggio.local/api/backfill/coverage | jq '.gaps'
+ssh root@192.168.1.192 'cd /opt/examen && sudo -u examen -H EXAMEN_DATA_DIR=/var/lib/examen/data \
+  .venv/bin/python scripts/manage_users.py list'                            # accounts, admins, Bee links
 ```
 
 Through MCP from an agent: `get_lxc_service_logs(vmid=147, service_name="examen")`, `exec_lxc_command(vmid=147, ...)`.
@@ -78,4 +95,4 @@ Through MCP from an agent: `get_lxc_service_logs(vmid=147, service_name="examen"
 ## 5. Known limitations of the test instance
 
 - Plain HTTP on the LAN (like the other `*.deggio.local` services): no TLS, so session cookies and MCP tokens travel in clear text on the LAN. Do not expose it publicly; the AWS deployment adds CloudFront/TLS.
-- Each paired user runs their own `bee proxy` + stream: watch memory on the 2 GB container.
+- Each paired user runs their own `bee proxy` + stream: `MAX_ACTIVE_USERS` (5) caps them; measure memory before raising it on the 2 GB container.
