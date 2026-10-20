@@ -4,9 +4,14 @@ The live Bee stream is at-most-once: while EXAMEN is offline, speech is never sc
 history, so this module recovers it:
 
 - ``BackfillPlanner``: cost-free planning (REST only). Lists the Bee conversations of a window, picks
-  the final transcription and selects only the utterances live never analysed (doc 02 §4).
+  the final transcription and selects only the utterances live never analysed (doc 02 §4). With
+  ``BACKFILL_WHOLE_CONVERSATIONS`` every conversation overlapping the window is taken whole: a
+  recording is the unit, its un-analysed parts are selected even when they start before the gap.
 - ``ReplayExecutor``: replays the selection through the gatekeeper → isolated EventEngine on a virtual
-  clock → LangGraph pipeline, in chronological order, with utterance-time semantics (doc 03).
+  clock → LangGraph pipeline, in chronological order, with utterance-time semantics (doc 03). With
+  ``BACKFILL_SCREENING=window`` each conversation is screened in windows of consecutive utterances
+  (look-back and look-ahead context, one gatekeeper call per window); only windows with signal are
+  drilled down to single utterances (doc 07_conversation_windows).
 - ``BackfillService``: run queue, persistence/resume, startup & reconnect triggers, hand-over and
   stitching with the live engine, progress broadcasting.
 """
@@ -65,6 +70,9 @@ GATEKEEPER_SECONDS = 0.95
 PIPELINE_SECONDS = 3.5
 SYNTHESIS_SECONDS = 30.0
 QUALIFIED_RATIO = 0.10
+# Share of conversation windows the gatekeeper flags (a window is ~10 utterances, so higher than per utterance)
+QUALIFIED_WINDOW_RATIO = 0.25
+CONTEXT_LINE_CHARS = 400
 
 
 class BackfillRequestError(ValueError):
@@ -99,6 +107,37 @@ class PlanResult:
     conversations: Dict[int, BeeConversation] = field(default_factory=dict)
     deferred_spans: List[Span] = field(default_factory=list)
     created_at: float = field(default_factory=time.time)
+    # Selected utterances per conversation window that has any (window screening cost model)
+    window_selected: List[int] = field(default_factory=list)
+
+
+def analysed_transcription(conv: BeeConversation):
+    """The transcription a run analyses: the final one, or the realtime one while the final is missing."""
+    return conv.final_transcription() or conv.realtime_transcription()
+
+
+def conversation_windows(utterances: List[BeeUtterance], size: Optional[int] = None,
+                         max_words: Optional[int] = None) -> List[List[int]]:
+    """Splits a conversation into windows of consecutive utterances (indexes into ``utterances``).
+
+    Windows are cut over the *whole* transcript, so their boundaries do not depend on what live already
+    analysed: a resumed or repeated run sees the same windows. Bee final transcripts merge speech into
+    long utterances, hence the word cap next to the utterance count."""
+    size = max(1, size or settings.backfill_window_utterances)
+    max_words = max(1, max_words or settings.backfill_window_max_words)
+    windows: List[List[int]] = []
+    current: List[int] = []
+    words = 0
+    for i, utt in enumerate(utterances):
+        n = len(utt.text.split())
+        if current and (len(current) >= size or words + n > max_words):
+            windows.append(current)
+            current, words = [], 0
+        current.append(i)
+        words += n
+    if current:
+        windows.append(current)
+    return windows
 
 
 def speaker_role_for(speaker: Optional[str]) -> str:
@@ -106,10 +145,19 @@ def speaker_role_for(speaker: Optional[str]) -> str:
     return get_wearer_identity().role_for(speaker)
 
 
-def _context_line(utt: BeeUtterance) -> str:
+def _context_line(utt: BeeUtterance, max_chars: Optional[int] = None) -> str:
     role = speaker_role_for(utt.speaker)
     role_tag = f" ({role})" if role != "unknown" else ""
-    return f"[{utt.speaker or 'Speaker'}{role_tag}]: {utt.text.strip()}"
+    text = utt.text.strip()
+    if max_chars and len(text) > max_chars:
+        text = text[: max_chars - 1].rstrip() + "…"
+    return f"[{utt.speaker or 'Speaker'}{role_tag}]: {text}"
+
+
+def conversation_header(conv: BeeConversation) -> str:
+    """Bee's own title / summary of the recording, given to the gatekeeper as orientation."""
+    parts = [p for p in (conv.title, conv.short_summary) if p]
+    return f"Bee conversation: {' — '.join(parts)}" if parts else ""
 
 
 class _LiveEvidence:
@@ -216,20 +264,38 @@ class BackfillPlanner:
         now = self.clock()
         match_window = settings.backfill_match_window_seconds
         warnings: List[str] = []
+        whole = settings.backfill_whole_conversations
 
-        intervals = self.store.list_coverage(to_iso(start - match_window), to_iso(end + match_window))
+        summaries = await self.source.list_conversations(int(start * 1000), int(end * 1000))
+        need_detail = [c.id for c in summaries if not c.has_detail and c.end_time_ms is not None]
+        details = {c.id: c for c in summaries if c.has_detail}
+        if need_detail:
+            for conv in await self.source.get_conversations(need_detail):
+                details[conv.id] = conv
+
+        # Evidence (coverage, live ledger, earlier backfills) must span the whole conversations
+        ev_start, ev_end = start, end
+        if whole:
+            for conv in details.values():
+                tr = analysed_transcription(conv)
+                spans = [u.span_ms for u in (tr.sorted_utterances() if tr else []) if u.span_ms]
+                if spans:
+                    ev_start = min(ev_start, spans[0][0] / 1000.0)
+                    ev_end = max(ev_end, max(b for _, b in spans) / 1000.0)
+
+        intervals = self.store.list_coverage(to_iso(ev_start - match_window), to_iso(ev_end + match_window))
         backfill_spans = merge_spans(interval_spans(i for i in intervals if i.source == "backfill"))
         live_spans = merge_spans(interval_spans(i for i in intervals if i.source == "live"))
 
         counted = {"screened_noop", "qualified"} | (set() if retry_failed_live else {"failed"})
         live_rows = self.store.list_ledger_entries(
-            to_iso(start - match_window - 60), to_iso(end + match_window + 60), source="live"
+            to_iso(ev_start - match_window - 60), to_iso(ev_end + match_window + 60), source="live"
         )
         evidence = _LiveEvidence(live_rows, counted)
         retry_failed = sum(1 for r in live_rows if r.get("status") == "failed") if retry_failed_live else 0
         done_backfill = {
             r["source_key"]
-            for r in self.store.list_ledger_entries(to_iso(start - 86400), to_iso(end + 86400), source="backfill")
+            for r in self.store.list_ledger_entries(to_iso(ev_start - 86400), to_iso(ev_end + 86400), source="backfill")
             if r.get("status") != "failed"
         }
         horizon = now - settings.backfill_ledger_retention_days * 86400
@@ -239,14 +305,8 @@ class BackfillPlanner:
                 f"{to_iso(horizon)}: older speech is de-duplicated by coverage time only"
             )
 
-        summaries = await self.source.list_conversations(int(start * 1000), int(end * 1000))
-        need_detail = [c.id for c in summaries if not c.has_detail and c.end_time_ms is not None]
-        details = {c.id: c for c in summaries if c.has_detail}
-        if need_detail:
-            for conv in await self.source.get_conversations(need_detail):
-                details[conv.id] = conv
-
-        counts = {"total": len(summaries), "ready": 0, "deferred": 0, "fully_covered": 0, "to_process": 0}
+        counts = {"total": len(summaries), "ready": 0, "deferred": 0, "fully_covered": 0, "to_process": 0,
+                  "missed": 0, "partial": 0}
         utt_counts = {"total": 0, "duplicate_live": 0, "already_backfilled": 0, "selected": 0,
                       "retry_failed": retry_failed}
         result = PlanResult(plan=BackfillPlan(window_from=to_iso(start), window_to=to_iso(end),
@@ -293,6 +353,8 @@ class BackfillPlanner:
 
             history: List[BeeUtterance] = []
             selected_here = 0
+            considered_here = 0
+            selected_keys: Set[str] = set()
             for utt in final.sorted_utterances() if final else []:
                 prior = "\n".join(_context_line(h) for h in history[-3:])[-1000:]
                 history.append(utt)
@@ -300,8 +362,9 @@ class BackfillPlanner:
                 if span is None:
                     continue
                 t, t_end = span[0] / 1000.0, span[1] / 1000.0
-                if not (start <= t <= end):
+                if not whole and not (start <= t <= end):
                     continue
+                considered_here += 1
                 utt_counts["total"] += 1
                 key = bee_source_key(conv.id, final.id, utt.id)
                 if key in done_backfill or any(a <= t <= b for a, b in backfill_spans):
@@ -322,6 +385,7 @@ class BackfillPlanner:
                 if t < horizon and any(a <= t <= b for a, b in live_spans):
                     utt_counts["duplicate_live"] += 1
                     continue
+                selected_keys.add(key)
                 result.items.append(SelectedUtterance(
                     source_key=key,
                     conversation_id=conv.id,
@@ -334,12 +398,19 @@ class BackfillPlanner:
                 selected_here += 1
             if selected_here:
                 counts["to_process"] += 1
+                counts["missed" if selected_here == considered_here else "partial"] += 1
                 result.conversations[conv.id] = conv
+                utts = final.sorted_utterances()
+                for window in conversation_windows(utts):
+                    n = sum(1 for i in window if bee_source_key(conv.id, final.id, utts[i].id) in selected_keys)
+                    if n:
+                        result.window_selected.append(n)
             else:
                 counts["fully_covered"] += 1
 
         result.items.sort(key=lambda s: (s.ts, s.conversation_id, str(s.utterance.id)))
         utt_counts["selected"] = len(result.items)
+        utt_counts["windows"] = len(result.window_selected)
         if fallback_used:
             warnings.append(f"{fallback_used} conversation(s) have no final transcript yet: realtime transcript used")
         if deferred_ids:
@@ -359,25 +430,47 @@ class BackfillPlanner:
 def estimate_cost(result: PlanResult) -> BackfillEstimate:
     selected = len(result.items)
     qualified = math.ceil(selected * QUALIFIED_RATIO)
+    screen_calls = selected
+    if settings.backfill_screening == "window" and result.window_selected:
+        # One call per window, then one per selected utterance of the windows that carry signal
+        windows = len(result.window_selected)
+        avg = selected / windows
+        screen_calls = windows + math.ceil(windows * QUALIFIED_WINDOW_RATIO * avg)
     words: Dict[int, int] = {}
     for item in result.items:
         words[item.conversation_id] = words.get(item.conversation_id, 0) + len(item.utterance.text.split())
     events = sum(1 for w in words.values() if w >= settings.event_min_segment_words)
     concurrency = max(1, settings.backfill_screen_concurrency)
     return BackfillEstimate(
-        gatekeeper_calls=selected,
+        gatekeeper_calls=screen_calls,
         expected_qualified=qualified,
         events_expected=events,
         cost_usd=round(
-            selected * settings.backfill_cost_per_gatekeeper_call
+            screen_calls * settings.backfill_cost_per_gatekeeper_call
             + qualified * settings.backfill_cost_per_pipeline_call
             + events * settings.backfill_cost_per_event,
             4,
         ),
         duration_s=round(
-            selected * GATEKEEPER_SECONDS / concurrency + qualified * PIPELINE_SECONDS + events * SYNTHESIS_SECONDS, 1
+            screen_calls * GATEKEEPER_SECONDS / concurrency + qualified * PIPELINE_SECONDS + events * SYNTHESIS_SECONDS, 1
         ),
     )
+
+
+def window_selection(result: PlanResult) -> List[int]:
+    """Selected utterances per window that has any, recomputed from ``result.items``."""
+    keys = {item.source_key for item in result.items}
+    out: List[int] = []
+    for conv in result.conversations.values():
+        tr = analysed_transcription(conv)
+        if tr is None:
+            continue
+        utts = tr.sorted_utterances()
+        for window in conversation_windows(utts):
+            n = sum(1 for i in window if bee_source_key(conv.id, tr.id, utts[i].id) in keys)
+            if n:
+                out.append(n)
+    return out
 
 
 def over_budget(plan: BackfillPlan) -> bool:
@@ -401,6 +494,8 @@ def trim_to_budget(result: PlanResult) -> PlanResult:
     if result.items:
         plan.window_from = to_iso(result.items[0].ts)
     plan.utterances["selected"] = len(result.items)
+    result.window_selected = window_selection(result)
+    plan.utterances["windows"] = len(result.window_selected)
     plan.estimate = estimate_cost(result)
     plan.warnings.append(
         f"Budget guard: {len(dropped)} older utterance(s) skipped; the start of the window stays uncovered"
@@ -552,63 +647,19 @@ class ReplayExecutor:
         worker = asyncio.create_task(self._synthesis_worker(stop))
         failed_spans: List[Span] = []
         last_ts: Optional[float] = None
-        last_save = 0.0
         cancelled = False
-        current_conv: Optional[int] = None
-        conv_started: Set[int] = set()
+        self._last_save = 0.0
+        self._current_conv: Optional[int] = None
+        self._conv_started: Set[int] = set()
         items = self.result.items
         concurrency = 1 if settings.backfill_screen_with_event_hint else max(1, settings.backfill_screen_concurrency)
         batch_size = concurrency * 4
 
         try:
-            for batch_start in range(0, len(items), batch_size):
-                if self.is_cancelled():
-                    cancelled = True
-                    break
-                batch = items[batch_start: batch_start + batch_size]
-                semaphore = asyncio.Semaphore(concurrency)
-
-                async def _bounded(item: SelectedUtterance) -> Optional[ChunkClassification]:
-                    async with semaphore:
-                        return await self._screen(item, tasks)
-
-                classifications = await asyncio.gather(*(_bounded(i) for i in batch))
-                for item, classification in zip(batch, classifications):
-                    if self.is_cancelled():
-                        cancelled = True
-                        break
-                    conv = self.result.conversations[item.conversation_id]
-                    if item.conversation_id != current_conv:
-                        current_conv = item.conversation_id
-                        conv_start = (conv.start_ms or int(item.ts * 1000)) / 1000.0
-                        await self._advance(min(conv_start, item.ts))
-                        location = conv.location_telemetry()
-                        if location:
-                            await asyncio.to_thread(self.engine.on_location, location, self._vnow)
-                        await asyncio.to_thread(
-                            self.engine.on_bee_conversation, "new-conversation",
-                            {"conversation": {"id": conv.id, "uuid": conv.conversation_key}},
-                        )
-                    status = await self._process(item, conv, classification)
-                    if item.conversation_id not in conv_started:
-                        conv_started.add(item.conversation_id)
-                        title = conv.title or conv.short_summary
-                        if title:
-                            await asyncio.to_thread(
-                                self.engine.on_bee_conversation, "update-conversation",
-                                {"conversation": {"id": conv.id, "uuid": conv.conversation_key,
-                                                  "title": conv.title, "short_summary": conv.short_summary}},
-                            )
-                    if status == "failed":
-                        failed_spans.append((item.ts - 1.0, item.ts + 1.0))
-                    last_ts = item.ts
-                    run.last_source_key = item.source_key
-                    run.last_ts = to_iso(item.ts)
-                    if time.time() - last_save >= 2.0:
-                        last_save = time.time()
-                        self._save()
-                if cancelled:
-                    break
+            if settings.backfill_screening == "window":
+                cancelled, last_ts = await self._replay_windows(tasks, failed_spans)
+            else:
+                cancelled, last_ts = await self._replay_utterances(items, tasks, concurrency, batch_size, failed_spans)
 
             if not cancelled and self.engine.current_event() is not None:
                 await self._stitch_with_live()
@@ -641,7 +692,8 @@ class ReplayExecutor:
         return run
 
     async def _process(
-        self, item: SelectedUtterance, conv: BeeConversation, classification: Optional[ChunkClassification]
+        self, item: SelectedUtterance, conv: BeeConversation, classification: Optional[ChunkClassification],
+        context: Optional[str] = None,
     ) -> str:
         run = self.run
         await self._advance(item.ts)
@@ -669,7 +721,7 @@ class ReplayExecutor:
                     await asyncio.sleep(0.25)
                 payload = {
                     "raw_transcript": chunk.text,
-                    "historical_context": item.prior_context,
+                    "historical_context": context or item.prior_context,
                     "categories": classification.categories,
                     "confidence": classification.confidence,
                     "summary_hint": classification.summary_hint,
@@ -709,6 +761,186 @@ class ReplayExecutor:
         except NotImplementedError:
             pass
         return status
+
+    # -- replay loops ---------------------------------------------------------------
+
+    async def _enter_conversation(self, conv: BeeConversation, ts: float) -> None:
+        """First utterance of a conversation: move the clock, then location and Bee conversation events."""
+        if conv.id == self._current_conv:
+            return
+        self._current_conv = conv.id
+        conv_start = (conv.start_ms or int(ts * 1000)) / 1000.0
+        await self._advance(min(conv_start, ts))
+        location = conv.location_telemetry()
+        if location:
+            await asyncio.to_thread(self.engine.on_location, location, self._vnow)
+        await asyncio.to_thread(
+            self.engine.on_bee_conversation, "new-conversation",
+            {"conversation": {"id": conv.id, "uuid": conv.conversation_key}},
+        )
+
+    async def _after_first_chunk(self, conv: BeeConversation) -> None:
+        if conv.id in self._conv_started:
+            return
+        self._conv_started.add(conv.id)
+        if conv.title or conv.short_summary:
+            await asyncio.to_thread(
+                self.engine.on_bee_conversation, "update-conversation",
+                {"conversation": {"id": conv.id, "uuid": conv.conversation_key,
+                                  "title": conv.title, "short_summary": conv.short_summary}},
+            )
+
+    def _checkpoint(self, item: SelectedUtterance) -> None:
+        self.run.last_source_key = item.source_key
+        self.run.last_ts = to_iso(item.ts)
+        if time.time() - self._last_save >= 2.0:
+            self._last_save = time.time()
+            self._save()
+
+    async def _handle(self, item: SelectedUtterance, classification: Optional[ChunkClassification],
+                      failed_spans: List[Span], context: Optional[str] = None) -> str:
+        conv = self.result.conversations[item.conversation_id]
+        await self._enter_conversation(conv, item.ts)
+        status = await self._process(item, conv, classification, context=context)
+        await self._after_first_chunk(conv)
+        if status == "failed":
+            failed_spans.append((item.ts - 1.0, item.ts + 1.0))
+        self._checkpoint(item)
+        return status
+
+    async def _replay_utterances(self, items: List[SelectedUtterance], tasks: List[PlannedTask],
+                                 concurrency: int, batch_size: int, failed_spans: List[Span]
+                                 ) -> Tuple[bool, Optional[float]]:
+        """Legacy screening: one gatekeeper call per utterance, 3 lines of look-back."""
+        last_ts: Optional[float] = None
+        for batch_start in range(0, len(items), batch_size):
+            if self.is_cancelled():
+                return True, last_ts
+            batch = items[batch_start: batch_start + batch_size]
+            semaphore = asyncio.Semaphore(concurrency)
+
+            async def _bounded(item: SelectedUtterance) -> Optional[ChunkClassification]:
+                async with semaphore:
+                    return await self._screen(item, tasks)
+
+            classifications = await asyncio.gather(*(_bounded(i) for i in batch))
+            for item, classification in zip(batch, classifications):
+                if self.is_cancelled():
+                    return True, last_ts
+                await self._handle(item, classification, failed_spans)
+                last_ts = item.ts
+        return False, last_ts
+
+    def _plan_windows(self) -> List[Dict[str, Any]]:
+        """Conversation windows holding at least one selected utterance, in spoken order.
+
+        Each window carries its selected items and the text the gatekeeper sees: Bee's title/summary,
+        the utterances before the window (look-back), the whole window (selected or not, so replies to
+        speech analysed live stay readable) and the utterances after it (look-ahead)."""
+        by_key = {item.source_key: item for item in self.result.items}
+        ctx_n = max(0, settings.backfill_window_context_utterances)
+        out: List[Dict[str, Any]] = []
+        for conv in self.result.conversations.values():
+            tr = analysed_transcription(conv)
+            if tr is None:
+                continue
+            utts = tr.sorted_utterances()
+            for window in conversation_windows(utts):
+                selected = [by_key[k] for k in (bee_source_key(conv.id, tr.id, utts[i].id) for i in window) if k in by_key]
+                if not selected:
+                    continue
+                before = utts[max(0, window[0] - ctx_n): window[0]]
+                after = utts[window[-1] + 1: window[-1] + 1 + ctx_n]
+                out.append({
+                    "conv": conv,
+                    "items": selected,
+                    "ts": selected[0].ts,
+                    "header": conversation_header(conv),
+                    "before": [_context_line(u, CONTEXT_LINE_CHARS) for u in before],
+                    "lines": [_context_line(utts[i], CONTEXT_LINE_CHARS) for i in window],
+                    "after": [_context_line(u, CONTEXT_LINE_CHARS) for u in after],
+                })
+        out.sort(key=lambda w: (w["ts"], w["conv"].id))
+        return out
+
+    @staticmethod
+    def _window_context(window: Dict[str, Any], focus: Optional[str] = None) -> str:
+        parts: List[str] = []
+        if window["header"]:
+            parts.append(window["header"])
+        if window["before"]:
+            parts.append("Earlier in the conversation:\n" + "\n".join(window["before"]))
+        if focus is not None:
+            parts.append("This part of the conversation:\n" + "\n".join(window["lines"]))
+        if window["after"]:
+            parts.append("What was said next (context only, do not classify it):\n" + "\n".join(window["after"]))
+        return "\n\n".join(parts)
+
+    async def _screen_text(self, transcript: str, context: str, ts: float, tasks: List[PlannedTask],
+                           key: str) -> Optional[ChunkClassification]:
+        active = tasks_active_at(tasks, ts)
+        prior = context
+        if settings.backfill_screen_with_event_hint:
+            hint = self.engine.active_event_hint()
+            prior = "\n".join(p for p in (prior, hint) if p)
+        try:
+            return await self.classify(transcript=transcript, active_tasks=active or None, prior_context=prior or None)
+        except Exception as e:
+            logger.warning(f"Backfill screening failed for {key}: {e}")
+            return None
+
+    async def _replay_windows(self, tasks: List[PlannedTask], failed_spans: List[Span]
+                              ) -> Tuple[bool, Optional[float]]:
+        """Window screening: one call per conversation window; drill down only where there is signal.
+
+        Stage 1 classifies each window as a whole (look-back + look-ahead). A noop window - most of
+        ambient speech - is recorded utterance by utterance as noop with no further model call.
+        Stage 2, for windows with signal, screens each selected utterance with the window around it, so
+        the pipeline still extracts one action / contact / task per utterance, with idempotent ids."""
+        windows = self._plan_windows()
+        concurrency = 1 if settings.backfill_screen_with_event_hint else max(1, settings.backfill_screen_concurrency)
+        last_ts: Optional[float] = None
+        batch_size = concurrency * 2
+        for batch_start in range(0, len(windows), batch_size):
+            if self.is_cancelled():
+                return True, last_ts
+            batch = windows[batch_start: batch_start + batch_size]
+            semaphore = asyncio.Semaphore(concurrency)
+
+            async def _stage1(w: Dict[str, Any]) -> Optional[ChunkClassification]:
+                async with semaphore:
+                    self._count("window_calls")
+                    return await self._screen_text(
+                        "\n".join(w["lines"]), self._window_context(w), w["ts"], tasks,
+                        f"window@{w['items'][0].source_key}",
+                    )
+
+            verdicts = await asyncio.gather(*(_stage1(w) for w in batch))
+            for window, verdict in zip(batch, verdicts):
+                if self.is_cancelled():
+                    return True, last_ts
+                self._count("windows")
+                context = self._window_context(window, focus="")
+                if verdict is None or not _is_noop(verdict):
+                    # Signal (or the window call failed): screen the window's utterances one by one
+                    self._count("windows_with_signal")
+
+                    async def _stage2(item: SelectedUtterance) -> Optional[ChunkClassification]:
+                        async with semaphore:
+                            return await self._screen_text(item.utterance.text, context, item.ts, tasks,
+                                                           item.source_key)
+
+                    singles = await asyncio.gather(*(_stage2(i) for i in window["items"]))
+                else:
+                    singles = [ChunkClassification(categories=["noop"], confidence=verdict.confidence,
+                                                   summary_hint="window screened as noop")
+                               for _ in window["items"]]
+                for item, classification in zip(window["items"], singles):
+                    if self.is_cancelled():
+                        return True, last_ts
+                    await self._handle(item, classification, failed_spans, context=context)
+                    last_ts = item.ts
+        return False, last_ts
 
     async def _stitch_with_live(self) -> None:
         """S2 (doc 03 §7): the event the run ends inside continues in the live event → merge them."""
@@ -799,6 +1031,7 @@ class BackfillService:
         self._loop_task: Optional[asyncio.Task] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._running_run: Optional[str] = None
+        self._running_obj: Optional[BackfillRun] = None
         self._rehydrated = False
 
     @property
@@ -832,7 +1065,12 @@ class BackfillService:
         self._rehydrated = True
         try:
             for run in self.store.list_backfill_runs(statuses=list(ACTIVE_STATUSES), limit=50):
-                if run.status != "planned":
+                if run.cancel_requested:
+                    # Stopped before the restart: never resume it
+                    run.status = "cancelled"
+                    run.finished_at = run.finished_at or datetime.now().isoformat()
+                    self.store.save_backfill_run(run)
+                elif run.status != "planned":
                     run.status = "planned"
                     self.store.save_backfill_run(run)
         except NotImplementedError:
@@ -1004,17 +1242,23 @@ class BackfillService:
         return run
 
     def cancel(self, run_id: str) -> Optional[BackfillRun]:
+        """Stops a run. The request is persisted, so a restart never resumes a stopped run."""
         run = self.store.get_backfill_run(run_id)
         if run is None or run.is_terminal:
             return run
-        if run.status == "planned":
+        if run.status == "planned" and self._running_run != run_id:
             run.status = "cancelled"
+            run.cancel_requested = True
             run.finished_at = datetime.now().isoformat()
             self.store.save_backfill_run(run)
             self.broadcast("backfill_completed", self.progress_payload(run))
-        else:
-            self._cancelled.add(run_id)
-        return run
+            return run
+        self._cancelled.add(run_id)
+        live = self._running_obj if self._running_obj is not None and self._running_obj.id == run_id else run
+        live.cancel_requested = True
+        self.store.save_backfill_run(live)
+        self.broadcast("backfill_progress", {**self.progress_payload(live), "cancel_requested": True})
+        return live
 
     # -- triggers -----------------------------------------------------------------
 
@@ -1128,10 +1372,12 @@ class BackfillService:
         if run is None:
             return False
         self._running_run = run.id
+        self._running_obj = run
         try:
             await self._execute(run)
         finally:
             self._running_run = None
+            self._running_obj = None
         return True
 
     def _progress(self, run: BackfillRun) -> None:
@@ -1163,7 +1409,7 @@ class BackfillService:
             executor = ReplayExecutor(
                 run, result, store_getter=self._store_getter,
                 on_progress=self._progress,
-                is_cancelled=lambda: run.id in self._cancelled,
+                is_cancelled=lambda: run.cancel_requested or run.id in self._cancelled,
                 live_busy=self.live_busy,
                 live_engine_getter=self.live_engine_getter,
                 **self.executor_options,

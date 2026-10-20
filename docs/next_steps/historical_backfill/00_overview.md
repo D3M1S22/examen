@@ -1,6 +1,6 @@
 # ⏪ Historical Transcript Backfill — Overview
 
-> **Document Status:** Architectural Specification (not yet implemented)
+> **Document Status:** Implemented (phases 0–5 on 2026-10-19; conversation windows and persistent stop on 2026-10-20, see [07](07_conversation_windows.md))
 > **Related specs:** [Deep Topic Event Engine](../deep_topic_event_engine/00_overview.md), [02_gatekeeper_context_and_multimodal_telemetry.md](../02_gatekeeper_context_and_multimodal_telemetry.md), [08_real_telemetry_and_bee_hardware_spec.md](../../08_real_telemetry_and_bee_hardware_spec.md)
 > **Audience:** EXAMEN engineers implementing the ingestion, storage, serving and UI changes
 

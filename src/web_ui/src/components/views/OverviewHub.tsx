@@ -12,9 +12,10 @@ import {
 import useSWR from "swr";
 import { StatusBadge, DomainBadge } from "../ui/StatusBadge";
 import { RecoveredBadge } from "../ui/RecoveredBadge";
+import { BackfillStopButton } from "../ui/BackfillStopButton";
 import { speakAlexaReassurance } from "@/utils/audioEffects";
 import { getApiBaseUrl } from "@/utils/api";
-import { BUCKET_CLASS, bucketTone, formatDuration, formatRange, historyBadge } from "@/utils/backfill";
+import { BUCKET_CLASS, bucketTone, formatDuration, formatRange, historyBadge, isTerminal } from "@/utils/backfill";
 
 const coverageFetcher = (url: string) => fetch(`${getApiBaseUrl()}${url}`).then((res) => res.json());
 
@@ -50,6 +51,10 @@ export function OverviewHub({
   const liveEvent = engineStatus?.active_event || null;
   const history: HistoryTelemetry | undefined = statusData?.telemetry;
   const historyState = historyBadge(history, backfillProgress);
+  const historyRunId =
+    (backfillProgress && !isTerminal(backfillProgress.status) ? backfillProgress.run_id : null) ||
+    history?.backfill?.active_run?.run_id ||
+    null;
   // 7-day coverage strip (one bucket per day), refreshed with the status poll
   const { data: weekCoverage } = useSWR<CoverageResponse>(
     history?.backfill?.enabled ? "/api/backfill/coverage?bucket=day" : null,
@@ -201,6 +206,7 @@ export function OverviewHub({
             </div>
             <div className="mt-1 font-mono text-[8px] text-secondary tracking-widest uppercase">LAST 7 DAYS · COVERAGE</div>
           </div>
+          {historyRunId && historyState.tone === "running" && <BackfillStopButton runId={historyRunId} />}
           <button
             onClick={onOpenBackfill}
             className="px-4 py-2.5 rounded-xl border border-sky-500/40 bg-sky-950/30 hover:bg-sky-950/60 text-sky-300 font-mono text-[10px] font-bold tracking-widest uppercase transition-all shrink-0"

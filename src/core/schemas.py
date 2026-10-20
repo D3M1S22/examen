@@ -807,6 +807,7 @@ class BackfillRun(BaseModel):
     last_ts: Optional[str] = Field(default=None, description="Checkpoint: spoken time of the last committed utterance.")
     not_before: Optional[str] = Field(default=None, description="Earliest start (startup / reconnect delays).")
     confirm_over_budget: bool = Field(default=False, description="Manual confirmation of an over-budget estimate.")
+    cancel_requested: bool = Field(default=False, description="Persisted stop request: honoured after a restart too.")
     error: Optional[str] = None
     requested_by: Optional[str] = None
     created_at: str = Field(default_factory=lambda: datetime.now().isoformat())

@@ -3,6 +3,7 @@
 import React, { useState, useRef } from "react";
 import { BackfillProgress, HistoryTelemetry } from "@/types/schemas";
 import { formatDuration, formatRange, historyBadge } from "@/utils/backfill";
+import { BackfillStopButton } from "@/components/ui/BackfillStopButton";
 
 interface StatusDockProps {
   sseConnected?: boolean;
@@ -503,6 +504,12 @@ export function StatusDock({
                     <span>{history.backfill.queued}</span>
                   </div>
                 </div>
+
+                {historyActive && historyState.tone === "running" && historyActive.run_id && (
+                  <div className="mt-3">
+                    <BackfillStopButton runId={historyActive.run_id} />
+                  </div>
+                )}
 
                 <p className="mt-2 text-[10px] text-zinc-400 font-sans leading-relaxed">
                   Recovers Bee conversations recorded while EXAMEN was offline. Click to analyse a past period.

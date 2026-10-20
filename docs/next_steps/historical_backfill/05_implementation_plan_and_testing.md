@@ -14,7 +14,7 @@
 | 3 Replay executor | ✅ Implemented | `ReplayExecutor`, [event_engine.py](../../../src/ingestion/event_engine.py) (`ingest_source`/`run_id` scope, `advance_to`, `release_open_event`, `log_transition`), [persist.py](../../../src/pipeline/nodes/persist.py), [time_utils.py](../../../src/core/time_utils.py) | T-ISO, T-IDEM, T-TMP, T-CAN |
 | 4 Automatic triggers | ✅ Implemented | `BackfillService` (startup hand-over B1, reconnect debounce, deferred re-check, stitching B2, budget trim), [mcp_server.py](../../../src/serving/mcp_server.py) wiring | T-BND, T-TRG, T-BUD |
 | 5 UI | ✅ Implemented | `BackfillModal`, `RecoveredBadge`, Overview *History Sync* card, Status Dock ⏪ item, SSE `backfill_*` branch in `page.tsx`, [backfill.ts](../../../src/web_ui/src/utils/backfill.ts); MCP tool `get_ingestion_coverage` ([ingestion_tools.py](../../../src/serving/tools/ingestion_tools.py)) | `tests/test_backfill_api.py`, `src/web_ui/src/utils/backfill.test.ts` |
-| 6 Optimisations | ⏳ Not started | — | — |
+| 6 Optimisations | 🟡 Window screening, whole-conversation selection and persistent stop done 2026-10-20 ([07](07_conversation_windows.md)); proxy history source and changefeed reconciliation not started | [backfill.py](../../../src/ingestion/backfill.py) | `tests/test_backfill.py` (Conversation windows) |
 
 ### 0.1 Deviations from the specification
 

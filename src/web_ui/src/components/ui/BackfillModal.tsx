@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
+import { BackfillStopButton } from "@/components/ui/BackfillStopButton";
 import {
   BackfillPlan,
   BackfillProgress,
@@ -68,7 +69,6 @@ export function BackfillModal({ isOpen, onClose, history, liveProgress, onRunQue
   const [runs, setRuns] = useState<BackfillRun[]>([]);
   const [trackedRunId, setTrackedRunId] = useState<string | null>(null);
   const [polled, setPolled] = useState<BackfillProgress | null>(null);
-  const [stopping, setStopping] = useState(false);
 
   const liveSince = history?.coverage?.live_since || null;
   const currentKey = `${from}|${to}|${retryFailed}`;
@@ -141,7 +141,6 @@ export function BackfillModal({ isOpen, onClose, history, liveProgress, onRunQue
 
   useEffect(() => {
     if (progress && isTerminal(progress.status)) {
-      setStopping(false);
       loadRuns();
     }
   }, [progress, loadRuns]);
@@ -195,16 +194,6 @@ export function BackfillModal({ isOpen, onClose, history, liveProgress, onRunQue
     setPolled(null);
     setPlan(null);
     onRunQueued?.(res.data.run);
-    loadRuns();
-  };
-
-  const stopRun = async (runId: string) => {
-    setStopping(true);
-    const res = await api<{ run?: BackfillRun }>(`/api/backfill/runs/${runId}/cancel`, { method: "POST" });
-    if (!res.ok) {
-      setStopping(false);
-      setError("Could not stop the run");
-    }
     loadRuns();
   };
 
@@ -354,13 +343,20 @@ export function BackfillModal({ isOpen, onClose, history, liveProgress, onRunQue
               <span className="text-sky-300 font-semibold">{plan.conversations.to_process ?? 0} to analyse</span>
               {(plan.conversations.deferred ?? 0) > 0 && <> · {plan.conversations.deferred} not ready</>}
             </div>
+            {(plan.conversations.to_process ?? 0) > 0 && (
+              <div className="font-sans text-body-xs text-secondary">
+                {plan.conversations.missed ?? 0} never heard live · {plan.conversations.partial ?? 0} partly heard live
+                (only the missing parts are analysed, with the whole recording as context)
+              </div>
+            )}
             <div className="font-sans text-body-xs text-secondary">
               {plan.utterances.total ?? 0} utterances · {plan.utterances.duplicate_live ?? 0} skipped (seen live) ·{" "}
-              {plan.utterances.selected ?? 0} to screen
+              {plan.utterances.selected ?? 0} to analyse
+              {(plan.utterances.windows ?? 0) > 0 && <> in {plan.utterances.windows} conversation windows</>}
               {(plan.utterances.retry_failed ?? 0) > 0 && <> · {plan.utterances.retry_failed} retried</>}
             </div>
             <div className={`font-mono text-[10px] tracking-wider ${plan.over_budget ? "text-amber-300" : "text-secondary"}`}>
-              ESTIMATED: ~{plan.estimate.expected_qualified} qualified · ~{plan.estimate.events_expected} event(s) · ≈ $
+              ESTIMATED: ~{plan.estimate.gatekeeper_calls} screening calls · ~{plan.estimate.expected_qualified} qualified · ~{plan.estimate.events_expected} event(s) · ≈ $
               {plan.estimate.cost_usd.toFixed(3)} · ≈ {formatDuration(plan.estimate.duration_s)}
             </div>
             {plan.warnings.map((w) => (
@@ -390,16 +386,13 @@ export function BackfillModal({ isOpen, onClose, history, liveProgress, onRunQue
                 {progress.status} {progress.processed}/{progress.selected} · {progress.qualified} qualified
                 {progress.eta_s ? ` · ETA ${formatDuration(progress.eta_s)}` : ""}
               </span>
-              <button
-                onClick={() => stopRun(progress.run_id)}
-                disabled={stopping}
-                className="text-rose-300 hover:text-rose-200 disabled:opacity-50"
-              >
-                {stopping ? "Stopping…" : "Stop after current"}
-              </button>
+
             </div>
             <div className="h-1.5 bg-surface-container-highest rounded-full overflow-hidden">
               <div className="h-full bg-sky-400 transition-all duration-500" style={{ width: `${Math.round((progress.progress || 0) * 100)}%` }} />
+            </div>
+            <div className="mt-4">
+              <BackfillStopButton runId={progress.run_id} size="large" onStopped={loadRuns} />
             </div>
           </div>
         )}

@@ -63,7 +63,9 @@ def test_preview_is_free_and_returns_the_plan(env):
     assert res.status_code == 200
     plan = res.json()
     assert plan["utterances"]["selected"] == 4 and plan["over_budget"] is False
-    assert plan["estimate"]["gatekeeper_calls"] == 4
+    # Window screening: 4 utterances fit one window -> 1 window call + the expected drill-down
+    assert plan["utterances"]["windows"] == 1
+    assert plan["estimate"]["gatekeeper_calls"] < 4
 
 
 def test_run_lifecycle_over_rest(env):

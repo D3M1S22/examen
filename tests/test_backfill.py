@@ -599,3 +599,127 @@ def test_backfill_speaker_roles_use_the_wearer_name(monkeypatch):
     assert speaker_role_for("Unknown") == "unknown"
     assert speaker_role_for("Marco") == "contact"
     assert speaker_role_for(None) == "unknown"
+
+
+# ---------------------------------------------------------------------------
+# Conversation windows (docs/next_steps/historical_backfill/07_conversation_windows.md)
+# ---------------------------------------------------------------------------
+
+CHATTER = [f"small talk line {i} about the weather and the coffee" for i in range(20)]
+
+
+def counting_classifier():
+    calls: List[Dict[str, Optional[str]]] = []
+
+    async def classify(transcript, active_tasks=None, prior_context=None):
+        calls.append({"transcript": transcript, "context": prior_context})
+        return await fake_classify(transcript, active_tasks, prior_context)
+
+    return classify, calls
+
+
+@pytest.mark.asyncio
+async def test_window_screening_drills_down_only_where_there_is_signal(store, monkeypatch):
+    monkeypatch.setattr(settings, "backfill_screening", "window")
+    monkeypatch.setattr(settings, "backfill_window_utterances", 10)
+    start = NOW - timedelta(hours=3)
+    texts = list(CHATTER)
+    texts[13] = "I unplugged the iron before leaving"
+    classify, calls = counting_classifier()
+    service = make_service(store, FixtureBeeHistorySource([make_conv(30, start, lines_every(20, texts))]),
+                           classify=classify)
+    run = await service.create_run((start - timedelta(minutes=5)).isoformat(), (start + timedelta(hours=1)).isoformat())
+    assert run.plan.utterances["windows"] == 2
+    await service.run_next()
+    run = service.get_run(run.id)
+
+    # 2 window calls + 10 single calls for the window holding the action, instead of 20
+    assert len(calls) == 12
+    assert run.counters["windows"] == 2 and run.counters["windows_with_signal"] == 1
+    assert run.counters["processed"] == 20 and run.counters["qualified"] == 1
+    statuses = [r["status"] for r in store.list_ledger_entries(
+        (start - timedelta(minutes=5)).isoformat(), (start + timedelta(hours=1)).isoformat(), source="backfill")]
+    assert statuses.count("qualified") == 1 and statuses.count("screened_noop") == 19
+
+
+@pytest.mark.asyncio
+async def test_window_context_has_look_back_look_ahead_and_bee_summary(store, monkeypatch):
+    monkeypatch.setattr(settings, "backfill_screening", "window")
+    monkeypatch.setattr(settings, "backfill_window_utterances", 4)
+    start = NOW - timedelta(hours=3)
+    texts = ["Can you send me the audit report", "Sure I will email it", "I merged the fix",
+             "Great thanks", "See you tomorrow", "Bye now"]
+    classify, calls = counting_classifier()
+    service = make_service(store, FixtureBeeHistorySource([make_conv(31, start, lines_every(20, texts))]),
+                           classify=classify)
+    await service.create_run((start - timedelta(minutes=5)).isoformat(), (start + timedelta(hours=1)).isoformat())
+    await service.run_next()
+
+    window_call = calls[0]
+    assert window_call["transcript"].count("\n") == 3          # the 4-utterance window as one text
+    assert "Bee conversation: Conversation 31" in window_call["context"]
+    assert "What was said next" in window_call["context"]       # look-ahead
+    assert "See you tomorrow" in window_call["context"]
+    single = next(c for c in calls[1:] if c["transcript"] == "I merged the fix")
+    assert "This part of the conversation" in single["context"] and "Great thanks" in single["context"]
+
+
+@pytest.mark.asyncio
+async def test_whole_conversation_is_analysed_even_before_the_window(store, monkeypatch):
+    start = NOW - timedelta(hours=3)
+    lines = lines_every(60, TEN)           # 10 minutes of speech, the window starts after minute 5
+    source = FixtureBeeHistorySource([make_conv(32, start, lines, uuid="uuid-32")])
+    window = ((start + timedelta(minutes=5, seconds=30)).isoformat(), (start + timedelta(hours=1)).isoformat())
+
+    monkeypatch.setattr(settings, "backfill_whole_conversations", True)
+    whole = await BackfillPlanner(source, lambda: store).plan(*window)
+    assert len(whole.items) == 10 and whole.plan.conversations["missed"] == 1
+
+    monkeypatch.setattr(settings, "backfill_whole_conversations", False)
+    clipped = await BackfillPlanner(source, lambda: store).plan(*window)
+    assert len(clipped.items) == 4
+
+
+@pytest.mark.asyncio
+async def test_whole_conversation_still_skips_what_live_analysed(store, monkeypatch):
+    monkeypatch.setattr(settings, "backfill_whole_conversations", True)
+    start = NOW - timedelta(hours=3)
+    lines = lines_every(60, TEN)
+    record_live(store, "uuid-33", start, lines, range(6))   # live heard the first 6 minutes
+    source = FixtureBeeHistorySource([make_conv(33, start, lines, uuid="uuid-33")])
+    result = await BackfillPlanner(source, lambda: store).plan(
+        (start + timedelta(minutes=7)).isoformat(), (start + timedelta(hours=1)).isoformat())
+    assert [s.utterance.text for s in result.items] == TEN[6:]
+    assert result.plan.conversations["partial"] == 1
+
+
+@pytest.mark.asyncio
+async def test_utterance_screening_is_still_available(store, monkeypatch):
+    monkeypatch.setattr(settings, "backfill_screening", "utterance")
+    start = NOW - timedelta(hours=3)
+    classify, calls = counting_classifier()
+    service = make_service(store, FixtureBeeHistorySource([make_conv(34, start, lines_every(20, CHATTER[:12]))]),
+                           classify=classify)
+    await service.create_run((start - timedelta(minutes=5)).isoformat(), (start + timedelta(hours=1)).isoformat())
+    await service.run_next()
+    assert len(calls) == 12
+
+
+def test_stop_survives_a_restart(store):
+    from src.core.schemas import BackfillRun
+
+    service = make_service(store, FixtureBeeHistorySource([]))
+    running = BackfillRun(window_from=(NOW - timedelta(days=7)).isoformat(), window_to=NOW.isoformat(),
+                          status="replaying")
+    store.save_backfill_run(running)
+    stopped = service.cancel(running.id)
+    assert stopped.cancel_requested is True
+
+    restarted = make_service(store, FixtureBeeHistorySource([]))   # new process
+    restarted.rehydrate()
+    assert store.get_backfill_run(running.id).status == "cancelled"
+    assert restarted._next_runnable() is None
+
+    queued = BackfillRun(window_from=(NOW - timedelta(days=2)).isoformat(), window_to=NOW.isoformat())
+    store.save_backfill_run(queued)
+    assert restarted.cancel(queued.id).status == "cancelled"

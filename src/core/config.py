@@ -103,6 +103,17 @@ class Settings(BaseSettings):
     backfill_max_estimated_cost_usd: float = Field(default=1.0, alias="BACKFILL_MAX_ESTIMATED_COST_USD")
     backfill_screen_concurrency: int = Field(default=4, alias="BACKFILL_SCREEN_CONCURRENCY")
     backfill_screen_with_event_hint: bool = Field(default=False, alias="BACKFILL_SCREEN_WITH_EVENT_HINT")
+    # Conversation-level history analysis (docs/next_steps/historical_backfill/07_conversation_windows.md)
+    # window = screen each Bee conversation in windows of consecutive utterances (one gatekeeper call per
+    # window, look-back + look-ahead context) and drill down to single utterances only where a window has
+    # signal; utterance = legacy one call per utterance with 3 lines of look-back
+    backfill_screening: Literal["window", "utterance"] = Field(default="window", alias="BACKFILL_SCREENING")
+    backfill_window_utterances: int = Field(default=10, alias="BACKFILL_WINDOW_UTTERANCES")
+    backfill_window_max_words: int = Field(default=450, alias="BACKFILL_WINDOW_MAX_WORDS")
+    backfill_window_context_utterances: int = Field(default=3, alias="BACKFILL_WINDOW_CONTEXT_UTTERANCES")
+    # Analyse every un-analysed utterance of each conversation that overlaps the window, not only the
+    # part inside it (a recording is one unit: its start may precede the gap)
+    backfill_whole_conversations: bool = Field(default=True, alias="BACKFILL_WHOLE_CONVERSATIONS")
     backfill_match_window_seconds: float = Field(default=300.0, alias="BACKFILL_MATCH_WINDOW_SECONDS")
     backfill_span_merge_seconds: float = Field(default=20.0, alias="BACKFILL_SPAN_MERGE_SECONDS")
     backfill_fuzzy_threshold: float = Field(default=0.6, alias="BACKFILL_FUZZY_THRESHOLD")
