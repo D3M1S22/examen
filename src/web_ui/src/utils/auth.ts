@@ -16,6 +16,15 @@ export interface AccountUser {
   last_login_at?: string | null;
   privacy_consent_version?: string | null;
   privacy_consent_at?: string | null;
+  is_admin?: boolean;
+  status?: "active" | "disabled" | string;
+}
+
+/** Server-side link between the account and its Bee account (one Bee account per user). */
+export interface BeeLinkInfo {
+  state: "unlinked" | "linked" | "invalid" | "conflict" | string;
+  account?: string | null;
+  error?: string | null;
 }
 
 export interface SessionInfo {
@@ -25,13 +34,15 @@ export interface SessionInfo {
   consent_required?: boolean;
   privacy_notice_version?: string;
   bee_device?: any;
-  bee?: { pairing?: BeePairingInfo; linked?: boolean | null };
+  bee?: { pairing?: BeePairingInfo; linked?: boolean | null; link?: BeeLinkInfo };
 }
 
 export interface AuthConfig {
   auth_enabled: boolean;
   min_password_length: number;
   privacy_notice_version: string;
+  /** false: the sign-in page offers no "Create account" (accounts come from an admin) */
+  signup_enabled?: boolean;
 }
 
 export interface ApiTokenInfo {
@@ -95,6 +106,9 @@ export const loginAccount = (email: string, password: string) =>
     password,
   });
 
+/** Signs out every browser and revokes every MCP access token of the account. */
+export const signOutEverywhere = () => post<{ success: boolean }>("/api/auth/sessions/revoke-all");
+
 /** Signs out of this browser. The Bee keeps listening for the user (disconnect it explicitly). */
 export const logoutUser = async (): Promise<void> => {
   try {
@@ -112,7 +126,11 @@ export const toUiUser = (session: SessionInfo | null): DemoUser | null => {
   if (!session?.authenticated || !session.user) return null;
   const u = session.user;
   const pairing = session.bee?.pairing;
-  const linked = !!session.bee?.linked || !!session.bee_device?.account;
+  const linkState = session.bee?.link?.state;
+  // A token the Bee API rejects (invalid) or a Bee account held by another user (conflict) is not a link
+  const linked = linkState === "invalid" || linkState === "conflict"
+    ? false
+    : !!session.bee?.linked || !!session.bee_device?.account;
   return {
     user_id: u.id || "local",
     handle: u.display_name || u.email || "Local user",
@@ -124,8 +142,11 @@ export const toUiUser = (session: SessionInfo | null): DemoUser | null => {
     privacy_framework: "EU GDPR",
     data_retention: "until account deletion",
     bee_connected: linked,
-    bee_account: session.bee_device?.account || pairing?.account || null,
+    bee_account: session.bee?.link?.account || session.bee_device?.account || pairing?.account || null,
     bee_pairing: pairing || null,
+    bee_status: session.bee_device?.status || null,
+    bee_detail: session.bee_device?.detail || null,
+    is_admin: !!u.is_admin,
   };
 };
 
@@ -190,3 +211,28 @@ export const disconnectBee = async (): Promise<boolean> => {
     return false;
   }
 };
+
+// ---------------------------------------------------------------------------
+// Administration (admins only: accounts, never other users' data)
+// ---------------------------------------------------------------------------
+
+export interface AdminUser extends AccountUser {
+  id: string;
+  email: string;
+  bee_link_state: string;
+  bee_account?: string | null;
+  bee_last_error?: string | null;
+  streaming: boolean;
+}
+
+export const listAdminUsers = () => call<{ users: AdminUser[]; count: number }>("/api/admin/users");
+
+/** Creates an account; the one-time password is returned once, for the admin to hand over. */
+export const createAdminUser = (input: { email: string; display_name?: string; is_admin?: boolean }) =>
+  post<{ user: AdminUser; initial_password: string }>("/api/admin/users", input);
+
+export const setAdminUserStatus = (userId: string, status: "active" | "disabled") =>
+  post<{ success: boolean }>(`/api/admin/users/${encodeURIComponent(userId)}/status`, { status });
+
+export const resetAdminUserPassword = (userId: string) =>
+  post<{ success: boolean; initial_password: string }>(`/api/admin/users/${encodeURIComponent(userId)}/reset-password`);

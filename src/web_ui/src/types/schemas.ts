@@ -331,8 +331,9 @@ export interface ExamenState {
 }
 
 export interface BeePairingInfo {
-  // idle | starting | pending (link/QR shown) | connected | expired | failed
-  status?: "idle" | "starting" | "pending" | "connected" | "expired" | "failed" | string;
+  // idle | starting | pending (link/QR shown) | verifying (bee me / one-Bee-per-user check) | connected
+  // | expired | failed | conflict (Bee account held by another user) | invalid (login rejected)
+  status?: "idle" | "starting" | "pending" | "verifying" | "connected" | "expired" | "failed" | "conflict" | "invalid" | string;
   connected?: boolean;
   account?: string | null;
   pairing_url?: string | null;
@@ -355,6 +356,10 @@ export interface DemoUser {
   bee_connected: boolean;
   bee_account?: string | null;
   bee_pairing?: BeePairingInfo | null;
+  /** Live status of the user's Bee (STREAMING, LISTENING, CAPACITY, ...) and its explanation */
+  bee_status?: string | null;
+  bee_detail?: string | null;
+  is_admin?: boolean;
 }
 
 export interface EchoNotification {

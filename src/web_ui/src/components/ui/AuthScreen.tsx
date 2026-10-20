@@ -27,6 +27,8 @@ export function AuthScreen({ config, consentOnly = false, onAuthenticated, onSig
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const minLength = config?.min_password_length ?? 10;
+  // AUTH_ALLOW_SIGNUP=false: accounts come from an administrator, the page only signs in
+  const signupEnabled = config?.signup_enabled !== false;
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -99,6 +101,7 @@ export function AuthScreen({ config, consentOnly = false, onAuthenticated, onSig
           </div>
         ) : (
           <form onSubmit={submit} className="p-6 space-y-4" noValidate>
+            {signupEnabled ? (
             <div className="grid grid-cols-2 gap-1 p-1 rounded-xl bg-black/40 border border-white/10">
               {(["login", "register"] as const).map((m) => (
                 <button
@@ -116,6 +119,9 @@ export function AuthScreen({ config, consentOnly = false, onAuthenticated, onSig
                 </button>
               ))}
             </div>
+            ) : (
+              <p className="text-[11px] text-zinc-400">Registration is closed on this server: ask an administrator for an account.</p>
+            )}
 
             {mode === "register" && (
               <div>

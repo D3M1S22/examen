@@ -17,12 +17,14 @@ import {
   getBeePairing,
   listApiTokens,
   revokeApiToken,
+  signOutEverywhere,
   startBeePairing,
   updateDisplayName,
 } from "@/utils/auth";
 import { PrivacyNotice } from "@/components/ui/PrivacyNotice";
+import { AdminSection } from "@/components/ui/AdminSection";
 
-type Section = "bee" | "account" | "privacy";
+type Section = "bee" | "account" | "privacy" | "admin";
 
 interface LoginModalProps {
   isOpen: boolean;
@@ -76,6 +78,7 @@ export function LoginModal({
         { id: "bee", label: "🐝 Bee device" },
         { id: "account", label: "👤 Account" },
         { id: "privacy", label: "🛡️ Privacy" },
+        ...(currentUser?.is_admin ? [{ id: "admin" as Section, label: "🛠️ Admin" }] : []),
       ]
     : [{ id: "bee", label: "🐝 Bee device" }];
 
@@ -125,11 +128,23 @@ export function LoginModal({
           {section === "privacy" && authEnabled && (
             <PrivacySection setMessage={setMessage} onDeleted={() => { onClose(); onAccountDeleted?.(); }} />
           )}
+          {section === "admin" && authEnabled && currentUser?.is_admin && (
+            <AdminSection selfId={currentUser.user_id} setMessage={setMessage} />
+          )}
 
           {onLogout && authEnabled && (
             <div className="pt-4 border-t border-white/10 flex items-center justify-between">
               <p className="text-[10px] text-zinc-500 max-w-[60%]">Signing out does not stop your Bee: it keeps listening for you.</p>
-              <button className={btnGhost} onClick={() => { onLogout(); onClose(); }}>🚪 Sign out</button>
+              <div className="flex gap-2">
+                <button className={btnGhost} title="Signs out every browser and revokes your MCP access tokens"
+                  onClick={async () => {
+                    if (!confirm("Sign out on every device and revoke all your MCP access tokens?")) return;
+                    await signOutEverywhere().catch(() => undefined);
+                    onLogout();
+                    onClose();
+                  }}>Sign out everywhere</button>
+                <button className={btnGhost} onClick={() => { onLogout(); onClose(); }}>🚪 Sign out</button>
+              </div>
             </div>
           )}
         </div>
@@ -159,7 +174,12 @@ function BeeSection({ currentUser, onChanged, setMessage }: {
   };
 
   useEffect(() => {
-    getBeePairing().then((r) => setPairing(r.bee_pairing)).catch(() => undefined);
+    getBeePairing()
+      .then((r) => {
+        setPairing(r.bee_pairing);
+        if (r.bee_pairing?.status === "pending" || r.bee_pairing?.status === "verifying") poll();
+      })
+      .catch(() => undefined);
     return stopPolling;
   }, []);
 
@@ -184,6 +204,10 @@ function BeeSection({ currentUser, onChanged, setMessage }: {
           stopPolling();
           setMessage({ kind: "ok", text: "Your Bee is connected. Ambient listening has started for your account." });
           onChanged();
+        } else if (st === "conflict" || st === "invalid") {
+          stopPolling();
+          setMessage({ kind: "error", text: r.bee_pairing?.error || "This Bee account could not be connected." });
+          onChanged();
         } else if (st === "expired" || st === "failed") {
           stopPolling();
           setMessage({ kind: "error", text: r.bee_pairing?.error || "Pairing did not complete. Try again." });
@@ -200,7 +224,7 @@ function BeeSection({ currentUser, onChanged, setMessage }: {
     try {
       const r = await startBeePairing();
       setPairing(r.bee_pairing);
-      if (r.bee_pairing?.status === "pending") poll();
+      if (r.bee_pairing?.status === "pending" || r.bee_pairing?.status === "verifying") poll();
       if (r.bee_pairing?.status === "connected") onChanged();
     } catch (err: any) {
       setMessage({ kind: "error", text: err?.message || "Could not start Bee pairing." });
@@ -235,6 +259,11 @@ function BeeSection({ currentUser, onChanged, setMessage }: {
           </div>
           <button className={btnDanger} disabled={busy} onClick={disconnect}>Disconnect</button>
         </div>
+        {currentUser?.bee_status === "CAPACITY" && (
+          <div role="status" className="p-3 rounded-xl bg-amber-950/40 border border-amber-500/30 text-amber-200 text-[11px]">
+            {currentUser.bee_detail || "The server is at capacity: listening starts when a slot frees up."}
+          </div>
+        )}
         <p className="text-[11px] text-zinc-400">
           Your Bee login is stored only in your private folder on this server and is used only for your account.
         </p>
@@ -272,14 +301,29 @@ function BeeSection({ currentUser, onChanged, setMessage }: {
     );
   }
 
+  if (pairing?.status === "verifying") {
+    return (
+      <p className="text-xs text-zinc-300 flex items-center gap-2">
+        <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
+        Approved. Checking your Bee account…
+      </p>
+    );
+  }
+
+  const failedBefore = ["expired", "failed", "conflict", "invalid"].includes(pairing?.status || "");
   return (
     <div className="space-y-3">
+      {(pairing?.status === "conflict" || pairing?.status === "invalid") && pairing.error && (
+        <div role="alert" className="p-3 rounded-xl bg-red-950/50 border border-red-500/30 text-red-200 text-[11px]">
+          {pairing.error}
+        </div>
+      )}
       <p className="text-xs text-zinc-300 leading-relaxed">
         Connect your Bee to let EXAMEN listen for you. Each account pairs its own Bee: nobody else on this server can
         read your stream or your data.
       </p>
       <button className={btnPrimary} disabled={busy} onClick={start}>
-        {busy ? "Preparing QR code…" : pairing?.status === "expired" || pairing?.status === "failed" ? "Try again" : "Connect my Bee"}
+        {busy ? "Preparing QR code…" : failedBefore ? "Try again" : "Connect my Bee"}
       </button>
     </div>
   );
