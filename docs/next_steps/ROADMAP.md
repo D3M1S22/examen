@@ -44,7 +44,7 @@
 │  Phase 8: DynamoDB Storage                         │ High     │ High   │ DDB 00-07   │ ✅ IMPLEMENTED│
 │    ├─ M8.0: Store contract & shared rules (P0)     │ P1       │ Low    │ DDB 01, 07  │ ✅ DONE   │
 │    ├─ M8.1: DynamoContextStore (P1)                │ P1       │ High   │ DDB 02      │ ✅ DONE   │
-│    ├─ M8.2: IAM tenant isolation & infra (P2)      │ P1       │ Medium │ DDB 04, 05  │ 🔶 AWS check│
+│    ├─ M8.2: IAM tenant isolation & infra (P2)      │ P1       │ Medium │ DDB 04, 05  │ ✅ DONE   │
 │    ├─ M8.3: Auth & ops on DynamoDB (P3)            │ P2       │ Medium │ DDB 03      │ ✅ DONE   │
 │    └─ M8.4: Migration & cutover (P4)               │ P2       │ Low    │ DDB 06      │ 🔶 cutover │
 └──────────────────────────────────────────────────────────────────────────────────────────────────┘
