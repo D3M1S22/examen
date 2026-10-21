@@ -1,6 +1,5 @@
 """Configuration module for EXAMEN."""
 
-import os
 from typing import Literal, Optional
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -186,6 +185,28 @@ class Settings(BaseSettings):
     # Concurrent LLM calls (gatekeeper + pipeline, live and backfill) across all users
     max_concurrent_llm_calls: int = Field(default=8, alias="MAX_CONCURRENT_LLM_CALLS")
 
+    # SearXNG instance for web search (empty: skipped in the provider chain)
+    searxng_url: Optional[str] = Field(default=None, alias="SEARXNG_URL")
+
+    # Logging and admin console (docs/next_steps/admin_console/)
+    # Level of the stdout handler (journald); the admin service log always keeps WARNING and above
+    log_level: Literal["DEBUG", "INFO", "WARNING"] = Field(default="INFO", alias="LOG_LEVEL")
+    service_log_retention_days: int = Field(default=30, alias="SERVICE_LOG_RETENTION_DAYS")
+    service_log_max_events: int = Field(default=50000, alias="SERVICE_LOG_MAX_EVENTS")
+    # Health monitor rules (admin_console/03 §5)
+    health_check_interval_seconds: float = Field(default=60.0, alias="HEALTH_CHECK_INTERVAL_SECONDS")
+    health_stream_silent_minutes: float = Field(default=15.0, alias="HEALTH_STREAM_SILENT_MINUTES")
+    health_stream_flaps_per_30min: int = Field(default=6, alias="HEALTH_STREAM_FLAPS_PER_30MIN")
+    health_fallback_rate: float = Field(default=0.2, alias="HEALTH_FALLBACK_RATE")
+    health_pipeline_error_rate: float = Field(default=0.2, alias="HEALTH_PIPELINE_ERROR_RATE")
+    health_throttle_per_5min: int = Field(default=5, alias="HEALTH_THROTTLE_PER_5MIN")
+    health_gatekeeper_p95_ms: float = Field(default=8000.0, alias="HEALTH_GATEKEEPER_P95_MS")
+    health_capacity_minutes: float = Field(default=10.0, alias="HEALTH_CAPACITY_MINUTES")
+    health_llm_saturation: float = Field(default=0.8, alias="HEALTH_LLM_SATURATION")
+    health_min_disk_gb: float = Field(default=1.0, alias="HEALTH_MIN_DISK_GB")
+    health_memory_fraction: float = Field(default=0.75, alias="HEALTH_MEMORY_FRACTION")
+    health_error_burst_per_5min: int = Field(default=20, alias="HEALTH_ERROR_BURST_PER_5MIN")
+
     @property
     def has_aws_credentials(self) -> bool:
         if self.aws_access_key_id and self.aws_secret_access_key:
@@ -215,23 +236,27 @@ class Settings(BaseSettings):
         return f"https://bedrock-mantle.{self.aws_region}.api.aws/openai/v1"
 
     def get_mantle_api_key(self) -> str:
-        """Returns static Mantle API key, or dynamically mints a short-term key from IAM role."""
+        """Returns static Mantle API key, or dynamically mints a short-term key from IAM role.
+
+        The region and the configured keys are passed explicitly (no process environment writes), so a
+        runtime region override also applies to minted tokens (docs/next_steps/admin_console/01 P1)."""
         if self.mantle_api_key and self.mantle_api_key.strip():
             return self.mantle_api_key.strip()
         try:
-            import os
-            if self.aws_access_key_id and not os.environ.get("AWS_ACCESS_KEY_ID"):
-                os.environ["AWS_ACCESS_KEY_ID"] = self.aws_access_key_id
-            if self.aws_secret_access_key and not os.environ.get("AWS_SECRET_ACCESS_KEY"):
-                os.environ["AWS_SECRET_ACCESS_KEY"] = self.aws_secret_access_key
-            if self.aws_session_token and not os.environ.get("AWS_SESSION_TOKEN"):
-                os.environ["AWS_SESSION_TOKEN"] = self.aws_session_token
-            if self.aws_region and not os.environ.get("AWS_REGION"):
-                os.environ["AWS_REGION"] = self.aws_region
-                os.environ["AWS_DEFAULT_REGION"] = self.aws_region
-
             from aws_bedrock_token_generator import provide_token
-            return provide_token(region=self.aws_region)
+
+            provider = None
+            if self.aws_access_key_id and self.aws_secret_access_key:
+                from botocore.credentials import Credentials
+
+                creds = Credentials(self.aws_access_key_id, self.aws_secret_access_key, self.aws_session_token)
+
+                class _StaticProvider:
+                    def load(self):
+                        return creds
+
+                provider = _StaticProvider()
+            return provide_token(region=self.aws_region, aws_credentials_provider=provider)
         except Exception as e:
             raise ValueError(
                 f"No BEDROCK_MANTLE_API_KEY configured and failed to mint token from IAM credentials: {e}"

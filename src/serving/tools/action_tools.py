@@ -77,7 +77,7 @@ def execute_create_planned_task(
     )
     task_id = ctx_store.save_planned_task(task)
 
-    logger.info(f"Created planned task [{task_id}]: {title} ({domain})")
+    logger.info(f"Created planned task {task_id} ({domain})")
     return {
         "status": "scheduled",
         "task_id": task_id,

@@ -16,6 +16,7 @@ from src.core.config import settings
 from src.core.models import get_fast_model, has_active_model_credentials
 from src.core.schemas import ExamenState, PlannedTask, VerifiedAction
 from src.core.storage import get_storage_store
+from src.core.service_log import model_fallback
 
 logger = logging.getLogger("examen.pipeline.action_state")
 
@@ -97,7 +98,7 @@ def _heuristic_extract_action(
         r"\b(devo ricordarmi|dovrei ricordarmi|ho spento|avrò spento|chissà se|devo staccare|più tardi|domani)\b",
     ]
     if any(re.search(pat, text) for pat in doubt_patterns):
-        logger.debug(f"Action extraction discarded due to doubt/future intent: '{transcript}'")
+        logger.debug("Action extraction discarded due to doubt/future intent")
         return None
 
     # 1. Match against active scheduled/pending tasks if provided
@@ -253,7 +254,7 @@ def node_extract_action(state: ExamenState) -> Dict[str, Any]:
             return {"action_data": None}
 
     except Exception as e:
-        logger.warning(f"Action extraction model failed: {e}. Falling back to heuristic.")
+        model_fallback(logger, "action_state", e)
         action = _heuristic_extract_action(
             transcript, pending_tasks=pending_tasks, historical_context=historical_context
         )

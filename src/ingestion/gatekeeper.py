@@ -2,6 +2,7 @@
 
 import logging
 import re
+import time
 from typing import List, Optional
 
 from langchain_core.messages import SystemMessage, HumanMessage
@@ -10,7 +11,7 @@ from src.core.config import settings
 from src.core.models import get_fast_model, has_active_model_credentials
 from src.core.schemas import ChunkClassification
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("examen.ingestion.gatekeeper")
 
 GATEKEEPER_SYSTEM_PROMPT = """You are the high-efficiency semantic screening gatekeeper for the EXAMEN wearable AI engine.
 Your sole responsibility is to evaluate an incoming transcribed audio chunk and categorize it to prevent wasting downstream compute.
@@ -74,6 +75,26 @@ If the transcript indicates that the speaker has completed, verified, or execute
 """
             prompt += extra_section
     return prompt
+
+
+def _model_call_finished(started: float, error: Optional[BaseException] = None) -> None:
+    """Health counters (gatekeeper calls, latency) and the fallback event when the model failed."""
+    from src.core.metrics import metrics
+    from src.core.service_log import note_llm_error
+    from src.core.tenancy import get_tenant_id
+
+    uid = get_tenant_id()
+    metrics.incr("gatekeeper.calls", uid)
+    if error is None:  # a failed call's latency says nothing about the provider's speed
+        metrics.observe("gatekeeper.latency_ms", (time.time() - started) * 1000.0)
+    if error is not None:
+        logger.warning(
+            f"Gatekeeper model call failed, heuristic used: {type(error).__name__}: {error}",
+            extra={"event_code": "gatekeeper.fallback",
+                   "ctx": {"provider": settings.gatekeeper_provider, "model_id": settings.gatekeeper_model_id}},
+        )
+        note_llm_error(error, provider=settings.gatekeeper_provider, model_id=settings.gatekeeper_model_id,
+                       region=settings.aws_region)
 
 
 def _get_bedrock_classifier():
@@ -250,6 +271,7 @@ def classify_chunk(
         return _heuristic_classify(clean_text, active_tasks=active_tasks, prior_context=prior_context)
 
     # Real Model call
+    started = time.time()
     try:
         classifier = _get_bedrock_classifier()
         system_prompt = build_gatekeeper_prompt(active_tasks=active_tasks, prior_context=prior_context)
@@ -258,11 +280,12 @@ def classify_chunk(
             HumanMessage(content=f'Transcript: "{clean_text}"')
         ]
         result: ChunkClassification = classifier.invoke(messages)
+        _model_call_finished(started)
         if not result or not isinstance(result, ChunkClassification):
             return _heuristic_classify(clean_text, active_tasks=active_tasks, prior_context=prior_context)
         return result
     except Exception as e:
-        logger.warning(f"Gatekeeper invocation failed ({e}), falling back to heuristic: {e}")
+        _model_call_finished(started, e)
         return _heuristic_classify(clean_text, active_tasks=active_tasks, prior_context=prior_context)
 
 
@@ -290,6 +313,7 @@ async def aclassify_chunk(
     if force_mock or settings.mock_ai or not has_active_model_credentials(settings.gatekeeper_provider):
         return _heuristic_classify(clean_text, active_tasks=active_tasks, prior_context=prior_context)
 
+    started = time.time()
     try:
         classifier = _get_bedrock_classifier()
         system_prompt = build_gatekeeper_prompt(active_tasks=active_tasks, prior_context=prior_context)
@@ -298,11 +322,12 @@ async def aclassify_chunk(
             HumanMessage(content=f'Transcript: "{clean_text}"')
         ]
         result: ChunkClassification = await classifier.ainvoke(messages)
+        _model_call_finished(started)
         if not result or not isinstance(result, ChunkClassification):
             return _heuristic_classify(clean_text, active_tasks=active_tasks, prior_context=prior_context)
         return result
     except Exception as e:
-        logger.warning(f"Async Bedrock Gatekeeper invocation failed ({e}), falling back to heuristic")
+        _model_call_finished(started, e)
         return _heuristic_classify(clean_text, active_tasks=active_tasks, prior_context=prior_context)
 
 

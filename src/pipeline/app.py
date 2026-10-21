@@ -225,7 +225,8 @@ def _run_pipeline(payload: Dict[str, Any], context: Any = None) -> Dict[str, Any
         "scheduled_task": scheduled_task.model_dump() if scheduled_task and hasattr(scheduled_task, "model_dump") else scheduled_task,
     }
 
-    logger.info(f"AgentCore invocation completed for session {session_id}: {response['summary']}")
+    logger.info(f"AgentCore invocation completed for session {session_id}: {response.get('status')}, "
+                f"categories {response.get('categories')}")
     return response
 
 

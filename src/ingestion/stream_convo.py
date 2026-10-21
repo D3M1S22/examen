@@ -319,13 +319,17 @@ class BeeClient(Debug):
         except asyncio.TimeoutError:
             with contextlib.suppress(Exception):
                 process.kill()
-            self.debug(f"bee {' '.join(subcmd_args)} timed out")
+            self.warn(f"bee {subcmd_args[0] if subcmd_args else ''} timed out", "bee.command_failed",
+                      command=subcmd_args[0] if subcmd_args else None)
             return None
         except OSError as e:
-            self.debug(f"bee {' '.join(subcmd_args)} could not start: {e}")
+            self.warn(f"bee {subcmd_args[0] if subcmd_args else ''} could not start: {e}", "bee.command_failed",
+                      command=subcmd_args[0] if subcmd_args else None)
             return None
         if process.returncode != 0:
-            self.debug(f"bee {' '.join(subcmd_args)} failed: {stderr.decode('utf-8', 'replace').strip()[:300]}")
+            self.warn(f"bee {subcmd_args[0] if subcmd_args else ''} failed (exit {process.returncode}): "
+                      f"{stderr.decode('utf-8', 'replace').strip()[:300]}", "bee.command_failed",
+                      command=subcmd_args[0] if subcmd_args else None)
             return None
         try:
             data = json.loads(stdout.decode("utf-8"))
@@ -490,28 +494,31 @@ class BeeClient(Debug):
                     elif kind == "alive":
                         yield {"event": "stream-alive", "data": {}}
                     else:
-                        self.debug(f"Received data: {data}")
+                        self.debug(f"Received data: {data}", log=False)
                         yield parse_bee_payload(data, received_at)
                 disconnect_reason = "eof"
             except asyncio.CancelledError:
                 await self.aclose()
                 raise
             except BeeStreamTimeout as e:
-                self.debug(f"Stream stalled: {e}")
+                self.warn(f"Stream stalled: {e}", "bee.stream_stalled", transport=self.active_transport)
                 disconnect_reason = "timeout"
             except BeeProxyError as e:
                 proxy_failures += 1
-                self.debug(f"Proxy error ({proxy_failures}/{PROXY_MAX_FAILURES}): {e}")
+                self.warn(f"Proxy error ({proxy_failures}/{PROXY_MAX_FAILURES}): {e}", "bee.stream_disconnected",
+                          transport="proxy", attempt=proxy_failures)
                 disconnect_reason = f"proxy_error: {e}"
                 await self.proxy.stop()
             except Exception as e:
                 if use_proxy:
                     proxy_failures += 1
-                self.debug(f"Connection error: {e}")
+                self.warn(f"Connection error: {type(e).__name__}: {e}", "bee.stream_disconnected",
+                          transport=self.active_transport, error=e)
                 disconnect_reason = f"error: {e}"
             if use_proxy and proxy_failures >= PROXY_MAX_FAILURES and fallback_since is None:
                 fallback_since = time.time()
-                self.debug(f"Falling back to `bee stream --json` for {PROXY_RETRY_AFTER_SECONDS:g}s")
+                self.warn(f"Falling back to `bee stream --json` for {PROXY_RETRY_AFTER_SECONDS:g}s",
+                          "bee.proxy_fallback_cli", attempt=proxy_failures)
 
             await self._reap_cli_process()
             yield {"event": "stream-disconnected", "data": {"reason": disconnect_reason}}
@@ -525,7 +532,7 @@ class BeeClient(Debug):
             if event.get("event") == "new-utterance":
                 text = event.get("data", {}).get("text", "")
                 if text:
-                    self.debug(f"Extracted text: '{text}'")
+                    self.debug(f"Extracted text: '{text}'", log=False)
                     yield text
 
     def _stop_cli_process(self) -> None:

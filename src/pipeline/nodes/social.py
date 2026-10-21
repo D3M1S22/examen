@@ -18,6 +18,7 @@ from src.core.models import get_fast_model, has_active_model_credentials
 from src.core.schemas import ExamenState, SocialCommitment, SocialEntity
 from src.core.storage import get_storage_store
 from src.pipeline.nodes.scheduler import parse_reference_time, parse_relative_time_expression
+from src.core.service_log import model_fallback
 
 logger = logging.getLogger("examen.pipeline.social")
 
@@ -336,7 +337,7 @@ def _deduplicate_and_merge(extracted: SocialEntity) -> SocialEntity:
             if extracted.web_profile and extracted.website_url and not extracted.web_profile.website_url:
                 extracted.web_profile.website_url = extracted.website_url
 
-            logger.info(f"Merged social entity with existing contact '{primary.person_name}' (ID: {primary.id})")
+            logger.info(f"Merged social entity with existing contact {primary.id}")
     except Exception as e:
         logger.warning(f"Social deduplication lookup failed: {e}")
 
@@ -446,7 +447,7 @@ def node_extract_social(state: ExamenState) -> Dict[str, Any]:
             return {"social_data": None}
 
     except Exception as e:
-        logger.warning(f"Social extraction model failed: {e}. Falling back to heuristic.")
+        model_fallback(logger, "social", e)
         social = _heuristic_extract_social(
             transcript, historical_context=historical_context, speaker_role=speaker_role, ref_dt=ref_dt
         )

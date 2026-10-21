@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field
 
 from src.core.config import Settings, settings
 from src.core.schemas import TopicProfile
+from src.core.service_log import model_fallback
 
 logger = logging.getLogger("examen.ingestion.topic_continuity")
 
@@ -204,7 +205,7 @@ class TopicSimilarity:
         try:
             vec = embedder(key)
         except Exception as e:
-            logger.warning(f"Embedding call failed, falling back to heuristic similarity: {e}")
+            model_fallback(logger, "topic_continuity.embeddings", e, role="embeddings")
             return None
         if vec:
             if len(self._cache) > 256:

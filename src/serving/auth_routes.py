@@ -81,6 +81,10 @@ async def link_bee_account(user_id: str) -> BeeLink:
         link.state, link.last_error = "conflict", BEE_ACCOUNT_TAKEN
         link.bee_user_id = link.bee_first_name = None
         store.audit("bee_conflict", user_id=user_id)
+        from src.core.service_log import report_event
+
+        report_event("bee.account_conflict", "info", "Bee account already linked to another EXAMEN account",
+                     component="bee", user_id=user_id)
         return store.save_bee_link(link)
     newly = link.state != "linked" or link.bee_user_id != bee_user_id
     link.state, link.last_error = "linked", None
@@ -238,6 +242,11 @@ def register_auth_routes(mcp: Any, hooks: TenantHooks) -> None:
         keys = [_client_key(request), f"email:{email}"]
         wait = login_limiter.blocked(keys)
         if wait:
+            from src.core.service_log import report_event
+
+            known = get_auth_store().get_user_by_email(email)
+            report_event("auth.lockout", "warning", "Sign-in blocked by the rate limit", component="auth",
+                         user_id=known.id if known else None)
             return JSONResponse({"error": "rate_limited", "message": "Too many failed attempts. Try again later.",
                                  "retry_after_seconds": int(wait) + 1}, status_code=429)
         store = get_auth_store()
@@ -364,6 +373,11 @@ def register_auth_routes(mcp: Any, hooks: TenantHooks) -> None:
         await asyncio.to_thread(delete_tenant_data, user_id)
         get_auth_store().delete_user(user_id)
         get_auth_store().audit("account_erased")  # no user reference survives the erasure
+        from src.core.ops_store import get_ops_store
+        from src.core.service_log import get_sink
+
+        get_sink().flush()  # queued events of this user must not land after the erasure
+        get_ops_store().delete_user(user_id)
         logger.info("Account erased")
 
     @mcp.custom_route("/api/account/password", methods=["POST"])

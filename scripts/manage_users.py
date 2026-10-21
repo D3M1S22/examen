@@ -94,6 +94,9 @@ def cmd_delete(args) -> None:
         sys.exit("Aborted.")
     delete_tenant_data(user.id)
     get_auth_store().delete_user(user.id)
+    from src.core.ops_store import get_ops_store
+
+    get_ops_store().delete_user(user.id)  # service events and incidents of the account
     print("Deleted. Restart the server if it is running, so the user's runtime stops.")
 
 

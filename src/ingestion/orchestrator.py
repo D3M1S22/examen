@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import time
 import argparse
 import signal
@@ -32,6 +33,7 @@ from src.ingestion.ring_buffer import ContextRingBuffer
 from src.core.config import settings
 from src.core.storage import get_storage_store
 from src.core.limits import llm_slot
+from src.core.metrics import metrics
 from src.core.tenancy import get_tenant_id
 from src.core.schemas import CoverageGap, CoverageInterval, LocationTelemetry, UtteranceChunk
 
@@ -172,13 +174,14 @@ class BeeStreamOrchestrator(Debug):
         )
         self.latest_telemetry = telemetry
         self.debug(
-            f"📍 Telemetry updated: ({lat:.4f}, {lon:.4f}) | Zone: '{telemetry.semantic_zone}' | Place: '{place}'"
+            f"📍 Telemetry updated: ({lat:.4f}, {lon:.4f}) | Zone: '{telemetry.semantic_zone}' | Place: '{place}'",
+            log=False,  # location is personal data
         )
         if self.engine_enabled:
             try:
                 self.engine.on_location(telemetry.model_dump())
             except Exception as e:
-                self.debug(f"Event engine location error: {e}")
+                self.warn(f"Event engine location error: {type(e).__name__}: {e}", "event_engine.task_failed", error=e)
         return telemetry
 
     def patch_diarization(
@@ -197,8 +200,8 @@ class BeeStreamOrchestrator(Debug):
             store = self.store or get_storage_store()
             store.patch_utterance_speaker(chunk_id=utterance_id, speaker_id=speaker_id, speaker_role=role)
         except Exception as e:
-            self.debug(f"Store speaker patch error: {e}")
-        self.debug(f"🎙️ Diarization patched: Chunk '{utterance_id}' -> '{speaker_id}' ({role})")
+            self.warn(f"Store speaker patch error: {type(e).__name__}: {e}", "storage.write_failed", error=e)
+        self.debug(f"🎙️ Diarization patched: Chunk '{utterance_id}' -> '{speaker_id}' ({role})", log=False)
         return patched_buffer
 
     def buffer_incoming_utterance(self, utterance_data: dict) -> Optional[UtteranceChunk]:
@@ -290,7 +293,8 @@ class BeeStreamOrchestrator(Debug):
                 for t in outcome.transitions:
                     self.debug(f"Event {t.rule}: -> {t.to_status} ({t.reason})")
             except Exception as e:
-                self.debug(f"Event engine record_chunk error: {e}")
+                self.warn(f"Event engine record_chunk error: {type(e).__name__}: {e}", "event_engine.task_failed",
+                          error=e)
 
         if is_noop(classification):
             self.debug(f"Chunk '{chunk_id}' screened -> DROPPED (noop)")
@@ -324,16 +328,21 @@ class BeeStreamOrchestrator(Debug):
             from src.pipeline.app import agent_invocation
             # agent_invocation is synchronous: keep it off the event loop (SSE/REST stay responsive)
             self.inflight_dispatches += 1
+            metrics.incr("pipeline.dispatches", get_tenant_id())
             try:
                 async with llm_slot():
                     result = await asyncio.to_thread(agent_invocation, payload)
             finally:
                 self.inflight_dispatches -= 1
         except Exception as e:
-            self.debug(f"Pipeline dispatch error: {e}")
+            self.warn(f"Pipeline dispatch error: {type(e).__name__}: {e}", "pipeline.dispatch_failed",
+                      level=logging.ERROR, error=e, session_id=payload.get("session_id"))
             self._record_ledger(chunk, "failed")
             return None
         failed = isinstance(result, dict) and result.get("status") == "error"
+        if failed:
+            self.warn(f"Pipeline returned an error: {result.get('error') or 'unknown'}", "pipeline.dispatch_failed",
+                      level=logging.ERROR, session_id=payload.get("session_id"))
         self._record_ledger(chunk, "failed" if failed else "qualified")
         return result
 
@@ -346,7 +355,7 @@ class BeeStreamOrchestrator(Debug):
         except NotImplementedError:
             pass
         except Exception as e:
-            self.debug(f"Ingest ledger write error: {e}")
+            self.warn(f"Ingest ledger write error: {type(e).__name__}: {e}", "storage.write_failed", error=e)
 
     # ------------------------------------------------------------------
     # Speaker identity (tagged-utterance)
@@ -436,7 +445,7 @@ class BeeStreamOrchestrator(Debug):
         try:
             fix = await self._fetch_location()
         except Exception as e:
-            self.debug(f"Location poll error: {e}")
+            self.warn(f"Location poll error: {type(e).__name__}: {e}", "bee.command_failed", command="locations")
             return None
         if not fix or not fix.get("is_recent"):
             return None
@@ -492,7 +501,8 @@ class BeeStreamOrchestrator(Debug):
                 try:
                     await asyncio.to_thread(self.engine.on_bee_conversation, evt_type, data)
                 except Exception as e:
-                    self.debug(f"Event engine conversation event error: {e}")
+                    self.warn(f"Event engine conversation event error: {type(e).__name__}: {e}",
+                              "event_engine.task_failed", error=e)
             return None
         elif evt_type == "stream-disconnected":
             self.coverage.mark_disconnected()
@@ -509,7 +519,8 @@ class BeeStreamOrchestrator(Debug):
             try:
                 await self.process_incoming_utterance(data)
             except Exception as e:
-                self.debug(f"Utterance processing error: {e}")
+                self.warn(f"Utterance processing error: {type(e).__name__}: {e}", "orchestrator.utterance_failed",
+                          level=logging.ERROR, error=e)
             finally:
                 queue.task_done()
 

@@ -23,6 +23,7 @@ from src.core.models import (
     has_active_model_credentials,
 )
 from src.core.schemas import BriefingReport, ExamenState, TopicExtraction
+from src.core.service_log import model_fallback
 from src.pipeline.tools.web_search import (
     SearchCache,
     WebSearchBatchResult,
@@ -318,7 +319,7 @@ def extract_topics(
                 HumanMessage(content=prompt),
             ])
         except Exception as e:
-            logger.warning(f"Topic extraction model failed: {e}. Falling back to heuristic.")
+            model_fallback(logger, "topic_research.extraction", e)
             topic = None
     else:
         logger.debug("Extracting topic via heuristic fallback (mock_ai or no credentials).")
@@ -433,7 +434,7 @@ def synthesize_briefing(
                 if not report.explanatory_synthesis:
                     report.explanatory_synthesis = _heuristic_synthesize_report(topic, text, search_batch).explanatory_synthesis
         except Exception as e:
-            logger.warning(f"Briefing synthesis model failed: {e}. Falling back to heuristic.")
+            model_fallback(logger, "topic_research.synthesis", e, role="reasoner")
             report = None
     else:
         logger.debug("Synthesizing briefing report via heuristic fallback (mock_ai or no credentials).")

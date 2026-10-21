@@ -28,6 +28,7 @@ from src.core.schemas import (
 )
 from src.core.storage import get_storage_store
 from src.core.storage.base import AbstractContextStore
+from src.core.service_log import model_fallback
 from src.pipeline.tools.web_search import (
     SearchResultItem,
     execute_search_batch,
@@ -466,7 +467,7 @@ def evaluate_and_disambiguate_sources(
         return heuristic_disambiguate_sources(entity, search_items)
 
     except Exception as e:
-        logger.warning(f"Error during LLM source disambiguation for '{entity.person_name}': {e}. Using heuristic fallback.")
+        model_fallback(logger, "social_profiler.disambiguation", e)
         return heuristic_disambiguate_sources(entity, search_items)
 
 
@@ -654,7 +655,7 @@ def enrich_social_contact_sync(
             enriched_time = datetime.fromisoformat(entity.web_profile.enriched_at)
             days_old = (datetime.now() - enriched_time).days
             if days_old < 30:
-                logger.debug(f"Profile for '{entity.person_name}' is fresh ({days_old} days old), skipping.")
+                logger.debug(f"Profile of contact {entity.id} is fresh ({days_old} days old), skipping.")
                 return entity.web_profile
         except Exception:
             pass
@@ -756,7 +757,7 @@ def enrich_social_contact_sync(
                     HumanMessage(content=f"Synthesize verified profile for {entity.person_name}."),
                 ])
             except Exception as e:
-                logger.warning(f"Error during LLM profile synthesis for '{entity.person_name}': {e}. Using heuristic fallback.")
+                model_fallback(logger, "social_profiler.synthesis", e)
 
             if isinstance(res, SynthesizedWebProfile) and res.headline:
                 profile = SocialWebProfile(**res.model_dump())
@@ -835,7 +836,7 @@ def enrich_social_contact_sync(
         return profile
 
     except Exception as e:
-        logger.warning(f"Error enriching profile for '{entity.person_name}': {e}. Using fallback.")
+        logger.warning(f"Profile enrichment failed for contact {entity.id}: {type(e).__name__}: {e}. Using fallback.")
         profile = heuristic_profile_synthesis(entity, verified_items)
         _attach_disambiguation(profile, disambiguation_res)
         conv_url = getattr(entity, "website_url", None) or (

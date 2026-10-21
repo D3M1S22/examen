@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import ipaddress
 import logging
-import os
 import re
 from typing import Any, Collection, Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, quote, urljoin, urlparse
@@ -426,7 +425,9 @@ def _search_duckduckgo_api(query: str) -> List[SearchResultItem]:
 
 def _search_searxng_api(query: str, count: int = 3) -> List[SearchResultItem]:
     """Tier 0 Provider (Optional): SearXNG JSON API if SEARXNG_URL is configured."""
-    searxng_url = os.environ.get("SEARXNG_URL")
+    from src.core.config import settings
+
+    searxng_url = (settings.searxng_url or "").strip()
     if not searxng_url:
         return []
 

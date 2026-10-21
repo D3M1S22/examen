@@ -93,7 +93,7 @@ def node_persist(state: ExamenState) -> Dict[str, Any]:
             if historical and spoken_at:
                 social_data.timestamp = spoken_at
             rec_id = store.save_social_contact(social_data)
-            logger.info(f"Persisted social contact '{social_data.person_name}' (ID: {rec_id})")
+            logger.info(f"Persisted social contact {rec_id}")
             if session_id and hasattr(store, "link_micro_event_to_session"):
                 store.link_micro_event_to_session(
                     session_id=session_id,
@@ -115,7 +115,7 @@ def node_persist(state: ExamenState) -> Dict[str, Any]:
             if session_id and not briefing_report.session_id:
                 briefing_report.session_id = session_id
             rec_id = store.save_topic_briefing(briefing_report)
-            logger.info(f"Persisted topic briefing '{briefing_report.topic_title}' (ID: {rec_id})")
+            logger.info(f"Persisted topic briefing {rec_id}")
         except Exception as e:
             logger.error(f"Failed to persist topic briefing: {e}", exc_info=True)
 

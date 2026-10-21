@@ -16,6 +16,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 import uuid
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
@@ -34,7 +35,12 @@ from src.core.schemas import PlannedTask, SocialCommitment
 from src.core.storage import get_storage_store
 from src.core.tenancy import bee_subprocess_env, get_tenant_id, resolve_tenant, tenant_has_bee_login, tenant_scope
 from src.serving.auth_middleware import AuthMiddleware, allowed_origins
+from src.core.logging_setup import setup_logging
+from src.core.service_log import get_sink, report_event, watch_task
+from src.serving import admin_console_routes
+from src.serving.admin_console_routes import register_admin_console_routes
 from src.serving.admin_routes import register_admin_routes
+from src.serving.error_capture import ErrorCaptureMiddleware, install_asyncio_handler
 from src.serving.auth_routes import TenantHooks, register_auth_routes
 from src.pipeline.app import agent_invocation
 from src.serving.tools import (
@@ -116,6 +122,15 @@ def _ensure_event_engine() -> Any:
     return runtime.engine
 
 
+def _wire_backfill_service(service: Any, tenant: Optional[str], live_engine: Any) -> None:
+    """Points the backfill service at the current live engine and orchestrator (also after a rebuild)."""
+    mgr = OrchestratorManager.get_instance()
+    service.broadcast = lambda event_type, data=None, _t=tenant: broadcast_event(event_type, data, tenant=_t)
+    service.live_engine_getter = (lambda: live_engine) if live_engine is not None else None
+    service.live_since_getter = mgr.live_since
+    service.live_busy = mgr.live_busy
+
+
 def _ensure_backfill_service(live_engine: Any = None) -> Any:
     """Wires the Historical Transcript Backfill service to the live ingestion and starts it.
 
@@ -130,11 +145,7 @@ def _ensure_backfill_service(live_engine: Any = None) -> Any:
         return service  # no Bee history to read until the user pairs a device
     if tenant not in _backfill_prepared:
         _backfill_prepared.add(tenant)
-        mgr = OrchestratorManager.get_instance()
-        service.broadcast = lambda event_type, data=None, _t=tenant: broadcast_event(event_type, data, tenant=_t)
-        service.live_engine_getter = (lambda: live_engine) if live_engine is not None else None
-        service.live_since_getter = mgr.live_since
-        service.live_busy = mgr.live_busy
+        _wire_backfill_service(service, tenant, live_engine)
         try:
             run = service.prepare_startup(live_engine if settings.event_engine_enabled else None)
             if run is not None:
@@ -192,6 +203,7 @@ class OrchestratorManager:
         self.is_started = False
         # Set when MAX_ACTIVE_USERS live streams already run: the Bee stays paired, the stream waits
         self.capacity_blocked = False
+        self.capacity_since: Optional[float] = None
 
     @classmethod
     def get_instance(cls) -> "OrchestratorManager":
@@ -236,14 +248,19 @@ class OrchestratorManager:
                 and self.active_streams() >= max(1, settings.max_active_users):
             if not self.capacity_blocked:
                 logger.warning(f"MAX_ACTIVE_USERS={settings.max_active_users} live streams already running: "
-                               "a user's Bee stream waits for a free slot")
+                               "a user's Bee stream waits for a free slot",
+                               extra={"event_code": "orchestrator.capacity",
+                                      "ctx": {"value": self.active_streams(), "threshold": settings.max_active_users}})
+                self.capacity_since = time.time()
             self.capacity_blocked = True
             return
         self.capacity_blocked = False
+        self.capacity_since = None
         if self.task is None or self.task.done():
             try:
                 loop = asyncio.get_running_loop()
-                self.task = loop.create_task(self._run_orchestrator())
+                self.task = watch_task(loop.create_task(self._run_orchestrator()), "orchestrator.crashed",
+                                       "orchestrator")
                 self.is_started = True
             except RuntimeError:
                 pass
@@ -267,7 +284,8 @@ class OrchestratorManager:
         except asyncio.CancelledError:
             logger.info("Ingestion Orchestrator background service stopped.")
         except Exception as e:
-            logger.warning(f"Ingestion Orchestrator background service error: {e}")
+            logger.error(f"Ingestion Orchestrator background service crashed: {type(e).__name__}: {e}",
+                         exc_info=True, extra={"event_code": "orchestrator.crashed"})
         finally:
             self.is_started = False
 
@@ -408,6 +426,8 @@ def _get_bee_device_telemetry() -> Dict[str, Any]:
                     if link.state == "linked":
                         link.state, link.last_error = "invalid", "The Bee login is no longer valid: connect your Bee again."
                         store.save_bee_link(link)
+                        report_event("bee.login_invalid", "warning", "Bee login rejected by the Bee API (bee status)",
+                                     component="bee", user_id=tenant)
                 res = {
                     "connected": False,
                     "status": "DISCONNECTED",
@@ -510,6 +530,104 @@ _tenant_hooks = TenantHooks(
 )
 register_auth_routes(mcp, _tenant_hooks)
 register_admin_routes(mcp, _tenant_hooks)
+register_admin_console_routes(mcp)
+
+
+def _stream_snapshot() -> List[Dict[str, Any]]:
+    """Per-user Bee stream state for the health monitor: liveness only, no user data."""
+    if not settings.auth_enabled:
+        return []
+    from src.core.auth import get_auth_store
+    from src.core.tenancy import list_tenant_ids
+
+    store = get_auth_store()
+    out = []
+    for uid in list_tenant_ids():
+        if not tenant_has_bee_login(uid):
+            continue
+        mgr = OrchestratorManager._tenant_instances.get(uid)
+        if mgr is None and not settings.auto_start_user_orchestrators:
+            continue  # nobody started this user's ingestion: a silent stream is expected
+        orch = mgr.orchestrator if mgr is not None else None
+        frames = [t for t in (getattr(orch, "last_heartbeat_time", None), getattr(orch, "last_input_time", None)) if t]
+        out.append({
+            "user_id": uid,
+            "linked": True,
+            "running": bool(mgr is not None and mgr.running),
+            "last_frame": max(frames) if frames else None,
+            "transport": getattr(getattr(orch, "bee", None), "active_transport", None),
+            "capacity_since": mgr.capacity_since if mgr is not None else None,
+            "link_state": store.get_bee_link(uid).state,
+        })
+    return out
+
+
+async def rebuild_all_runtimes() -> int:
+    """After a ``runtime`` settings change: rebuild every user's engine and orchestrator.
+
+    Engines rehydrate their open event from the store, so nothing in progress is lost; live streams
+    reconnect within seconds. Returns how many runtimes were rebuilt."""
+    from src.ingestion import event_engine as ee
+    from src.ingestion.backfill import get_backfill_service
+
+    count = 0
+    tenants = set(OrchestratorManager._tenant_instances) | set(ee._tenant_runtimes) | set(ee._tenant_engines)
+    for uid in sorted(tenants):
+        task = OrchestratorManager.drop_tenant(uid)
+        if task is not None:
+            await asyncio.wait({task}, timeout=10)
+        ee.drop_tenant_event_engine(uid)
+        _engine_listener_registered.discard(uid)
+        invalidate_bee_status(tenant=uid)
+        with tenant_scope(uid):
+            engine = _ensure_event_engine()
+            if uid in _backfill_prepared:
+                _wire_backfill_service(get_backfill_service(), uid, engine)
+            OrchestratorManager.get_instance().ensure_started()
+        count += 1
+    if not settings.auth_enabled and (OrchestratorManager._instance is not None or ee._runtime is not None):
+        mgr = OrchestratorManager._instance
+        if mgr is not None:
+            task = mgr.task
+            mgr.stop()
+            if task is not None and not task.done():
+                await asyncio.wait({task}, timeout=10)
+            mgr.orchestrator = None
+        if ee._runtime is not None:
+            ee._runtime.stop()
+        ee._engine = ee._runtime = None
+        _engine_listener_registered.discard(None)
+        engine = _ensure_event_engine()
+        if None in _backfill_prepared:
+            _wire_backfill_service(get_backfill_service(), None, engine)
+        if mgr is not None:
+            mgr.ensure_started()
+        count += 1
+    logger.info(f"Runtime settings applied: {count} runtime(s) rebuilt")
+    return count
+
+
+def _commit() -> Optional[str]:
+    if os.environ.get("EXAMEN_COMMIT"):
+        return os.environ["EXAMEN_COMMIT"]
+    try:
+        root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        out = subprocess.run(["git", "-C", root, "rev-parse", "--short", "HEAD"], capture_output=True, text=True,
+                             timeout=3)
+        return out.stdout.strip() or None
+    except Exception:
+        return None
+
+
+def _new_health_monitor():
+    from src.core.runtime_settings import get_settings_service
+    from src.serving.health_monitor import HealthMonitor
+
+    return HealthMonitor(
+        stream_snapshot=_stream_snapshot, settings_service=get_settings_service(),
+        on_incident=lambda inc: admin_console_routes.hub.publish(
+            admin_console_routes.incident_event_type(inc), admin_console_routes.public_incident(inc)),
+    )
 
 
 def ensure_bootstrap_admin() -> None:
@@ -1946,10 +2064,13 @@ async def api_backfill_settings(request: Request) -> JSONResponse:
 
 def create_app() -> Starlette:
     """Constructs the unified ASGI application serving MCP, API, and Web UI."""
+    setup_logging()
     app = mcp.streamable_http_app()
 
     # Authentication + per-user tenant binding for /api/* and /mcp (no-op with AUTH_ENABLED=false)
     app.add_middleware(AuthMiddleware)
+    # Unhandled route errors → 500 with an event id + a service event (admin_console/03 §4.3)
+    app.add_middleware(ErrorCaptureMiddleware)
     # CORS: only the configured dashboard origins may call the API with cookies (the dashboard served
     # by this server is same-origin and needs no CORS). Added last, so it runs first (preflights).
     app.add_middleware(
@@ -1963,12 +2084,39 @@ def create_app() -> Starlette:
     # Resume every paired user's ingestion when the server starts
     original_lifespan = app.router.lifespan_context
 
+    admin_console_routes.state.monitor = _new_health_monitor()
+
     @contextlib.asynccontextmanager
     async def lifespan(app_):
         async with original_lifespan(app_) as state:
+            from src.core.runtime_settings import get_settings_service
+
+            install_asyncio_handler(asyncio.get_running_loop())
+            service = get_settings_service()
+            service.rebuild_runtimes = rebuild_all_runtimes
+            try:
+                applied = service.load()
+                if applied:
+                    logger.info(f"Runtime settings overrides applied: {len(applied)}")
+            except Exception as e:
+                logger.error(f"Runtime settings overrides not applied: {type(e).__name__}: {e}", exc_info=True)
+            sink = get_sink()
+            sink.add_listener(admin_console_routes.hub.on_sink)
+            monitor = admin_console_routes.state.monitor or _new_health_monitor()
+            admin_console_routes.state.monitor = monitor
+            monitor.start()
+            commit = _commit()
+            report_event("system.started", "info", f"EXAMEN started (commit {commit or 'unknown'})",
+                         component="system", user_id=None, commit=commit)
             ensure_bootstrap_admin()
             start_paired_user_runtimes()
-            yield state
+            try:
+                yield state
+            finally:
+                monitor.stop()
+                report_event("system.stopping", "info", "EXAMEN stopping", component="system", user_id=None)
+                sink.remove_listener(admin_console_routes.hub.on_sink)
+                sink.flush()
 
     app.router.lifespan_context = lifespan
 

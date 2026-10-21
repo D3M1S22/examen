@@ -28,6 +28,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, Set, Tuple
 
 from src.core.config import settings
 from src.core.limits import llm_slot
+from src.core.metrics import metrics
 from src.core.tenancy import get_tenant_id
 from src.core.schemas import (
     BackfillEstimate,
@@ -740,6 +741,7 @@ class ReplayExecutor:
                     "ingest_run_id": run.id,
                     "user_id": get_tenant_id(),
                 }
+                metrics.incr("pipeline.dispatches", get_tenant_id())
                 try:
                     async with llm_slot():
                         result = await asyncio.to_thread(self.dispatch, payload)
@@ -1058,7 +1060,9 @@ class BackfillService:
             return True
         self._loop = loop
         self.rehydrate()
-        self._loop_task = loop.create_task(self._main_loop())
+        from src.core.service_log import watch_task
+
+        self._loop_task = watch_task(loop.create_task(self._main_loop()), "backfill.worker_failed", "backfill")
         return True
 
     def stop(self) -> None:
@@ -1405,6 +1409,13 @@ class BackfillService:
                 planner = BackfillPlanner(self.source_factory(), self._store_getter, self.clock)
                 result = await planner.plan(run.window_from, run.window_to, run.retry_failed_live)
             if over_budget(result.plan) and not (run.trigger == "manual" and run.confirm_over_budget):
+                from src.core.service_log import report_event
+
+                report_event("backfill.over_budget", "warning",
+                             "Backfill estimate above BACKFILL_MAX_ESTIMATED_COST_USD: run trimmed to the budget",
+                             component="backfill", run_id=run.id,
+                             value=round(result.plan.estimate.cost_usd, 4),
+                             threshold=settings.backfill_max_estimated_cost_usd)
                 result = trim_to_budget(result)
             resumed_after = run.counters.get("processed", 0)
             if resumed_after:
@@ -1423,7 +1434,8 @@ class BackfillService:
             )
             run = await executor.execute()
         except Exception as e:
-            logger.error(f"Backfill run {run.id[:8]} failed: {e}", exc_info=True)
+            logger.error(f"Backfill run {run.id[:8]} failed: {type(e).__name__}: {e}", exc_info=True,
+                         extra={"event_code": "backfill.run_failed", "ctx": {"run_id": run.id}})
             run.status = "failed"
             run.error = str(e)[:500]
             run.finished_at = datetime.now().isoformat()
@@ -1436,6 +1448,10 @@ class BackfillService:
         payload = self.progress_payload(run)
         payload["counters"] = dict(run.counters)
         self.broadcast("backfill_completed", payload)
+        from src.core.service_log import report_event
+
+        report_event("backfill.run_completed", "info", f"Backfill run {run.status}", component="backfill",
+                     run_id=run.id)
         logger.info(f"Backfill run {run.id[:8]} {run.status}: {run.counters}")
         return run
 

@@ -17,6 +17,7 @@ from src.core.config import settings
 from src.core.models import get_fast_model, has_active_model_credentials
 from src.core.schemas import ExamenState, PlannedTask, ScheduledTaskExtraction
 from src.core.time_utils import parse_local_iso
+from src.core.service_log import model_fallback
 
 logger = logging.getLogger("examen.pipeline.scheduler")
 
@@ -297,6 +298,6 @@ def node_extract_scheduled_task(state: ExamenState) -> Dict[str, Any]:
         )
         return {"scheduled_task": task}
     except Exception as e:
-        logger.warning(f"LLM ambient scheduled task extraction failed: {e}. Falling back to heuristic.")
+        model_fallback(logger, "scheduler", e)
         task = _heuristic_extract_scheduled_task(transcript, ref_time_iso, session_id)
         return {"scheduled_task": task}

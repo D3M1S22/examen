@@ -62,7 +62,9 @@ def test_get_chat_model_mantle_auto_mint_token():
         )
         assert isinstance(model, ChatOpenAI)
         assert model.openai_api_key.get_secret_value() == "minted-bearer-token-xyz"
-        mock_mint.assert_called_once_with(region="us-east-1")
+        mock_mint.assert_called_once()
+        # The region is passed explicitly (an admin region override applies to minted tokens too)
+        assert mock_mint.call_args.kwargs["region"] == "us-east-1"
 
 
 def test_get_chat_model_unsupported_provider():

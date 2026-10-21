@@ -1749,8 +1749,11 @@ class EventEngineRuntime:
             return True
         self._loop = loop
         self.engine.rehydrate()
-        self._tick_task = loop.create_task(self._tick_loop())
-        self._worker_task = loop.create_task(self._worker_loop())
+        from src.core.service_log import watch_task
+
+        self._tick_task = watch_task(loop.create_task(self._tick_loop()), "event_engine.task_failed", "event_engine")
+        self._worker_task = watch_task(loop.create_task(self._worker_loop()), "event_engine.task_failed",
+                                       "event_engine")
         return True
 
     def add_listener(self, listener: Listener) -> None:
@@ -1778,7 +1781,8 @@ class EventEngineRuntime:
                 # Ticks may call the embedding model / LLM judge: keep them off the event loop
                 await asyncio.to_thread(self.engine.tick)
             except Exception as e:
-                logger.error(f"Event engine tick failed: {e}", exc_info=True)
+                logger.error(f"Event engine tick failed: {type(e).__name__}: {e}", exc_info=True,
+                             extra={"event_code": "event_engine.task_failed"})
 
     async def _worker_loop(self) -> None:
         while True:
@@ -1786,7 +1790,12 @@ class EventEngineRuntime:
             if job is None:
                 await asyncio.sleep(0.5)
                 continue
-            await asyncio.to_thread(self.engine.run_job, job)
+            try:
+                await asyncio.to_thread(self.engine.run_job, job)
+            except Exception as e:
+                # One failed synthesis must not stop the worker of this user's engine
+                logger.error(f"Event engine job failed: {type(e).__name__}: {e}", exc_info=True,
+                             extra={"event_code": "event_engine.synthesis_failed"})
 
     def stop(self) -> None:
         for task in (self._tick_task, self._worker_task):
