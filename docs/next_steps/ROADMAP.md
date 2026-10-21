@@ -41,11 +41,18 @@
 │    ├─ M7.3: Runtime settings overrides             │ P1       │ High   │ ADM 02      │ ✅ DONE   │
 │    ├─ M7.4: Admin console UI                       │ P2       │ Medium │ ADM 04      │ ✅ DONE   │
 │    └─ M7.5: Token usage per model (Health)         │ P2       │ Low    │ ADM 03 §8   │ ✅ DONE   │
+│  Phase 8: DynamoDB Storage                         │ High     │ High   │ DDB 00-07   │ 📝 PROPOSED│
+│    ├─ M8.0: Store contract & shared rules (P0)     │ P1       │ Low    │ DDB 01, 07  │ ⏳ TODO   │
+│    ├─ M8.1: DynamoContextStore (P1)                │ P1       │ High   │ DDB 02      │ ⏳ TODO   │
+│    ├─ M8.2: IAM tenant isolation & infra (P2)      │ P1       │ Medium │ DDB 04, 05  │ ⏳ TODO   │
+│    ├─ M8.3: Auth & ops on DynamoDB (P3)            │ P2       │ Medium │ DDB 03      │ ⏳ TODO   │
+│    └─ M8.4: Migration & cutover (P4)               │ P2       │ Low    │ DDB 06      │ ⏳ TODO   │
 └──────────────────────────────────────────────────────────────────────────────────────────────────┘
 
 > **DTEE** = [docs/next_steps/deep_topic_event_engine/](deep_topic_event_engine/00_overview.md)
 > **HTB** = [docs/next_steps/historical_backfill/](historical_backfill/00_overview.md)
 > **ADM** = [docs/next_steps/admin_console/](admin_console/00_overview.md)
+> **DDB** = [docs/next_steps/dynamodb_storage/](dynamodb_storage/00_overview.md)
 ```
 
 ---
@@ -312,6 +319,10 @@
 ### Phase 7: Admin Console (IMPLEMENTED)
 > **Goal:** let the admin override `.env` tunables at runtime (models, Bedrock / Mantle, region, engine and backfill parameters) with test-before-save and rollback, and see the health of the service in a log panel that groups errors and anomalies into incidents, without ever exposing users' data.
 > **Spec & status:** [admin_console/](admin_console/00_overview.md) (decisions A1–A14 confirmed 2026-10-21; status and deviations in [05 §0](admin_console/05_implementation_plan_and_testing.md)).
+
+### Phase 8: DynamoDB Storage (PROPOSED)
+> **Goal:** move the per-user store, `auth.db` and `ops.db` to DynamoDB (on-demand, no VPC, $0 at idle), with per-user isolation enforced by IAM (`dynamodb:LeadingKeys`). The host keeps no database files, and the AgentCore runtime reads and writes user data directly (doc 15 K3, chosen in [16](../16_aws_data_layer_k3.md)). SQLite stays the default backend.
+> **Spec & status:** [dynamodb_storage/](dynamodb_storage/00_overview.md) (decisions D1–D18 to confirm; phases P0–P5 and the deadline timebox in [07](dynamodb_storage/07_implementation_plan_and_testing.md)).
 
 ---
 
