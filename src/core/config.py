@@ -58,6 +58,9 @@ class Settings(BaseSettings):
     # Development & Testing
     mock_ai: bool = Field(default=False, alias="MOCK_AI")
     agentcore_runtime_arn: str | None = Field(default=None, alias="AGENTCORE_RUNTIME_ARN")
+    # local = in-process pipeline; agentcore = AgentCore Runtime with in-process fallback (docs/17 §5.4)
+    pipeline_mode: Literal["local", "agentcore"] = Field(default="local", alias="PIPELINE_MODE")
+    agentcore_timeout_seconds: int = Field(default=120, alias="AGENTCORE_TIMEOUT_SECONDS")
 
     # Deep Topic Event Engine (docs/next_steps/deep_topic_event_engine/)
     event_engine_enabled: bool = Field(default=True, alias="EVENT_ENGINE_ENABLED")

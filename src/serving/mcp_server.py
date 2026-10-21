@@ -1866,8 +1866,10 @@ async def api_simulate(request: Request) -> JSONResponse:
                 "event_managed": outcome.event_managed,
             })
 
-        # agent_invocation is synchronous: keep it off the event loop
-        result = await asyncio.to_thread(agent_invocation, payload)
+        # The pipeline call is synchronous (in-process or AgentCore): keep it off the event loop
+        from src.pipeline.remote import invoke_pipeline
+
+        result = await asyncio.to_thread(invoke_pipeline, payload, agent_invocation)
         if event_info is not None:
             result["event"] = event_info
         elapsed_sec = (datetime.now() - start_time).total_seconds()

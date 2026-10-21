@@ -521,9 +521,9 @@ def _default_classifier() -> Classifier:
 
 
 def _default_dispatcher() -> Dispatcher:
-    from src.pipeline.app import agent_invocation
+    from src.pipeline.remote import invoke_pipeline
 
-    return agent_invocation
+    return invoke_pipeline
 
 
 def _is_noop(classification: ChunkClassification) -> bool:

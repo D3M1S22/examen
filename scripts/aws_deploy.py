@@ -44,48 +44,58 @@ def cmd_params(session, args) -> int:
     return 0
 
 
-def cmd_stack(session, args) -> int:
+def deploy_stack(session, stack_name: str, template: Path, params, keep_previous=()) -> dict:
+    """Creates or updates a stack and waits; returns its outputs (raises on failure).
+
+    ``keep_previous`` lists parameters an update must keep (UsePreviousValue)."""
     cfn = session.client("cloudformation")
-    account = session.client("sts").get_caller_identity()["Account"]
-    params = [{"ParameterKey": "ArtifactBucket", "ParameterValue": f"examen-artifacts-{account}-euc1"}]
-    params += [{"ParameterKey": k, "ParameterValue": v} for k, v in (p.split("=", 1) for p in args.param or [])]
-    body = TEMPLATE.read_text()
+    body = template.read_text()
     try:
-        cfn.describe_stacks(StackName=STACK)
+        cfn.describe_stacks(StackName=stack_name)
         exists = True
     except cfn.exceptions.ClientError:
         exists = False
-    kwargs = dict(StackName=STACK, TemplateBody=body, Parameters=params, Capabilities=["CAPABILITY_NAMED_IAM"])
+    parameters = [{"ParameterKey": k, "ParameterValue": v} for k, v in params.items()]
+    if exists:
+        parameters += [{"ParameterKey": k, "UsePreviousValue": True} for k in keep_previous if k not in params]
+    kwargs = dict(StackName=stack_name, TemplateBody=body, Parameters=parameters, Capabilities=["CAPABILITY_NAMED_IAM"])
     if exists:
         try:
             cfn.update_stack(**kwargs)
         except cfn.exceptions.ClientError as e:
-            if "No updates are to be performed" in str(e):
-                print("Stack up to date")
-                return _outputs(cfn)
-            raise
+            if "No updates are to be performed" not in str(e):
+                raise
+            print(f"{stack_name}: up to date")
+            return _outputs(cfn, stack_name)
     else:
         cfn.create_stack(**kwargs, Tags=[{"Key": "project", "Value": "examen"}])
-    print(f"{'Updating' if exists else 'Creating'} {STACK} (CloudFront takes a few minutes)...")
+    print(f"{'Updating' if exists else 'Creating'} {stack_name}...")
     while True:
-        stack = cfn.describe_stacks(StackName=STACK)["Stacks"][0]
+        stack = cfn.describe_stacks(StackName=stack_name)["Stacks"][0]
         if not stack["StackStatus"].endswith("IN_PROGRESS"):
             break
-        time.sleep(15)
-    print("Status:", stack["StackStatus"])
+        time.sleep(10)
+    print(f"{stack_name}: {stack['StackStatus']}")
     if stack["StackStatus"] not in ("CREATE_COMPLETE", "UPDATE_COMPLETE"):
-        for ev in cfn.describe_stack_events(StackName=STACK)["StackEvents"][:20]:
+        for ev in cfn.describe_stack_events(StackName=stack_name)["StackEvents"][:20]:
             if "FAILED" in ev["ResourceStatus"]:
                 print(" ", ev["LogicalResourceId"], ev["ResourceStatus"], ev.get("ResourceStatusReason", "")[:240])
-        return 1
-    return _outputs(cfn)
+        raise SystemExit(1)
+    return _outputs(cfn, stack_name)
 
 
-def _outputs(cfn) -> int:
-    stack = cfn.describe_stacks(StackName=STACK)["Stacks"][0]
-    for o in stack.get("Outputs", []):
-        print(f"{o['OutputKey']}: {o['OutputValue']}")
+def cmd_stack(session, args) -> int:
+    account = session.client("sts").get_caller_identity()["Account"]
+    params = {"ArtifactBucket": f"examen-artifacts-{account}-euc1"}
+    params.update(dict(p.split("=", 1) for p in args.param or []))
+    for key, value in deploy_stack(session, STACK, TEMPLATE, params).items():
+        print(f"{key}: {value}")
     return 0
+
+
+def _outputs(cfn, stack_name: str = STACK) -> dict:
+    stack = cfn.describe_stacks(StackName=stack_name)["Stacks"][0]
+    return {o["OutputKey"]: o["OutputValue"] for o in stack.get("Outputs", [])}
 
 
 def _instance_id(session) -> str:
@@ -94,7 +104,7 @@ def _instance_id(session) -> str:
     return outputs["InstanceId"]
 
 
-def _run(session, commands, timeout: int = 900) -> int:
+def run_on_host(session, commands, timeout: int = 900) -> int:
     ssm = session.client("ssm")
     instance = _instance_id(session)
     command = ssm.send_command(InstanceIds=[instance], DocumentName="AWS-RunShellScript",
@@ -118,11 +128,11 @@ def _run(session, commands, timeout: int = 900) -> int:
 
 
 def cmd_update(session, args) -> int:
-    return _run(session, ["/usr/local/sbin/examen-host update"])
+    return run_on_host(session, ["/usr/local/sbin/examen-host update"])
 
 
 def cmd_logs(session, args) -> int:
-    return _run(session, ["tail -n 60 /var/log/examen-bootstrap.log || true",
+    return run_on_host(session, ["tail -n 60 /var/log/examen-bootstrap.log || true",
                           "systemctl is-active examen || true",
                           "journalctl -u examen -n 40 --no-pager || true"], timeout=120)
 

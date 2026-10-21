@@ -325,13 +325,13 @@ class BeeStreamOrchestrator(Debug):
         }
 
         try:
-            from src.pipeline.app import agent_invocation
-            # agent_invocation is synchronous: keep it off the event loop (SSE/REST stay responsive)
+            from src.pipeline.remote import invoke_pipeline
+            # The pipeline call is synchronous (in-process or AgentCore): keep it off the event loop
             self.inflight_dispatches += 1
             metrics.incr("pipeline.dispatches", get_tenant_id())
             try:
                 async with llm_slot():
-                    result = await asyncio.to_thread(agent_invocation, payload)
+                    result = await asyncio.to_thread(invoke_pipeline, payload)
             finally:
                 self.inflight_dispatches -= 1
         except Exception as e:

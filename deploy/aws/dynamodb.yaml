@@ -253,13 +253,14 @@ Resources:
             Effect: Allow
             Action: [sts:AssumeRole, sts:TagSession]
             Resource: !GetAtt TenantDataRole.Arn
-          - Sid: TokenUsage
+          - Sid: OpsShared
             Effect: Allow
-            Action: [dynamodb:UpdateItem, dynamodb:GetItem]
+            # Token usage, service-log events and the admin settings overrides (read): no incidents, no auth
+            Action: [dynamodb:GetItem, dynamodb:Query, dynamodb:PutItem, dynamodb:UpdateItem, dynamodb:BatchWriteItem]
             Resource: !GetAtt OpsTable.Arn
             Condition:
               ForAllValues:StringLike:
-                dynamodb:LeadingKeys: ["USAGE#*", "META"]
+                dynamodb:LeadingKeys: ["USAGE#*", "META", "EVENT", "SETTING"]
           - Sid: StartupCheck
             Effect: Allow
             Action: dynamodb:DescribeTable

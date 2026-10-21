@@ -190,7 +190,8 @@ BOOT_KEYS = ("mcp_host", "mcp_port", "mcp_streamable_http", "mcp_allowed_hosts",
              "auth_enabled", "auth_cookie_secure", "examen_data_dir", "storage_backend", "sqlite_db_path",
              "auth_store_backend", "ops_store_backend", "dynamo_region", "dynamo_table_prefix",
              "dynamo_endpoint_url", "dynamo_tenant_role_arn", "dynamo_telemetry_ttl_days",
-             "auto_start_user_orchestrators", "bee_proxy_port", "agentcore_runtime_arn", "privacy_notice_version")
+             "auto_start_user_orchestrators", "bee_proxy_port", "agentcore_runtime_arn", "privacy_notice_version",
+             "pipeline_mode", "agentcore_timeout_seconds")
 SECRET_KEYS = ("aws_access_key_id", "aws_secret_access_key", "aws_session_token", "mantle_api_key")
 
 # Probe groups whose candidate values identify a test result

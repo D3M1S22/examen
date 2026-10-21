@@ -7,6 +7,9 @@ serving ambient speech insights and actions over the AgentCore microVM runtime.
 from __future__ import annotations
 
 import logging
+import os
+import threading
+import time
 import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -22,6 +25,28 @@ from src.pipeline.graph import pipeline_graph
 logger = logging.getLogger("examen.pipeline.app")
 
 app = BedrockAgentCoreApp()
+
+# On AgentCore Runtime (EXAMEN_REMOTE_RUNTIME=1) the admin console's overrides live in the shared ops
+# table: re-read them when their version changes, checked at most every 30 s
+_REMOTE = os.environ.get("EXAMEN_REMOTE_RUNTIME") == "1"
+_settings_lock = threading.Lock()
+_settings_checked = 0.0
+
+
+def _sync_remote_settings() -> None:
+    global _settings_checked
+    with _settings_lock:
+        if time.time() - _settings_checked < 30:
+            return
+        _settings_checked = time.time()
+    try:
+        from src.core.runtime_settings import get_settings_service
+
+        service = get_settings_service()
+        if service.store_getter().settings_version() != service.version:
+            service.load()
+    except Exception as e:
+        logger.warning(f"Runtime settings not synced: {type(e).__name__}")
 
 
 def _build_summary(result_state: Dict[str, Any]) -> str:
@@ -75,6 +100,8 @@ def agent_invocation(payload: Dict[str, Any], context: Any = None) -> Dict[str, 
     Locally the caller's tenant is already set and must match; on a remote AgentCore runtime the payload
     is the only carrier of the tenant. With accounts enabled a payload without a user is rejected.
     """
+    if _REMOTE:
+        _sync_remote_settings()
     current = get_tenant_id()
     requested = payload.get("user_id") or None
     if requested is not None and not is_valid_user_id(requested):
