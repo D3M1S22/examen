@@ -78,8 +78,8 @@ The instance runs the single-user `main` until then. Its `update.sh` checks `/ap
 
 ### 3.2 Switching the instance to DynamoDB (optional, once)
 SQLite stays the default. To run CT 147 on DynamoDB ([next_steps/dynamodb_storage/06](next_steps/dynamodb_storage/06_migration_and_cutover.md) §2):
-1. Deploy `deploy/aws/dynamodb.yaml` with `Prefix=examen-hl-`.
-2. Create an IAM user and attach the `examen-hl-runtime-data` policy. Its keys go into `/opt/examen/.env` (mode 600), because the homelab has no instance role.
+1. Deploy `deploy/aws/dynamodb.yaml` with `Prefix=examen-hl-` and `RuntimeUserName=<the IAM user whose keys are in /opt/examen/.env>`. The homelab has no instance role, so the stack attaches `examen-hl-runtime-data` to that user.
+2. Deploying needs an identity with CloudFormation, IAM and DynamoDB rights: the console as an admin, for example. The app's own user (Bedrock only) cannot do it.
 3. Stop the service and the update timer: `systemctl stop examen-update.timer examen`.
 4. Copy the data:
 

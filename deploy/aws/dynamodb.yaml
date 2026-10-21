@@ -14,6 +14,10 @@ Parameters:
     Type: String
     Default: ""
     Description: Name of the IAM role of the worker / API host (empty to attach the policy later)
+  RuntimeUserName:
+    Type: String
+    Default: ""
+    Description: Name of an IAM user that runs EXAMEN without an instance role (homelab), empty for none
   AgentCoreRoleName:
     Type: String
     Default: ""
@@ -25,6 +29,7 @@ Parameters:
 
 Conditions:
   HasRuntimeRole: !Not [!Equals [!Ref RuntimeRoleName, ""]]
+  HasRuntimeUser: !Not [!Equals [!Ref RuntimeUserName, ""]]
   HasAgentCoreRole: !Not [!Equals [!Ref AgentCoreRoleName, ""]]
   HasAlarmEmail: !Not [!Equals [!Ref AlarmEmail, ""]]
 
@@ -205,6 +210,7 @@ Resources:
     Properties:
       ManagedPolicyName: !Sub "${Prefix}runtime-data"
       Roles: !If [HasRuntimeRole, [!Ref RuntimeRoleName], !Ref AWS::NoValue]
+      Users: !If [HasRuntimeUser, [!Ref RuntimeUserName], !Ref AWS::NoValue]
       PolicyDocument:
         Version: "2012-10-17"
         Statement:
