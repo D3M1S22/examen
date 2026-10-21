@@ -1,0 +1,240 @@
+# 🚀 17 — AWS Deployment Runbook (readiness and plan)
+
+> **Document Status:** Plan, 2026-10-21 (evening). Readiness was checked against the code on branch `aws` and the AWS account `301356686376`. **The deployment cannot start yet**: two blockers need the account owner (§2). Everything else is listed as work items with owners and estimates.
+> **Related:** [06](06_aws_cloud_deployment_architecture.md) (hosting options and costs, option A chosen), [15](15_aws_split_architecture_report.md) (AgentCore split), [16](16_aws_data_layer_k3.md) and [next_steps/dynamodb_storage/](next_steps/dynamodb_storage/00_overview.md) (data layer, deployed), [11](11_homelab_test_deployment.md) (homelab scripts reused here), [14](14_aws_and_hackathon_reference.md) (hackathon rules)
+> **Deadline:** Fri 23 Oct 2026, 12:00 PT (21:00 CEST).
+
+---
+
+## 1. Readiness
+
+### 1.1 Ready
+| Item | State | Evidence |
+|---|---|---|
+| Application | One process (REST, SSE, MCP, dashboard, per-user Bee ingestion), suites green on SQLite (476) and DynamoDB (473 + 3 skipped) | [dynamodb_storage/07](next_steps/dynamodb_storage/07_implementation_plan_and_testing.md) §0 |
+| Data layer | Stack `examen-data` in **eu-central-1**: `examen-user`, `examen-auth`, `examen-ops` (on-demand, PITR, TTL, deletion protection), tenant role, runtime and AgentCore policies | Schema check clean; IAM simulator 8/8; live `dynamo_iam_check.py` 10/10 |
+| Tenant isolation | `DYNAMO_TENANT_ROLE_ARN=arn:aws:iam::301356686376:role/examen-tenant-data` | A request on another user's partition gets `AccessDeniedException` |
+| Bedrock | Models answer in **us-east-1** (Nemotron Super 3 120B; Titan V2 listed) with the `Examen` user | Converse probe, 21 tokens |
+| Host scripts | `deploy/homelab/deploy.sh`, `update.sh`, `examen.service` (Debian/Ubuntu, `uv`, Python 3.12, systemd hardening) | Running on CT 147 |
+| Bee CLI | `resources/bee-cli/dist/platforms/linux-x64/bee` (x86 only) | Used by `deploy.sh` |
+| Health probe | `GET /api/health` (unauthenticated liveness) | Used by `update.sh` |
+| SSE behind a proxy | User and admin SSE send `: keepalive` every 15 s (under CloudFront's 30 s origin timeout) | [mcp_server.py](../src/serving/mcp_server.py) |
+
+### 1.2 Missing
+| # | Item | Why it matters | Owner | Estimate |
+|---|---|---|---|---|
+| M1 | **Compute stack** `deploy/aws/compute.yaml`: EC2, security group, instance role, CloudFront, artifact bucket | Nothing runs the app on AWS yet | Claude | 1.5 h |
+| M2 | **Code delivery** without GitHub access: the repo `D3M1S22/amazon_challenge` is **private** (the API answers 404 anonymously), so the instance cannot `git pull` | `update.sh` assumes `git fetch`. The instance needs a bundle from S3 (or a deploy key) | Claude | 1 h |
+| M3 | **Bootstrap and update** for EC2: `deploy/aws/bootstrap.sh` (user data) and `deploy/aws/update.sh` (run through SSM Run Command) | No SSH on the instance (SSM only) | Claude | 1 h |
+| M4 | **Cloud `.env`**: DynamoDB backends, tenant role, Bedrock region, public URL settings, closed sign-up, bootstrap admin from SSM Parameter Store | Several defaults are wrong behind CloudFront (§4) | Claude | 0.5 h |
+| M5 | **AgentCore pipeline** (optional for the deadline): `PIPELINE_MODE=local\|agentcore`, a remote invoke client, the runtime deployed from `src/pipeline/app.py` | AgentCore showcase; with DynamoDB the remote pipeline writes the user's data directly (doc 16) | Claude | 4–6 h |
+| M6 | **Branch**: the deployment code is on `aws`, 6 commits ahead of `main` | The bundle can come from any branch, but the submission and future updates should track `main` | Team | 10 min (review + merge) |
+| M7 | **Submission requirements**: no `LICENSE` file; the repo is private | The repo must be public with an OSS license, or shared with the judges (doc 14) | Team | 15 min |
+
+### 1.3 Blockers (account owner)
+| # | Blocker | Found | Unblocks |
+|---|---|---|---|
+| **B1** | The `Examen` IAM user (the app's identity) has no rights on CloudFormation, EC2, IAM, CloudFront, S3, SSM or ECR (`AccessDenied` on list calls). The root keys used for the data stack were removed, as recommended | 2026-10-21 | Every step from §5.2 on |
+| **B2** | **Bedrock in eu-central-1** answers *"Your account is currently being verified … normally less than 2 hours"*. us-east-1 works | Converse and InvokeModel probes, 2026-10-21 | Optional: Bedrock in the same region as compute and data. **Not blocking**: phase 1 keeps Bedrock in us-east-1 |
+
+**B1 options** (one is needed):
+- **B1-a ★ (recommended)**: grant `Examen` the temporary deploy policy of Appendix A, scoped to `examen-*` resources. Claude deploys and verifies; the owner removes the policy after the deadline. About 10 minutes in the IAM console.
+- **B1-b**: the owner deploys `compute.yaml` from the CloudFormation console (as for the data stack) and runs the SSM commands of §5.3. Slower round trips, the same result.
+
+---
+
+## 2. Target for the deadline
+
+```
+                        CloudFront (https://dXXXX.cloudfront.net, default certificate)
+ Browser / Echo / MCP ──►   behaviour * : CachingDisabled, AllViewerExceptHostHeader, all methods
+                              │  HTTP :8000 (security group: CloudFront origin-facing prefix list only)
+                              ▼
+            EC2 t3a.small (x86, Ubuntu 24.04, eu-central-1, IMDSv2, SSM, no SSH)
+              systemd examen: REST · SSE · /mcp · dashboard · per-user bee proxy + ingestion
+              EBS gp3 20 GB encrypted: /var/lib/examen/data (Bee tokens, logs only)
+              instance role: Bedrock (us-east-1) · examen-runtime-data (DynamoDB + AssumeRole tenant)
+                              │                                  │
+                              ▼                                  ▼
+            DynamoDB eu-central-1 (deployed)          Bedrock us-east-1 (switch to eu-central-1
+            examen-user / -auth / -ops                 from the admin console once B2 clears)
+                              ▲
+            (phase 2) AgentCore Runtime eu-central-1: pipeline, tenant role per invocation
+```
+
+**Why this shape:**
+- Doc 06 option A: one always-on host, because the Bee streams are long-lived.
+- DynamoDB removes the database from the host. The EBS volume only keeps Bee tokens and logs, so losing the instance loses no user data.
+- CloudFront gives HTTPS with no domain or certificate work. The origin is reachable only from CloudFront.
+- `t3a.small` (2 GB) instead of `t3a.medium`: no SQLite cache or backfill writes on the host any more. About 115 MB idle, plus 50–80 MB per Bee proxy, leaves headroom for 5 users.
+
+**Monthly cost** (eu-central-1):
+- t3a.small ≈ $16;
+- public IPv4 $3.6;
+- EBS 20 GB ≈ $1.9;
+- CloudFront (free tier) $0;
+- DynamoDB ≈ $5–6;
+- S3 artifacts < $0.1.
+
+That is **≈ $27 per month plus model tokens** (doc 06 §7).
+
+---
+
+## 3. Decisions for this deployment
+
+| # | Topic | Decision | Alternative kept open |
+|---|---|---|---|
+| R1 | Hosting | EC2 single instance (doc 06 H1 = A) | Fargate after the Bee tokens leave the disk |
+| R2 | Region | Compute and data in **eu-central-1**; Bedrock in **us-east-1** until B2 clears, then switch from the admin console (`AWS_REGION` is a runtime setting; `DYNAMO_REGION` is not) | Bedrock in eu-central-1 from day one if B2 clears before the deploy |
+| R3 | HTTPS | CloudFront default domain and certificate | Route 53 domain + ACM certificate later |
+| R4 | Credentials | **Instance role**: no AWS keys in the cloud `.env` (doc 06 H4) | — |
+| R5 | Code delivery | **S3 bundle** built locally (code, built dashboard, `bee` binary), installed by bootstrap and by an SSM-run update script | GitHub deploy key + today's `update.sh` once the repo is reachable |
+| R6 | OS | Ubuntu 24.04 LTS (x86): the homelab scripts are apt-based, and the Canonical AMI ships the SSM agent | Amazon Linux 2023 |
+| R7 | Sign-up | **Closed** (`AUTH_ALLOW_SIGNUP=false`): the admin creates accounts (doc 06 H8) | Open sign-up behind WAF |
+| R8 | Pipeline | In-process for the first deploy; AgentCore as phase 2 behind `PIPELINE_MODE` with a local fallback | — |
+
+---
+
+## 4. Cloud configuration (`/opt/examen/.env` on the instance)
+
+Written by `bootstrap.sh`. The admin password comes from SSM Parameter Store and never sits in the user data.
+
+| Key | Value | Why |
+|---|---|---|
+| `AUTH_ENABLED` | `true` | Multi-user |
+| `AUTH_ALLOW_SIGNUP` | `false` | R7 |
+| `AUTH_COOKIE_SECURE` | `true` | CloudFront talks HTTP to the origin and sends no `X-Forwarded-Proto` (only `CloudFront-Forwarded-Proto`), so `auto` would issue non-Secure cookies |
+| `MCP_HOST` / `MCP_PORT` | `0.0.0.0` / `8000` | CloudFront custom origin port |
+| `MCP_ALLOWED_HOSTS` | `*` | The origin only accepts CloudFront traffic (security group), and the Host header is the EC2 name (AllViewerExceptHostHeader) |
+| `CORS_ALLOWED_ORIGINS` | `https://<distribution>.cloudfront.net` | Dashboard origin |
+| `STORAGE_BACKEND`, `AUTH_STORE_BACKEND`, `OPS_STORE_BACKEND` | `dynamo` | Data layer |
+| `DYNAMO_REGION` / `DYNAMO_TABLE_PREFIX` | `eu-central-1` / `examen-` | Deployed stack |
+| `DYNAMO_TENANT_ROLE_ARN` | `arn:aws:iam::301356686376:role/examen-tenant-data` | IAM isolation |
+| `AWS_REGION` | `us-east-1` | Bedrock (R2) |
+| `GATEKEEPER_PROVIDER` / `REASONER_PROVIDER` and model ids | as in the local `.env` | Same behaviour as tested |
+| `EXAMEN_BOOTSTRAP_ADMIN` / `EXAMEN_BOOTSTRAP_ADMIN_PASSWORD` | from `/examen/bootstrap-admin-email` and `/examen/bootstrap-admin-password` (SecureString) | First admin. The password must not contain the e-mail's local part (`password_problem`) |
+| `AUTO_START_USER_ORCHESTRATORS` | `true` | Streams resume after a restart |
+| `EXAMEN_DATA_DIR` | `/var/lib/examen/data` | Set by `examen.service` |
+
+---
+
+## 5. Runbook
+
+### 5.1 Work that needs no AWS rights (Claude, ≈ 3.5 h, can start now)
+1. **`deploy/aws/compute.yaml`**:
+   - **Parameters:** `InstanceType` (t3a.small), `ArtifactBucketName`, `BedrockRegion`, `DataStackRuntimePolicyArn` (output of `examen-data`).
+   - **Security group:** inbound TCP 8000 only from the managed prefix list `com.amazonaws.global.cloudfront.origin-facing`; no port 22.
+   - **Instance role** with:
+     - `AmazonSSMManagedInstanceCore`;
+     - `bedrock:InvokeModel*` and `bedrock:Converse*` on the used models and inference profiles in `BedrockRegion`;
+     - the `examen-runtime-data` managed policy;
+     - `s3:GetObject` on the artifact bucket and `ssm:GetParameter` on `/examen/*`.
+   - **Instance:** Ubuntu 24.04 AMI from the public SSM parameter `/aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id`, IMDSv2 required, 20 GB gp3 encrypted, user data calling `bootstrap.sh`.
+   - **CloudFront:** custom origin on the instance's public DNS, HTTP port 8000, origin read timeout 60 s. Default behaviour: *CachingDisabled* + *AllViewerExceptHostHeader*, all HTTP methods, HTTPS redirect.
+   - **Outputs** and a CloudWatch auto-recover alarm.
+   - Validate with `cfn-lint`. A test parses the template like `test_dynamo_schema.py` and checks: no 22/0.0.0.0, IMDSv2, encryption.
+2. **`scripts/aws_bundle.sh`**: `scripts/build_ui.sh`, then a `tar` of the tracked code (same excludes as `deploy.sh`) plus `src/web_ui/out` and the `bee` binary. Uploads it to `s3://<bucket>/bundles/<git-sha>.tgz` and moves `bundles/current` to it.
+3. **`deploy/aws/bootstrap.sh`** (idempotent, run by cloud-init):
+   - apt packages, the `examen` user, `uv` + Python 3.12, `/usr/local/bin/bee`;
+   - unpacks the bundle into `/opt/examen`, creates the venv, installs `requirements.txt`;
+   - writes the `.env` of §4 (the admin from SSM);
+   - installs `deploy/homelab/examen.service`, enables it and starts it;
+   - health check on `/api/health`.
+4. **`deploy/aws/update.sh`**: downloads `bundles/current`, swaps `/opt/examen` atomically (keeps the previous release), reinstalls dependencies if `requirements.txt` changed, restarts, and runs the health check with rollback (the same logic as the homelab `update.sh`). It is run with `AWS-RunShellScript` through SSM.
+5. **Doc 11 / this doc**: commands, smoke list, teardown.
+
+### 5.2 Deployment (needs B1)
+| Step | Command / action | Who | Check |
+|---|---|---|---|
+| 1 | Create the artifact bucket and the SSM parameters `/examen/bootstrap-admin-email`, `/examen/bootstrap-admin-password` (SecureString) | Claude (B1-a) or owner | Parameters readable by the role only |
+| 2 | `scripts/aws_bundle.sh` | Claude | `bundles/current` points to the commit |
+| 3 | Deploy `compute.yaml` as stack `examen-compute` in eu-central-1 | Claude (B1-a) / owner (B1-b) | `CREATE_COMPLETE`, CloudFront domain in the outputs (≈ 5–10 min for CloudFront) |
+| 4 | Wait for the bootstrap (cloud-init, ≈ 5 min); read the log through SSM | Claude | `systemctl is-active examen`; Health `storage: dynamo`, `tenant_isolation: true` |
+| 5 | Set `CORS_ALLOWED_ORIGINS` to the CloudFront domain (SSM command + restart) | Claude | Dashboard loads over HTTPS |
+| 6 | Smoke list (§6) | Claude, then team | All green |
+| 7 | Pair a real Bee from the dashboard (QR) | Team | Live stream in the admin Health view |
+
+### 5.3 Updates after the first deploy
+`scripts/aws_bundle.sh`, then:
+
+```bash
+aws ssm send-command --document-name AWS-RunShellScript --targets Key=tag:Name,Values=examen \
+  --parameters commands='/opt/examen/deploy/aws/update.sh'
+```
+
+The equivalent is also available from the console (*Systems Manager → Run Command*).
+
+### 5.4 Phase 2: AgentCore pipeline (≈ 4–6 h, after the first deploy is green)
+1. **Code**:
+   - `src/pipeline/remote.py`: a `bedrock-agentcore` client `invoke_agent_runtime(agentRuntimeArn, runtimeSessionId=<session_id padded to 33+ chars>, payload)`.
+   - `PIPELINE_MODE=local|agentcore` (boot key) in `orchestrator.py`, `backfill.py` and `/api/simulate`. On a remote error or timeout it falls back to local, with event code `pipeline.remote_fallback`.
+   - The payload already carries `user_id` (checked by `agent_invocation`). The remote store uses the tenant role, and token usage is flushed to ops (already implemented).
+2. **Deploy**: AgentCore starter toolkit (`agentcore configure` / `agentcore launch`, ARM64 container built in CodeBuild) in eu-central-1:
+   - execution role with `examen-agentcore-data` attached (`AgentCoreRoleName` parameter of the data stack: a stack update) and Bedrock invoke rights;
+   - environment: the DynamoDB values of §4, `AUTH_ENABLED=true`.
+   - Needs the AgentCore part of Appendix A.
+3. **Tests**: unit tests with a stubbed client (fallback, payload, tenant mismatch); then the live smoke with `PIPELINE_MODE=agentcore` on the instance; latency in the admin Health view.
+4. **Go / no-go**: if it is not green by Fri 23 Oct 12:00 CEST, the submission ships with the in-process pipeline. AgentCore is then described as the next step (doc 15).
+
+---
+
+## 6. Smoke list (cloud)
+1. `https://<domain>/` loads the dashboard; `/api/health` → 200.
+2. The bootstrap admin logs in; the session cookie is `Secure` and `HttpOnly`.
+3. The admin creates a user. Sign-up from the login page is refused (closed).
+4. As the user: create a routine, run `/api/simulate` with a completing sentence, and check that the routine is completed and the action appears.
+5. The SSE stream stays open more than 2 minutes through CloudFront (keep-alives received).
+6. MCP: an access token from *Account → MCP access tokens*; `scripts/test_mcp_client.py` against `https://<domain>/mcp` lists the tools.
+7. Admin console: Health shows `storage: dynamo`, `tenant_isolation: true`, no open critical incident; token usage counts the simulate call.
+8. GDPR export downloads; erasing a test account leaves its DynamoDB partition empty.
+9. Bee pairing by QR on a real device; the live stream reaches the Health view.
+
+## 7. Rollback and teardown
+- **Bad update:** `update.sh` keeps the previous release and rolls back when the health check fails.
+- **Broken instance:** terminate it and re-create the stack. Data is in DynamoDB (PITR). Only the Bee logins are lost: users pair again.
+- **Teardown after the hackathon:** delete `examen-compute` (instance, CloudFront, bucket). The data stack has deletion protection, so it is removed only on purpose.
+- **Temporary rights:** remove the Appendix A policy from `Examen` after the deadline.
+
+## 8. Timeline to the deadline
+| When (CEST) | Work |
+|---|---|
+| Wed 21, night | Decide on B1 and M6/M7 |
+| Thu 22, morning | §5.1 (artifacts), then §5.2 once B1 is solved: first deploy and smoke |
+| Thu 22, afternoon | §5.4 AgentCore (optional), live smoke |
+| Fri 23, until 12:00 | Go / no-go on AgentCore, video recording (IAM denial, DynamoDB console, live dashboard), submission checklist (doc 15 §6) |
+
+---
+
+## Appendix A — Temporary deploy policy for `Examen` (B1-a)
+
+Attach as an inline policy and remove it after the deadline. Resources are limited to `examen*` names wherever the service supports it. CloudFront and EC2 `Run`/`Describe` calls do not support resource scoping for every action.
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {"Sid": "Stacks", "Effect": "Allow", "Action": "cloudformation:*",
+     "Resource": "arn:aws:cloudformation:eu-central-1:301356686376:stack/examen-*/*"},
+    {"Sid": "StackRead", "Effect": "Allow", "Action": ["cloudformation:ValidateTemplate", "cloudformation:ListStacks",
+     "cloudformation:DescribeStacks"], "Resource": "*"},
+    {"Sid": "Compute", "Effect": "Allow", "Action": ["ec2:*", "cloudfront:*", "cloudwatch:PutMetricAlarm",
+     "cloudwatch:DeleteAlarms", "cloudwatch:DescribeAlarms"], "Resource": "*"},
+    {"Sid": "Roles", "Effect": "Allow", "Action": ["iam:CreateRole", "iam:DeleteRole", "iam:GetRole", "iam:PassRole",
+     "iam:TagRole", "iam:PutRolePolicy", "iam:DeleteRolePolicy", "iam:GetRolePolicy", "iam:AttachRolePolicy",
+     "iam:DetachRolePolicy", "iam:CreateInstanceProfile", "iam:DeleteInstanceProfile", "iam:GetInstanceProfile",
+     "iam:AddRoleToInstanceProfile", "iam:RemoveRoleFromInstanceProfile", "iam:CreateServiceLinkedRole"],
+     "Resource": ["arn:aws:iam::301356686376:role/examen-*", "arn:aws:iam::301356686376:instance-profile/examen-*",
+                  "arn:aws:iam::301356686376:role/aws-service-role/*"]},
+    {"Sid": "DataStackUpdate", "Effect": "Allow", "Action": ["iam:CreatePolicyVersion", "iam:DeletePolicyVersion",
+     "iam:GetPolicy", "iam:GetPolicyVersion", "iam:ListPolicyVersions", "iam:AttachUserPolicy", "iam:DetachUserPolicy"],
+     "Resource": ["arn:aws:iam::301356686376:policy/examen-*", "arn:aws:iam::301356686376:user/Examen"]},
+    {"Sid": "Artifacts", "Effect": "Allow", "Action": "s3:*",
+     "Resource": ["arn:aws:s3:::examen-*", "arn:aws:s3:::examen-*/*"]},
+    {"Sid": "Ops", "Effect": "Allow", "Action": ["ssm:PutParameter", "ssm:GetParameter", "ssm:DeleteParameter",
+     "ssm:SendCommand", "ssm:GetCommandInvocation", "ssm:ListCommandInvocations", "ssm:DescribeInstanceInformation",
+     "ssm:StartSession", "ssm:GetParameters"], "Resource": "*"},
+    {"Sid": "AgentCorePhase2", "Effect": "Allow", "Action": ["bedrock-agentcore:*", "ecr:*", "codebuild:*",
+     "logs:*", "xray:*"], "Resource": "*"}
+  ]
+}
+```

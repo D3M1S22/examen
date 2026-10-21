@@ -1,9 +1,10 @@
 # ☁️ AWS Deployment Plan
 
+> **Update 2026-10-21 (evening):** the data layer moved to DynamoDB and is deployed in eu-central-1 ([next_steps/dynamodb_storage/](next_steps/dynamodb_storage/00_overview.md)). The concrete deployment plan, with readiness, blockers and runbook, is **[17_aws_deployment_runbook.md](17_aws_deployment_runbook.md)**. Rows H1, H2, H4, H6 and H7 below are resolved there (§3).
+>
 > **Document Status:** Plan, revised 2026-10-21 against the code on `main` (multi-user, admin console, token usage). It replaces the first version of this document, written before the code existed in its current form: §1 explains what changed and why the original "serverless-first" topology does not fit today's EXAMEN as it is.
-> **Related:** [15_aws_split_architecture_report.md](15_aws_split_architecture_report.md) (always-on ingestion + on-demand AgentCore, hackathon deadline), [14_aws_and_hackathon_reference.md](14_aws_and_hackathon_reference.md) (rules, AWS facts), [11_homelab_test_deployment.md](11_homelab_test_deployment.md) (running instance), [13_multi_user_accounts.md](13_multi_user_acc ounts.md) (accounts, tenancy), [next_steps/admin_console/](next_steps/admin_console/00_overview.md) (runtime settings, service log, token usage), [10_bee_cli_reference.md](10_bee_cli_reference.md) (Bee contract)
+> **Related:** [15_aws_split_architecture_report.md](15_aws_split_architecture_report.md) (always-on ingestion + on-demand AgentCore, hackathon deadline), [14_aws_and_hackathon_reference.md](14_aws_and_hackathon_reference.md) (rules, AWS facts), [11_homelab_test_deployment.md](11_homelab_test_deployment.md) (running instance), [13_multi_user_accounts.md](13_multi_user_accounts.md) (accounts, tenancy), [next_steps/admin_console/](next_steps/admin_console/00_overview.md) (runtime settings, service log, token usage), [10_bee_cli_reference.md](10_bee_cli_reference.md) (Bee contract)
 > **Prices:** us-east-1 / EU on-demand list prices gathered in October 2026 from AWS pages and third-party trackers (sources at the end). Verify them in the [AWS Pricing Calculator](https://calculator.aws/) before committing: they change, and EU regions are typically 5–15 % more expensive than us-east-1.
-[text](../../../42/42_github/mastery/ft_linear_regression/data.csv)
 ---
 
 ## 1. What EXAMEN is today (and why the first plan no longer fits)
@@ -45,7 +46,7 @@ Measured on the homelab (CT 147, 2 vCPU / 2 GB): the server idles at **≈ 115 M
 | **H4** | Bedrock credentials | IAM **instance profile** · IAM user access keys in `.env` | **Instance profile** (no long-lived keys; Lightsail cannot use one) |
 | **H5** | Gatekeeper model | Nemotron Super 3 120B (current) · Amazon Nova Micro / Lite · Claude Haiku 4.5 | Measure on the homelab with the token counter and the quality of extractions; Nova Micro/Lite are 3–5× cheaper than Nemotron, Haiku ~7× more expensive (§7) |
 | **H6** | Pipeline execution | In-process (today) · AgentCore Runtime | In-process in phase 1; AgentCore after the persist refactor (§5.1) if the hackathon showcase matters |
-| **H7** | Storage | SQLite on EBS · Aurora PostgreSQL Serverless v2 · DynamoDB | **SQLite on EBS** in phase 1; Postgres if/when D is chosen (closest to the relational model + full-text search) |
+| **H7** | Storage | SQLite on EBS · Aurora PostgreSQL Serverless v2 · DynamoDB | ~~SQLite on EBS in phase 1~~ → **DynamoDB, implemented and deployed** (doc 16, [dynamodb_storage/](next_steps/dynamodb_storage/00_overview.md)); EBS keeps only Bee tokens and logs |
 | **H8** | Sign-up on the public internet | Open · closed (`AUTH_ALLOW_SIGNUP=false`, admin creates accounts) · invite | **Closed** at launch: an open sign-up on a public URL lets anyone consume model tokens |
 | **H9** | Alexa+ / MCP auth | Personal access tokens (today) · Cognito OAuth account linking | PATs for the first cloud test; Cognito when the Alexa+ integration requires OAuth (§6) |
 
