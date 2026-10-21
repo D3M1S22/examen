@@ -11,7 +11,10 @@ import os
 if os.environ.get("BEDROCK_REGION"):
     os.environ["AWS_REGION"] = os.environ["BEDROCK_REGION"]
 
+from src.core.logging_setup import setup_logging  # noqa: E402
 from src.pipeline.app import app  # noqa: E402
+
+setup_logging()  # examen.* to stdout: CloudWatch log group of the runtime (no user content in messages)
 
 if __name__ == "__main__":
     app.run()
