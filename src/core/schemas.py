@@ -3,7 +3,7 @@ import re
 import uuid
 from datetime import datetime
 from typing import Annotated, Any, Dict, List, Literal, Optional, Union
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, PrivateAttr, field_validator, model_validator
 from typing_extensions import TypedDict
 
 
@@ -625,6 +625,9 @@ class TopicProfile(BaseModel):
 
 
 class SessionDossier(BaseModel):
+    # Optimistic-concurrency version of the stored item (DynamoDB backend); never serialised
+    _store_version: int = PrivateAttr(default=0)
+
     session_id: str = Field(description="Event identifier (engine-minted) or legacy Bee conversation UUID.")
     title: Optional[str] = Field(default=None, description="Evolving or finalized title of the macro session.")
     domain: Literal["meeting", "lecture", "technical_debate", "general"] = Field(

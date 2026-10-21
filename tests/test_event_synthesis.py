@@ -13,7 +13,6 @@ import pytest
 
 from src.core.config import settings
 from src.core.schemas import BriefingReport, MicroEventRef, UtteranceChunk
-from src.core.storage.sqlite_store import SQLiteContextStore
 from src.ingestion.event_engine import EngineConfig, EventEngine, to_iso
 from src.pipeline.nodes.topic_research import (
     EventOutline,
@@ -24,6 +23,7 @@ from src.pipeline.nodes.topic_research import (
     research,
 )
 from src.pipeline.tools.web_search import SearchCache, SearchResultItem, cache_key, execute_search_batch
+from tests.store_backend import new_store, sqlite_only
 
 T0 = datetime(2026, 10, 13, 10, 0, 0).timestamp()
 LECTURE = "Raft consensus elects a leader with randomized election timeouts and replicates the log to followers"
@@ -31,7 +31,7 @@ LECTURE = "Raft consensus elects a leader with randomized election timeouts and 
 
 @pytest.fixture
 def store(tmp_path):
-    return SQLiteContextStore(str(tmp_path / "synthesis.db"))
+    return new_store(str(tmp_path / "synthesis.db"))
 
 
 @pytest.fixture
@@ -69,6 +69,7 @@ class TestSearchCache:
         execute_search_batch(["obscure query"], cache=cache)
         assert store.get_cached_search(cache_key("obscure query"), 3600) is None
 
+    @sqlite_only
     def test_ttl_expiry(self, store):
         store.put_cached_search("raft", "fake", [{"title": "t", "url": "https://x.org", "snippet": "s"}])
         assert store.get_cached_search("raft", 3600) is not None

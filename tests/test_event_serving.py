@@ -11,9 +11,9 @@ import pytest
 from starlette.testclient import TestClient
 
 from src.core.schemas import BriefingReport, ChunkClassification, MicroEventRef, UtteranceChunk
-from src.core.storage.sqlite_store import SQLiteContextStore
 from src.ingestion.event_engine import EngineConfig, EventEngine, EventEngineRuntime, to_iso
 from src.serving.tools.session_tools import execute_get_live_event_outline, execute_get_session_dossier
+from tests.store_backend import new_store
 
 T0 = datetime(2026, 10, 13, 10, 0, 0).timestamp()
 LECTURE = "Il limite per x che tende a zero di sin x su x vale uno e lo dimostriamo con il teorema del confronto"
@@ -38,7 +38,7 @@ class CountingSynth:
 
 @pytest.fixture
 def store(tmp_path):
-    return SQLiteContextStore(str(tmp_path / "serving.db"))
+    return new_store(str(tmp_path / "serving.db"))
 
 
 @pytest.fixture
@@ -213,7 +213,7 @@ def api(monkeypatch):
 
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
         db_path = f.name
-    temp_store = SQLiteContextStore(db_path=db_path)
+    temp_store = new_store(db_path)
     monkeypatch.setattr(storage_mod, "_store_instance", temp_store)
     clock = {"now": T0}
     eng = EventEngine(store=temp_store, config=EngineConfig(min_segment_words=10),

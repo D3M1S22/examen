@@ -11,7 +11,6 @@ import pytest
 import src.core.storage as storage_mod
 from src.core.config import settings
 from src.core.schemas import BriefingReport, ChunkClassification, CoverageInterval, PlannedTask, UtteranceChunk
-from src.core.storage.sqlite_store import SQLiteContextStore
 from src.core.time_utils import historical_action_may_resolve
 from src.ingestion.backfill import BackfillPlanner, BackfillRequestError, BackfillService, ReplayExecutor
 from src.ingestion.bee_history import BeeConversation, FixtureBeeHistorySource
@@ -101,7 +100,7 @@ def live_interval(store, start: datetime, end: datetime):
 
 @pytest.fixture
 def store(tmp_path, monkeypatch):
-    s = SQLiteContextStore(str(tmp_path / "backfill.db"))
+    s = new_store(str(tmp_path / "backfill.db"))
     monkeypatch.setattr(storage_mod, "_store_instance", s)
     monkeypatch.setattr(settings, "mock_ai", True)
     monkeypatch.setattr(settings, "backfill_startup_delay_seconds", 0.0)
@@ -520,6 +519,7 @@ async def test_window_end_is_clamped_to_the_live_connection(store):
 
 from src.ingestion import bee_identity  # noqa: E402
 from src.ingestion.backfill import speaker_role_for  # noqa: E402
+from tests.store_backend import new_store
 
 
 def record_live_spoken(store, conv_uuid: str, start: datetime, spans, delay=12.0):

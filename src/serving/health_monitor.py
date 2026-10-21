@@ -23,6 +23,7 @@ from src.core.limits import llm_slots_in_use
 from src.core.metrics import Metrics, metrics as default_metrics, percentile
 from src.core.ops_store import get_ops_store, iso
 from src.core.service_log import get_sink, resolve_incident, resolve_quiet_incidents, upsert_incident
+from src.core.storage.startup import storage_summary
 from src.core.tenancy import data_root
 
 logger = logging.getLogger("examen.health")
@@ -283,6 +284,7 @@ class HealthMonitor:
             "incidents_open": by_severity,
             "service_log_dropped": get_sink().dropped,
             "tokens_24h": self._tokens_24h(),
+            "storage": storage_summary(),
         }
 
     def _tokens_24h(self) -> Dict[str, Any]:

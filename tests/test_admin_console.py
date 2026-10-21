@@ -27,6 +27,7 @@ from src.core.service_log import (
     sanitize,
 )
 from src.core.tenancy import tenant_scope
+from tests import store_backend
 from tests.test_accounts import PASSWORD, _register, app, multi_user  # noqa: F401
 
 UID_A = "usr_" + "a1" * 16
@@ -466,7 +467,7 @@ def test_secrets_never_leave_the_server(app, probes, monkeypatch):
     probes["gatekeeper"] = RuntimeError("UnrecognizedClientException: key AKIAABCDEFGHIJKLMNOP bedrock-api-key-TOPSECRET")
     result = admin.post("/api/admin/settings/test", json={"changes": {"gatekeeper_model_id": "m.x-1"}}).text
     assert "AKIAABCDEFGHIJKLMNOP" not in result and "TOPSECRET" not in result
-    raw = Path(get_ops_store().db_path).read_bytes()
+    raw = store_backend.dump_table("ops") if store_backend.DYNAMO else Path(get_ops_store().db_path).read_bytes()
     assert b"SUPERSECRETVALUE123" not in raw and b"TOPSECRET" not in raw
 
 

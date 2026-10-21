@@ -12,18 +12,16 @@ from src.core.schemas import (
     BackfillRun,
     BriefingReport,
     CoverageInterval,
-    EventTransitionLog,
     MicroEventRef,
     PlannedTask,
     SessionDossier,
-    SessionSegment,
     SocialCommitment,
     SocialEntity,
     SocialWebProfile,
-    TopicProfile,
     UtteranceChunk,
     VerifiedAction,
 )
+from src.core.storage import rules
 from src.core.storage.base import AbstractContextStore
 from src.core.time_utils import historical_action_may_resolve
 
@@ -465,31 +463,7 @@ class SQLiteContextStore(AbstractContextStore):
             conn.commit()
         return rec_id
 
-    @staticmethod
-    def _row_to_planned_task(r: sqlite3.Row) -> PlannedTask:
-        keys = r.keys()
-        loc = json.loads(r["location_json"]) if ("location_json" in keys and r["location_json"]) else None
-        return PlannedTask(
-            id=r["id"],
-            title=r["title"],
-            domain=r["domain"],
-            scheduled_time=r["scheduled_time"],
-            recurrence=r["recurrence"],
-            status=r["status"],
-            completed_at=r["completed_at"],
-            verified_action_id=r["verified_action_id"],
-            created_at=r["created_at"],
-            origin=r["origin"] if ("origin" in keys and r["origin"]) else "manual",
-            raw_statement=r["raw_statement"] if "raw_statement" in keys else None,
-            confidence=r["confidence"] if ("confidence" in keys and r["confidence"] is not None) else 1.0,
-            relative_time_anchor=r["relative_time_anchor"] if "relative_time_anchor" in keys else None,
-            session_id=r["session_id"] if "session_id" in keys else None,
-            location=loc,
-            ingest_source=(r["ingest_source"] if "ingest_source" in keys and r["ingest_source"] else "live"),
-            ingest_run_id=r["ingest_run_id"] if "ingest_run_id" in keys else None,
-            source_key=r["source_key"] if "source_key" in keys else None,
-            recovered=bool(r["recovered"]) if "recovered" in keys and r["recovered"] else False,
-        )
+    _row_to_planned_task = staticmethod(rules.row_to_planned_task)
 
     def get_planned_task(self, task_id: str) -> Optional[PlannedTask]:
         with self._get_connection() as conn:
@@ -594,13 +568,11 @@ class SQLiteContextStore(AbstractContextStore):
         if not pending_tasks:
             return None
 
-        action_text = f"{action.action_type} {action.raw_statement}".lower()
+        action_text = rules.action_text(action)
 
         # Check each pending task for keyword overlap
         for task in pending_tasks:
-            stop_words = {"the", "and", "for", "with", "this", "that", "from", "into", "over", "take", "make", "turn", "out"}
-            words = [w for w in re.findall(r"\b[a-zA-Z]{3,}\b", task.title.lower()) if w not in stop_words]
-            if words and any(w in action_text for w in words):
+            if rules.action_matches_task(action_text, task):
                 self.complete_planned_task(
                     task_id=task.id,
                     verified_action_id=action.id,
@@ -629,10 +601,7 @@ class SQLiteContextStore(AbstractContextStore):
                 c for c in open_commitments if historical_action_may_resolve(action.timestamp, c.created_at)
             ]
         for com in open_commitments:
-            stop_words = {"the", "and", "for", "with", "this", "that", "from", "into", "over", "take", "make", "turn", "out"}
-            com_words = [w for w in re.findall(r"\b[a-zA-Z]{3,}\b", com.description.lower()) if w not in stop_words]
-            contact_words = [w for w in re.findall(r"\b[a-zA-Z]{3,}\b", com.contact_name.lower()) if w not in stop_words]
-            if com_words and any(w in action_text for w in com_words) and (not contact_words or any(cw in action_text for cw in contact_words)):
+            if rules.action_matches_commitment(action_text, com):
                 self.update_social_commitment_status(com.id, "fulfilled")
 
         return None
@@ -689,25 +658,7 @@ class SQLiteContextStore(AbstractContextStore):
         return rec_id
 
 
-    @staticmethod
-    def _row_to_action(row: sqlite3.Row) -> VerifiedAction:
-        keys = row.keys()
-        loc = json.loads(row["location_json"]) if ("location_json" in keys and row["location_json"]) else None
-        return VerifiedAction(
-            id=row["id"],
-            action_type=row["action_type"],
-            domain=row["domain"],
-            raw_statement=row["raw_statement"],
-            confidence=row["confidence"],
-            timestamp=row["timestamp"],
-            is_revoked=bool(row["is_revoked"]),
-            matched_task_id=row["matched_task_id"] if "matched_task_id" in keys else None,
-            session_id=row["session_id"] if "session_id" in keys else None,
-            location=loc,
-            ingest_source=(row["ingest_source"] if "ingest_source" in keys and row["ingest_source"] else "live"),
-            ingest_run_id=row["ingest_run_id"] if "ingest_run_id" in keys else None,
-            source_key=row["source_key"] if "source_key" in keys else None,
-        )
+    _row_to_action = staticmethod(rules.row_to_action)
 
     def get_verified_action(self, action_id: str) -> Optional[VerifiedAction]:
         with self._get_connection() as conn:
@@ -865,39 +816,7 @@ class SQLiteContextStore(AbstractContextStore):
             row = cursor.execute(sql, (target, target)).fetchone()
             if not row:
                 return None
-            person_name = row["person_name"]
-            commitments = self.list_social_commitments(contact_name=person_name)
-            if not commitments and row["commitments_json"]:
-                try:
-                    commitments = json.loads(row["commitments_json"])
-                except Exception:
-                    commitments = []
-            topics = json.loads(row["key_topics_json"]) if row["key_topics_json"] else []
-            web_profile = None
-            if "web_profile_json" in row.keys() and row["web_profile_json"]:
-                try:
-                    web_profile = SocialWebProfile.model_validate_json(row["web_profile_json"])
-                except Exception:
-                    pass
-            loc_enc = row["location_encountered"] if ("location_encountered" in row.keys() and row["location_encountered"]) else None
-            session_id = row["session_id"] if ("session_id" in row.keys() and row["session_id"]) else None
-            website_url = row["website_url"] if ("website_url" in row.keys() and row["website_url"]) else None
-            if not website_url and web_profile and web_profile.website_url:
-                website_url = web_profile.website_url
-
-            return SocialEntity(
-                id=row["id"],
-                person_name=row["person_name"],
-                company_or_role=row["company_or_role"],
-                contact_info=row["contact_info"],
-                website_url=website_url,
-                commitments=commitments,
-                key_topics=topics,
-                web_profile=web_profile,
-                location_encountered=loc_enc,
-                session_id=session_id,
-                timestamp=row["timestamp"],
-            )
+            return rules.row_to_contact(row, self.list_social_commitments(contact_name=row["person_name"]))
 
     def update_contact_web_profile(
         self, contact_id_or_name: str, profile: SocialWebProfile
@@ -947,42 +866,7 @@ class SQLiteContextStore(AbstractContextStore):
             cursor = conn.cursor()
             rows = cursor.execute(sql, (clean_query, clean_query, clean_query)).fetchall()
             for row in rows:
-                person_name = row["person_name"]
-                commitments = self.list_social_commitments(contact_name=person_name)
-                if not commitments and row["commitments_json"]:
-                    try:
-                        raw_c = json.loads(row["commitments_json"])
-                        commitments = raw_c
-                    except Exception:
-                        commitments = []
-                topics = json.loads(row["key_topics_json"]) if row["key_topics_json"] else []
-                web_profile = None
-                if "web_profile_json" in row.keys() and row["web_profile_json"]:
-                    try:
-                        web_profile = SocialWebProfile.model_validate_json(row["web_profile_json"])
-                    except Exception:
-                        pass
-                loc_enc = row["location_encountered"] if ("location_encountered" in row.keys() and row["location_encountered"]) else None
-                session_id = row["session_id"] if ("session_id" in row.keys() and row["session_id"]) else None
-                website_url = row["website_url"] if ("website_url" in row.keys() and row["website_url"]) else None
-                if not website_url and web_profile and web_profile.website_url:
-                    website_url = web_profile.website_url
-
-                results.append(
-                    SocialEntity(
-                        id=row["id"],
-                        person_name=row["person_name"],
-                        company_or_role=row["company_or_role"],
-                        contact_info=row["contact_info"],
-                        website_url=website_url,
-                        commitments=commitments,
-                        key_topics=topics,
-                        web_profile=web_profile,
-                        location_encountered=loc_enc,
-                        session_id=session_id,
-                        timestamp=row["timestamp"],
-                    )
-                )
+                results.append(rules.row_to_contact(row, self.list_social_commitments(contact_name=row["person_name"])))
         return results
 
     def save_social_commitment(self, commitment: SocialCommitment) -> str:
@@ -1054,17 +938,7 @@ class SQLiteContextStore(AbstractContextStore):
             cursor = conn.cursor()
             row = cursor.execute("SELECT * FROM social_commitments WHERE id = ?", (commitment_id,)).fetchone()
             if row:
-                return SocialCommitment(
-                    id=row["id"],
-                    contact_name=row["contact_name"],
-                    debtor=row["debtor"],
-                    description=row["description"],
-                    due_date_raw=row["due_date_raw"],
-                    normalized_deadline=row["normalized_deadline"],
-                    status=row["status"],
-                    auto_scheduled_task_id=row["auto_scheduled_task_id"],
-                    created_at=row["created_at"],
-                )
+                return rules.row_to_commitment(row)
         return None
 
     def list_social_commitments(
@@ -1093,19 +967,7 @@ class SQLiteContextStore(AbstractContextStore):
             cursor = conn.cursor()
             rows = cursor.execute(sql, params).fetchall()
             for r in rows:
-                results.append(
-                    SocialCommitment(
-                        id=r["id"],
-                        contact_name=r["contact_name"],
-                        debtor=r["debtor"],
-                        description=r["description"],
-                        due_date_raw=r["due_date_raw"],
-                        normalized_deadline=r["normalized_deadline"],
-                        status=r["status"],
-                        auto_scheduled_task_id=r["auto_scheduled_task_id"],
-                        created_at=r["created_at"],
-                    )
-                )
+                results.append(rules.row_to_commitment(r))
         return results
 
     def update_social_commitment_status(
@@ -1197,27 +1059,7 @@ class SQLiteContextStore(AbstractContextStore):
             conn.commit()
         return rec_id
 
-    @staticmethod
-    def _row_to_briefing(row: sqlite3.Row) -> BriefingReport:
-        keys = row.keys()
-        exec_summary = json.loads(row["executive_summary_json"]) if row["executive_summary_json"] else []
-        sources = json.loads(row["web_sources_json"]) if row["web_sources_json"] else []
-        items = json.loads(row["action_items_json"]) if row["action_items_json"] else []
-        synthesis = row["explanatory_synthesis"] if "explanatory_synthesis" in keys and row["explanatory_synthesis"] else ""
-        return BriefingReport(
-            id=row["id"],
-            topic_title=row["topic_title"],
-            context_type=row["context_type"],
-            executive_summary=exec_summary,
-            explanatory_synthesis=synthesis,
-            deep_dive_markdown=row["deep_dive_markdown"] or "",
-            web_sources=sources,
-            action_items=items,
-            created_at=row["created_at"],
-            session_id=row["session_id"] if "session_id" in keys else None,
-            segment_id=row["segment_id"] if "segment_id" in keys else None,
-            kind=(row["kind"] if "kind" in keys and row["kind"] else "standalone"),
-        )
+    _row_to_briefing = staticmethod(rules.row_to_briefing)
 
     def get_topic_briefing(self, query: Optional[str] = None) -> Optional[BriefingReport]:
         with self._get_connection() as conn:
@@ -1288,14 +1130,6 @@ class SQLiteContextStore(AbstractContextStore):
     # Macro Session & Micro-Event Decoupling (Milestone 3.2)
     # =========================================================================
     def save_session_dossier(self, dossier: SessionDossier) -> str:
-        def _dump(value: Any) -> Optional[str]:
-            return json.dumps(value, ensure_ascii=False) if value else None
-
-        events_payload = [
-            e.model_dump() if hasattr(e, "model_dump") else e
-            for e in dossier.linked_micro_events
-        ]
-
         with self._get_connection() as conn:
             cursor = conn.cursor()
             # Chunks logged in session_chunks are the source of truth; the legacy JSON blob is only
@@ -1304,135 +1138,33 @@ class SQLiteContextStore(AbstractContextStore):
                 "SELECT 1 FROM session_chunks WHERE session_id = ? LIMIT 1", (dossier.session_id,)
             ).fetchone() is not None
             chunks_str = None if has_chunk_log else json.dumps(dossier.transcript_chunks, ensure_ascii=False)
-            cursor.execute("""
-                INSERT OR REPLACE INTO session_dossiers
-                (session_id, title, domain, start_time, last_updated_at, concluded_at,
-                 status, location_json, transcript_chunks_json, key_discussion_points_json,
-                 linked_micro_events_json, final_briefing_id, created_at,
-                 conversation_uuids_json, segments_json, anchor_location_json, last_on_topic_at,
-                 paused_at, hard_close_deadline, final_status, final_revision, transitions_json,
-                 research_ledger_json, topic_profile_json, pending_chunk_ids_json, ingest_source, ingest_run_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                dossier.session_id,
-                dossier.title,
-                dossier.domain,
-                dossier.start_time,
-                dossier.last_updated_at,
-                dossier.concluded_at,
-                dossier.status,
-                _dump(dossier.location),
-                chunks_str,
-                json.dumps(dossier.key_discussion_points, ensure_ascii=False),
-                json.dumps(events_payload, ensure_ascii=False),
-                dossier.final_briefing_id,
-                dossier.start_time,
-                _dump(dossier.conversation_uuids),
-                _dump([seg.model_dump() for seg in dossier.segments]),
-                _dump(dossier.anchor_location),
-                dossier.last_on_topic_at,
-                dossier.paused_at,
-                dossier.hard_close_deadline,
-                dossier.final_status,
-                dossier.final_revision,
-                _dump([t.model_dump() for t in dossier.transitions]),
-                _dump(dossier.research_ledger),
-                dossier.topic_profile.model_dump_json() if dossier.topic_profile else None,
-                _dump(dossier.pending_chunk_ids),
-                dossier.ingest_source,
-                dossier.ingest_run_id,
-            ))
+            columns = rules.dossier_columns(dossier, chunks_str)
+            cursor.execute(
+                f"INSERT OR REPLACE INTO session_dossiers ({', '.join(columns)}) "
+                f"VALUES ({', '.join('?' for _ in columns)})",
+                tuple(columns.values()),
+            )
             conn.commit()
         return dossier.session_id
 
     def _row_to_session_dossier(
-        self, row: sqlite3.Row, cursor: sqlite3.Cursor, max_chunks: int = 200
+        self, row: sqlite3.Row, cursor: sqlite3.Cursor, max_chunks: int = 200, include_chunks: bool = True
     ) -> SessionDossier:
-        def _load(column: str, default: Any) -> Any:
-            raw = row[column] if column in row.keys() else None
-            if not raw:
-                return default
-            try:
-                return json.loads(raw)
-            except (TypeError, ValueError):
-                return default
-
-        def _load_profile(raw: Any) -> Optional[TopicProfile]:
-            if not raw:
-                return None
-            try:
-                return TopicProfile(**raw)
-            except Exception:
-                return None
-
-        linked_events: List[MicroEventRef] = []
-        for item in _load("linked_micro_events_json", []):
-            try:
-                linked_events.append(MicroEventRef(**item) if isinstance(item, dict) else item)
-            except Exception:
-                pass
-
-        segments: List[SessionSegment] = []
-        for item in _load("segments_json", []):
-            try:
-                segments.append(SessionSegment(**item))
-            except Exception:
-                pass
-
-        transitions: List[EventTransitionLog] = []
-        for item in _load("transitions_json", []):
-            try:
-                transitions.append(EventTransitionLog(**item))
-            except Exception:
-                pass
-
         # Prefer the per-chunk log; fall back to the legacy JSON blob
-        chunk_rows = cursor.execute(
-            "SELECT text FROM (SELECT text, ts, rowid FROM session_chunks WHERE session_id = ? "
-            "ORDER BY ts DESC, rowid DESC LIMIT ?) ORDER BY ts ASC, rowid ASC",
-            (row["session_id"], max_chunks),
-        ).fetchall()
-        chunks = [r["text"] for r in chunk_rows] if chunk_rows else _load("transcript_chunks_json", [])
+        chunks: List[str] = []
+        if include_chunks:
+            chunk_rows = cursor.execute(
+                "SELECT text FROM (SELECT text, ts, rowid FROM session_chunks WHERE session_id = ? "
+                "ORDER BY ts DESC, rowid DESC LIMIT ?) ORDER BY ts ASC, rowid ASC",
+                (row["session_id"], max_chunks),
+            ).fetchall()
+            chunks = [r["text"] for r in chunk_rows]
+        briefing_report = self.get_topic_briefing(row["final_briefing_id"]) if row["final_briefing_id"] else None
+        return rules.row_to_dossier(row, chunks, briefing_report)
 
-        briefing_report = None
-        if row["final_briefing_id"]:
-            briefing_report = self.get_topic_briefing(row["final_briefing_id"])
-
-        keys = row.keys()
-        status = row["status"]
-        if status == "finalizing":
-            status = "paused"
-        return SessionDossier(
-            session_id=row["session_id"],
-            title=row["title"],
-            domain=row["domain"],
-            start_time=row["start_time"],
-            last_updated_at=row["last_updated_at"],
-            concluded_at=row["concluded_at"],
-            status=status,
-            location=_load("location_json", None),
-            transcript_chunks=chunks,
-            key_discussion_points=_load("key_discussion_points_json", []),
-            linked_micro_events=linked_events,
-            final_briefing_id=row["final_briefing_id"],
-            briefing_report=briefing_report,
-            conversation_uuids=_load("conversation_uuids_json", []),
-            segments=segments,
-            anchor_location=_load("anchor_location_json", None),
-            last_on_topic_at=row["last_on_topic_at"] if "last_on_topic_at" in keys else None,
-            paused_at=row["paused_at"] if "paused_at" in keys else None,
-            hard_close_deadline=row["hard_close_deadline"] if "hard_close_deadline" in keys else None,
-            final_status=(row["final_status"] if "final_status" in keys and row["final_status"] else "none"),
-            final_revision=(row["final_revision"] if "final_revision" in keys and row["final_revision"] else 0),
-            transitions=transitions,
-            research_ledger=_load("research_ledger_json", []),
-            topic_profile=_load_profile(_load("topic_profile_json", None)),
-            pending_chunk_ids=_load("pending_chunk_ids_json", []),
-            ingest_source=(row["ingest_source"] if "ingest_source" in keys and row["ingest_source"] else "live"),
-            ingest_run_id=row["ingest_run_id"] if "ingest_run_id" in keys else None,
-        )
-
-    def get_session_dossier(self, session_id: Optional[str] = None) -> Optional[SessionDossier]:
+    def get_session_dossier(
+        self, session_id: Optional[str] = None, include_chunks: bool = True
+    ) -> Optional[SessionDossier]:
         sql = "SELECT * FROM session_dossiers "
         params = []
         if session_id:
@@ -1446,7 +1178,7 @@ class SQLiteContextStore(AbstractContextStore):
             row = cursor.execute(sql, params).fetchone()
             if not row:
                 return None
-            return self._row_to_session_dossier(row, cursor)
+            return self._row_to_session_dossier(row, cursor, include_chunks=include_chunks)
 
     def list_session_dossiers(
         self,
@@ -1813,49 +1545,15 @@ class SQLiteContextStore(AbstractContextStore):
                         (limit,),
                     ).fetchall()
 
-                if not rows:
-                    return {
-                        "sample_count": 0,
-                        "average_ms": 0.0,
-                        "latest_ms": 0.0,
-                        "min_ms": 0.0,
-                        "max_ms": 0.0,
-                    }
-
-                vals = [float(r["latency_ms"]) for r in rows]
-                return {
-                    "sample_count": len(vals),
-                    "average_ms": round(sum(vals) / len(vals), 1),
-                    "latest_ms": round(vals[0], 1),
-                    "min_ms": round(min(vals), 1),
-                    "max_ms": round(max(vals), 1),
-                }
+                return rules.latency_summary([float(r["latency_ms"]) for r in rows])
         except Exception as e:
             logger.warning(f"Failed to query latency metrics: {e}")
-            return {
-                "sample_count": 0,
-                "average_ms": 0.0,
-                "latest_ms": 0.0,
-                "min_ms": 0.0,
-                "max_ms": 0.0,
-            }
+            return rules.latency_summary([])
 
     # =========================================================================
     # Historical Transcript Backfill (docs/next_steps/historical_backfill/)
     # =========================================================================
-    @staticmethod
-    def _row_to_coverage(row: sqlite3.Row) -> CoverageInterval:
-        return CoverageInterval(
-            id=row["id"],
-            source=row["source"],
-            start=row["start_ts"],
-            end=row["end_ts"],
-            is_open=bool(row["is_open"]),
-            degraded=bool(row["degraded"]),
-            run_id=row["run_id"],
-            utterances=row["utterances"] or 0,
-            errors=row["errors"] or 0,
-        )
+    _row_to_coverage = staticmethod(rules.row_to_coverage)
 
     def save_coverage_interval(self, interval: CoverageInterval) -> str:
         with self._get_connection() as conn:
@@ -1932,14 +1630,7 @@ class SQLiteContextStore(AbstractContextStore):
             ))
             conn.commit()
 
-    @staticmethod
-    def _row_to_ledger(row: sqlite3.Row) -> Dict[str, Any]:
-        data = dict(row)
-        try:
-            data["categories"] = json.loads(data.pop("categories_json") or "[]")
-        except (TypeError, ValueError):
-            data["categories"] = []
-        return data
+    _row_to_ledger = staticmethod(rules.row_to_ledger)
 
     def get_ledger_entry(self, source_key: str) -> Optional[Dict[str, Any]]:
         with self._get_connection() as conn:
@@ -2052,6 +1743,22 @@ class SQLiteContextStore(AbstractContextStore):
                 rows = conn.execute(f'SELECT * FROM "{name}"').fetchall()
                 out[name] = [{k: row[k] for k in row.keys()} for row in rows]
         return out
+
+    def delete_all_data(self) -> None:
+        """Erases every row of this store (GDPR erasure, ``reset_db.py``); the schema stays."""
+        with self._get_connection() as conn:
+            names = [r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' "
+                "AND sql NOT LIKE '%VIRTUAL TABLE%'"
+            ).fetchall()]
+            for name in names:
+                if any(name.startswith(f"{fts}_") for fts in ("fts_actions", "fts_social", "fts_briefings")):
+                    continue
+                conn.execute(f'DELETE FROM "{name}"')
+            if self._has_fts:
+                for fts in ("fts_actions", "fts_social", "fts_briefings"):
+                    conn.execute(f"INSERT INTO {fts}({fts}) VALUES ('delete-all')")
+            conn.commit()
 
     def close(self) -> None:
         """Close connection pools or resources if applicable."""

@@ -131,6 +131,11 @@ def tenant_has_bee_login(user_id: str) -> bool:
 
 
 def list_tenant_ids() -> List[str]:
+    if settings.storage_backend == "dynamo":
+        # No per-user folder is guaranteed: the accounts are the tenants
+        from src.core.auth import get_auth_store
+
+        return sorted(u.id for u in get_auth_store().list_users())
     root = users_root()
     if not root.is_dir():
         return []
@@ -138,10 +143,18 @@ def list_tenant_ids() -> List[str]:
 
 
 def delete_tenant_data(user_id: str) -> bool:
-    """Irreversibly removes the user's folder (database, bee token, captures)."""
+    """Irreversibly removes the user's data: the DynamoDB partition (``STORAGE_BACKEND=dynamo``) and
+    the user's folder (database, bee token, captures)."""
+    erased = False
+    if settings.storage_backend == "dynamo":
+        from src.core.storage.dynamo_store import DynamoContextStore
+
+        store = DynamoContextStore(user_id=user_id)
+        erased = bool(store.export_all())
+        store.delete_all_data()
     path = tenant_dir(user_id, create=False)
     if not path.exists():
-        return False
+        return erased
     shutil.rmtree(path)
     return True
 

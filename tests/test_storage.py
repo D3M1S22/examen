@@ -4,14 +4,14 @@ import os
 import tempfile
 import pytest
 from src.core.schemas import VerifiedAction, SocialEntity, BriefingReport, PlannedTask
-from src.core.storage.sqlite_store import SQLiteContextStore
+from tests.store_backend import new_store, sqlite_only
 
 
 @pytest.fixture
 def temp_store():
     fd, path = tempfile.mkstemp(suffix=".db")
     os.close(fd)
-    store = SQLiteContextStore(db_path=path)
+    store = new_store(path)
     yield store
     store.close()
     if os.path.exists(path):
@@ -399,6 +399,7 @@ def test_delete_social_commitment(temp_store):
 
 
 
+@sqlite_only
 def test_schema_recreated_when_db_file_deleted(temp_store):
     """A live store must recover if the DB file is wiped underneath it (e.g. /reset-db)."""
     temp_store.save_social_contact(SocialEntity(person_name="Ada Lovelace", company_or_role="Analytical Engines"))
@@ -418,7 +419,7 @@ def test_reset_database_reinitializes_cached_store(temp_store, monkeypatch):
     monkeypatch.setattr(storage_mod, "_store_instance", temp_store)
     temp_store.save_social_contact(SocialEntity(person_name="Ada Lovelace", company_or_role="Analytical Engines"))
 
-    reset_database(backup=False, seed=True, db_path=temp_store.db_path)
+    reset_database(backup=False, seed=True, db_path=getattr(temp_store, "db_path", None))
 
     assert temp_store.get_social_contact("Ada Lovelace") is None
     assert len(temp_store.list_planned_tasks(status="pending")) == 4

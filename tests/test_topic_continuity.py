@@ -10,7 +10,6 @@ from typing import List
 import pytest
 
 from src.core.schemas import BriefingReport, UtteranceChunk
-from src.core.storage.sqlite_store import SQLiteContextStore
 from src.ingestion.event_engine import EngineConfig, EventEngine, detect_cue_flags, to_iso
 from src.ingestion.scenario_replay import load_event_scenarios, replay_scenario
 from src.ingestion.topic_continuity import (
@@ -19,6 +18,7 @@ from src.ingestion.topic_continuity import (
     TopicSimilarity,
     content_terms,
 )
+from tests.store_backend import new_store
 
 T0 = datetime(2026, 10, 13, 10, 0, 0).timestamp()
 
@@ -54,7 +54,7 @@ class StaticSynth:
 
 @pytest.fixture
 def store(tmp_path):
-    return SQLiteContextStore(str(tmp_path / "continuity.db"))
+    return new_store(str(tmp_path / "continuity.db"))
 
 
 def make_engine(store, continuity=None):
@@ -301,7 +301,7 @@ class TestBeeConversationAndHints:
 
 @pytest.mark.parametrize("scenario", load_event_scenarios(), ids=lambda s: s["id"])
 def test_scenario_replay_heuristic(scenario, tmp_path):
-    store = SQLiteContextStore(str(tmp_path / f"{scenario['id']}.db"))
+    store = new_store(str(tmp_path / f"{scenario['id']}.db"))
     engine = EventEngine(
         store=store, config=EngineConfig(), synthesizer=StaticSynth(),
         continuity=TopicSimilarity(ContinuityConfig(backend="heuristic", llm_judge=False)),

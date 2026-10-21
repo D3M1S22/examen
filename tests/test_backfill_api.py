@@ -10,11 +10,11 @@ import src.core.storage as storage_mod
 import src.ingestion.backfill as backfill_mod
 from src.core.config import settings
 from src.core.schemas import CoverageInterval
-from src.core.storage.sqlite_store import SQLiteContextStore
 from src.ingestion.backfill import BackfillService
 from src.ingestion.bee_history import FixtureBeeHistorySource
 from src.serving.mcp_server import create_app
 from src.serving.tools.ingestion_tools import execute_get_ingestion_coverage
+from tests.store_backend import new_store
 from tests.test_backfill import StaticSynthesizer, fake_classify, make_conv
 
 NOW = datetime.now().replace(microsecond=0)
@@ -24,7 +24,7 @@ LINES = [(i * 30, f"I locked the door number {i} of the building") for i in rang
 
 @pytest.fixture
 def env(tmp_path, monkeypatch):
-    store = SQLiteContextStore(str(tmp_path / "api.db"))
+    store = new_store(str(tmp_path / "api.db"))
     monkeypatch.setattr(storage_mod, "_store_instance", store)
     monkeypatch.setattr(settings, "mock_ai", True)
     service = BackfillService(

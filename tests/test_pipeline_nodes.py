@@ -13,7 +13,6 @@ from src.core.schemas import (
     TopicExtraction,
     VerifiedAction,
 )
-from src.core.storage.sqlite_store import SQLiteContextStore
 from src.pipeline.nodes.action_state import node_extract_action
 from src.pipeline.nodes.persist import node_persist
 from src.pipeline.nodes.scheduler import (
@@ -22,6 +21,7 @@ from src.pipeline.nodes.scheduler import (
 )
 from src.pipeline.nodes.social import node_extract_social
 from src.pipeline.nodes.topic_research import node_topic_research
+from tests.store_backend import new_store
 
 
 @pytest.fixture(autouse=True)
@@ -30,7 +30,7 @@ def temp_store(monkeypatch):
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
         db_path = f.name
 
-    store = SQLiteContextStore(db_path=db_path)
+    store = new_store(db_path)
     monkeypatch.setattr("src.core.storage.get_storage_store", lambda: store)
     monkeypatch.setattr("src.pipeline.nodes.action_state.get_storage_store", lambda: store)
     monkeypatch.setattr("src.pipeline.nodes.social.get_storage_store", lambda: store)

@@ -24,7 +24,6 @@ from src.core.schemas import (
     SocialEntity,
     VerifiedAction,
 )
-from src.core.storage.sqlite_store import SQLiteContextStore
 from src.ingestion.session_manager import (
     SessionManager,
     calculate_haversine_distance,
@@ -36,6 +35,7 @@ from src.serving.tools.session_tools import (
     get_session_dossier,
     list_session_dossiers,
 )
+from tests.store_backend import new_store
 
 
 @pytest.fixture
@@ -43,7 +43,7 @@ def temp_store():
     """Provides an isolated SQLiteContextStore instance for session tests."""
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
         db_path = f.name
-    store = SQLiteContextStore(db_path=db_path)
+    store = new_store(db_path)
     yield store
     if os.path.exists(db_path):
         os.remove(db_path)

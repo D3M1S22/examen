@@ -12,10 +12,10 @@ from src.core.schemas import (
     ExamenState,
 )
 from src.ingestion.ring_buffer import ContextRingBuffer
-from src.core.storage.sqlite_store import SQLiteContextStore
 from src.pipeline.nodes.action_state import node_extract_action
 from src.pipeline.nodes.social import node_extract_social
 from src.ingestion.orchestrator import BeeStreamOrchestrator
+from tests.store_backend import new_store
 
 
 class TestContextRingBuffer:
@@ -148,7 +148,7 @@ class TestStorageMultimodalGrounding:
     @pytest.fixture
     def temp_store(self, tmp_path):
         db_file = tmp_path / "test_multimodal.db"
-        return SQLiteContextStore(str(db_file))
+        return new_store(str(db_file))
 
     def test_action_location_persistence(self, temp_store):
         action = VerifiedAction(
@@ -234,7 +234,7 @@ class TestPipelineAnaphoraAndTelemetryGrounding:
 
     def test_social_anaphora_and_debtor_alignment(self, tmp_path):
         db_file = tmp_path / "social_anaphora.db"
-        store = SQLiteContextStore(str(db_file))
+        store = new_store(str(db_file))
 
         # Prior chunk: Contact introduces themselves
         # Current chunk: Contact speaks a commitment
@@ -275,7 +275,7 @@ class TestBeeStreamOrchestratorMultimodal:
 
     def test_orchestrator_handles_location_and_diarization(self, tmp_path):
         db_file = tmp_path / "orchestrator_test.db"
-        store = SQLiteContextStore(str(db_file))
+        store = new_store(str(db_file))
         orch = BeeStreamOrchestrator(store=store)
 
         # 1. Dispatch update-location event

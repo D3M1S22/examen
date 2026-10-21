@@ -46,6 +46,14 @@ class Settings(BaseSettings):
         alias="STORAGE_BACKEND"
     )
     sqlite_db_path: str = Field(default="examen.db", alias="SQLITE_DB_PATH")
+    # DynamoDB backends (docs/next_steps/dynamodb_storage/05 §2): boot-only, never runtime overrides
+    auth_store_backend: Literal["sqlite", "dynamo"] = Field(default="sqlite", alias="AUTH_STORE_BACKEND")
+    ops_store_backend: Literal["sqlite", "dynamo"] = Field(default="sqlite", alias="OPS_STORE_BACKEND")
+    dynamo_region: str | None = Field(default=None, alias="DYNAMO_REGION")
+    dynamo_table_prefix: str = Field(default="examen-", alias="DYNAMO_TABLE_PREFIX")
+    dynamo_endpoint_url: str | None = Field(default=None, alias="DYNAMO_ENDPOINT_URL")
+    dynamo_tenant_role_arn: str | None = Field(default=None, alias="DYNAMO_TENANT_ROLE_ARN")
+    dynamo_telemetry_ttl_days: int = Field(default=30, alias="DYNAMO_TELEMETRY_TTL_DAYS")
 
     # Development & Testing
     mock_ai: bool = Field(default=False, alias="MOCK_AI")
@@ -266,4 +274,11 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+# Region captured before any admin override: DynamoDB never follows a runtime AWS_REGION change (D15)
+BOOT_AWS_REGION = settings.aws_region
+
+
+def dynamo_region() -> str:
+    return settings.dynamo_region or BOOT_AWS_REGION
 

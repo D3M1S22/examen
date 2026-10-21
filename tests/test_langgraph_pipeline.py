@@ -9,9 +9,9 @@ import tempfile
 import pytest
 
 from src.core.schemas import ExamenState, PlannedTask
-from src.core.storage.sqlite_store import SQLiteContextStore
 from src.pipeline.app import agent_invocation
 from src.pipeline.graph import pipeline_graph
+from tests.store_backend import new_store
 
 
 @pytest.fixture(autouse=True)
@@ -20,7 +20,7 @@ def temp_store(monkeypatch):
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
         db_path = f.name
 
-    store = SQLiteContextStore(db_path=db_path)
+    store = new_store(db_path)
     monkeypatch.setattr("src.core.storage.get_storage_store", lambda: store)
     monkeypatch.setattr("src.pipeline.nodes.action_state.get_storage_store", lambda: store)
     monkeypatch.setattr("src.pipeline.nodes.social.get_storage_store", lambda: store)

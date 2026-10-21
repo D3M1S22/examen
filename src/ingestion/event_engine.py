@@ -878,7 +878,8 @@ class EventEngine:
             ev.segments = old_segments
             new.segments = new_segments
 
-            # Micro-events follow their timestamp
+            # Micro-events follow their timestamp (including links the pipeline wrote meanwhile)
+            self._merge_persisted_links(ev)
             ev_refs, new_refs = [], []
             for ref in ev.linked_micro_events:
                 (new_refs if (to_epoch(str(ref.timestamp)) or 0.0) >= split_ts else ev_refs).append(ref)
@@ -1447,18 +1448,24 @@ class EventEngine:
         ))
         logger.info(f"[event {ev.session_id[:8]}] {t.rule} {from_status} -> {t.to_status} ({t.reason})")
 
-    def _save(self, ev: SessionDossier) -> None:
-        # Micro-events are linked by the pipeline directly in the store: merge them so the
-        # engine's in-memory copy never drops links written in the meantime.
+    def _merge_persisted_links(self, ev: SessionDossier) -> None:
+        """Micro-events are linked by the pipeline directly in the store: merge them so the engine's
+        in-memory copy never drops links written in the meantime. The copy then reflects the stored
+        version, so a DynamoDB conditional save only conflicts on writes made after this read."""
         try:
-            persisted = self.store.get_session_dossier(ev.session_id)
+            persisted = self.store.get_session_dossier(ev.session_id, include_chunks=False)
         except NotImplementedError:
             persisted = None
-        if persisted is not None:
-            known = {(e.event_type, e.record_id) for e in ev.linked_micro_events}
-            for ref in persisted.linked_micro_events:
-                if (ref.event_type, ref.record_id) not in known:
-                    ev.linked_micro_events.append(ref)
+        if persisted is None:
+            return
+        known = {(e.event_type, e.record_id) for e in ev.linked_micro_events}
+        for ref in persisted.linked_micro_events:
+            if (ref.event_type, ref.record_id) not in known:
+                ev.linked_micro_events.append(ref)
+        ev._store_version = persisted._store_version
+
+    def _save(self, ev: SessionDossier) -> None:
+        self._merge_persisted_links(ev)
         self.store.save_session_dossier(ev)
 
     @staticmethod

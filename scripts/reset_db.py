@@ -67,8 +67,17 @@ BASELINE_SEED_TASKS = [
 
 def reset_database(backup: bool = True, seed: bool = False, db_path: str | None = None) -> None:
     """Removes the existing database file and reinitializes a fresh schema."""
+    current = get_storage_store()
+    if db_path is None and not isinstance(current, SQLiteContextStore):
+        # DynamoDB backend: erase the user's partition (no file to back up)
+        print(f"\n{BOLD}{CYAN}=== EXAMEN Database Reset ==={RESET}")
+        print(f"Target: {BOLD}{type(current).__name__}{RESET} (partition of the current user)")
+        current.delete_all_data()
+        print(f"{GREEN}✓ All records erased.{RESET}")
+        _seed(current, seed)
+        return
     # Multi-user: the current user's database (EXAMEN_CLI_USER); legacy mode: SQLITE_DB_PATH
-    target_path = db_path or getattr(get_storage_store(), "db_path", None) or settings.sqlite_db_path
+    target_path = db_path or getattr(current, "db_path", None) or settings.sqlite_db_path
 
     print(f"\n{BOLD}{CYAN}=== EXAMEN Database Reset ==={RESET}")
     print(f"Target Database: {BOLD}{target_path}{RESET}")
@@ -102,7 +111,11 @@ def reset_database(backup: bool = True, seed: bool = False, db_path: str | None 
         store = SQLiteContextStore(db_path=target_path)
     print(f"{GREEN}✓ Fresh schema and FTS5 indexes reinitialized successfully.{RESET}")
 
-    # 3. Seed baseline peace-of-mind tasks if requested
+    _seed(store, seed)
+
+
+def _seed(store, seed: bool) -> None:
+    """Seeds the baseline peace-of-mind tasks if requested."""
     if seed:
         print(f"\n{YELLOW}Seeding baseline Peace of Mind tasks...{RESET}")
         created_count = 0

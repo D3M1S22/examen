@@ -420,7 +420,14 @@ def get_ops_store() -> OpsStore:
     global _ops_store
     with _ops_lock:
         if _ops_store is None:
-            _ops_store = OpsStore()
+            from src.core.config import settings
+
+            if settings.ops_store_backend == "dynamo":
+                from src.core.ops_dynamo_store import DynamoOpsStore
+
+                _ops_store = DynamoOpsStore()
+            else:
+                _ops_store = OpsStore()
         return _ops_store
 
 

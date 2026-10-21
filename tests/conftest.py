@@ -40,6 +40,17 @@ def _single_user_mode(monkeypatch, tmp_path):
 
     monkeypatch.setattr(settings, "auth_enabled", False)
     monkeypatch.setattr(settings, "examen_data_dir", str(tmp_path / "examen-data"))
+    # Storage backend of this run (tests/store_backend.py): fresh moto tables per test on DynamoDB
+    from src.core import storage as storage_mod
+    from tests import store_backend
+
+    mock = None
+    if store_backend.DYNAMO:
+        mock = store_backend.start_dynamo(monkeypatch)
+        for key in ("storage_backend", "auth_store_backend", "ops_store_backend"):
+            monkeypatch.setattr(settings, key, "dynamo")
+    monkeypatch.setattr(storage_mod, "_store_instance", None)
+    monkeypatch.setattr(storage_mod, "_tenant_stores", {})
     reset_auth_store(None)
     login_limiter.reset()
     # Admin console state: own ops.db, empty service log queue and counters, no runtime overrides
@@ -57,3 +68,5 @@ def _single_user_mode(monkeypatch, tmp_path):
     reset_settings_service(None)
     reset_ops_store(None)
     reset_auth_store(None)
+    if mock is not None:
+        store_backend.stop_dynamo(mock)

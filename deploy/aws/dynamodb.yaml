@@ -1,0 +1,343 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  EXAMEN data layer (docs/next_steps/dynamodb_storage/05): three on-demand DynamoDB tables with
+  PITR, TTL and deletion protection, the tenant-data role whose LeadingKeys policy limits every
+  request to the caller's own partition, and the managed policies for the runtime host and AgentCore.
+  The key schema must match src/core/storage/dynamo_schema.py (tests/test_dynamo_schema.py).
+
+Parameters:
+  Prefix:
+    Type: String
+    Default: examen-
+    Description: Table name prefix (DYNAMO_TABLE_PREFIX)
+  RuntimeRoleName:
+    Type: String
+    Default: ""
+    Description: Name of the IAM role of the worker / API host (empty to attach the policy later)
+  AgentCoreRoleName:
+    Type: String
+    Default: ""
+    Description: Name of the AgentCore Runtime execution role (empty to attach the policy later)
+  AlarmEmail:
+    Type: String
+    Default: ""
+    Description: Optional e-mail for throttling and system-error alarms
+
+Conditions:
+  HasRuntimeRole: !Not [!Equals [!Ref RuntimeRoleName, ""]]
+  HasAgentCoreRole: !Not [!Equals [!Ref AgentCoreRoleName, ""]]
+  HasAlarmEmail: !Not [!Equals [!Ref AlarmEmail, ""]]
+
+Resources:
+  UserTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: !Sub "${Prefix}user"
+      BillingMode: PAY_PER_REQUEST
+      DeletionProtectionEnabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+      StreamSpecification:
+        StreamViewType: NEW_AND_OLD_IMAGES
+      AttributeDefinitions:
+        - {AttributeName: pk, AttributeType: S}
+        - {AttributeName: sk, AttributeType: S}
+        - {AttributeName: g1pk, AttributeType: S}
+        - {AttributeName: g1sk, AttributeType: S}
+        - {AttributeName: g2pk, AttributeType: S}
+        - {AttributeName: g2sk, AttributeType: S}
+        - {AttributeName: g3pk, AttributeType: S}
+        - {AttributeName: g3sk, AttributeType: S}
+      KeySchema:
+        - {AttributeName: pk, KeyType: HASH}
+        - {AttributeName: sk, KeyType: RANGE}
+      GlobalSecondaryIndexes:
+        - IndexName: timeline
+          KeySchema:
+            - {AttributeName: g1pk, KeyType: HASH}
+            - {AttributeName: g1sk, KeyType: RANGE}
+          Projection:
+            ProjectionType: ALL
+        - IndexName: timeline_keys
+          KeySchema:
+            - {AttributeName: g2pk, KeyType: HASH}
+            - {AttributeName: g2sk, KeyType: RANGE}
+          Projection:
+            ProjectionType: INCLUDE
+            NonKeyAttributes: [status, final_status, kind, session_id, ingest_source, ingest_run_id,
+                               start_time, last_updated_at, created_at]
+        - IndexName: group_keys
+          KeySchema:
+            - {AttributeName: g3pk, KeyType: HASH}
+            - {AttributeName: g3sk, KeyType: RANGE}
+          Projection:
+            ProjectionType: INCLUDE
+            NonKeyAttributes: [status, final_status, kind, session_id, ingest_source, ingest_run_id,
+                               start_time, last_updated_at, created_at]
+
+  AuthTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: !Sub "${Prefix}auth"
+      BillingMode: PAY_PER_REQUEST
+      DeletionProtectionEnabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+      AttributeDefinitions:
+        - {AttributeName: pk, AttributeType: S}
+        - {AttributeName: sk, AttributeType: S}
+        - {AttributeName: g1pk, AttributeType: S}
+        - {AttributeName: g1sk, AttributeType: S}
+        - {AttributeName: g2pk, AttributeType: S}
+        - {AttributeName: g2sk, AttributeType: S}
+      KeySchema:
+        - {AttributeName: pk, KeyType: HASH}
+        - {AttributeName: sk, KeyType: RANGE}
+      GlobalSecondaryIndexes:
+        - IndexName: by_owner
+          KeySchema:
+            - {AttributeName: g1pk, KeyType: HASH}
+            - {AttributeName: g1sk, KeyType: RANGE}
+          Projection:
+            ProjectionType: ALL
+        - IndexName: by_actor
+          KeySchema:
+            - {AttributeName: g2pk, KeyType: HASH}
+            - {AttributeName: g2sk, KeyType: RANGE}
+          Projection:
+            ProjectionType: KEYS_ONLY
+
+  OpsTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: !Sub "${Prefix}ops"
+      BillingMode: PAY_PER_REQUEST
+      DeletionProtectionEnabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+      AttributeDefinitions:
+        - {AttributeName: pk, AttributeType: S}
+        - {AttributeName: sk, AttributeType: S}
+        - {AttributeName: g1pk, AttributeType: S}
+        - {AttributeName: g1sk, AttributeType: S}
+        - {AttributeName: g2pk, AttributeType: S}
+        - {AttributeName: g2sk, AttributeType: S}
+      KeySchema:
+        - {AttributeName: pk, KeyType: HASH}
+        - {AttributeName: sk, KeyType: RANGE}
+      GlobalSecondaryIndexes:
+        - IndexName: by_owner
+          KeySchema:
+            - {AttributeName: g1pk, KeyType: HASH}
+            - {AttributeName: g1sk, KeyType: RANGE}
+          Projection:
+            ProjectionType: KEYS_ONLY
+        - IndexName: by_fingerprint
+          KeySchema:
+            - {AttributeName: g2pk, KeyType: HASH}
+            - {AttributeName: g2sk, KeyType: RANGE}
+          Projection:
+            ProjectionType: ALL
+
+  # Assumed with the session tag user_id: every request must target that user's partition
+  TenantDataRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${Prefix}tenant-data"
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Ref AWS::AccountId
+            Action: [sts:AssumeRole, sts:TagSession]
+            Condition:
+              StringLike:
+                aws:RequestTag/user_id: "usr_*"
+              ArnLike:
+                aws:PrincipalArn:
+                  - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/*"
+                  - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:user/*"
+      Policies:
+        - PolicyName: own-partition-only
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: OwnPartitionOnly
+                Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:BatchGetItem
+                  - dynamodb:Query
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:BatchWriteItem
+                  - dynamodb:ConditionCheckItem
+                Resource:
+                  - !GetAtt UserTable.Arn
+                  - !Sub "${UserTable.Arn}/index/*"
+                Condition:
+                  ForAllValues:StringLike:
+                    dynamodb:LeadingKeys:
+                      - "${aws:PrincipalTag/user_id}"
+                      - "${aws:PrincipalTag/user_id}#*"
+
+  # Worker / API host: assumes the tenant role; full access to auth and ops (no direct user-table access)
+  RuntimeDataPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub "${Prefix}runtime-data"
+      Roles: !If [HasRuntimeRole, [!Ref RuntimeRoleName], !Ref AWS::NoValue]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AssumeTenantRole
+            Effect: Allow
+            Action: [sts:AssumeRole, sts:TagSession]
+            Resource: !GetAtt TenantDataRole.Arn
+          - Sid: AuthAndOps
+            Effect: Allow
+            Action:
+              - dynamodb:GetItem
+              - dynamodb:BatchGetItem
+              - dynamodb:Query
+              - dynamodb:PutItem
+              - dynamodb:UpdateItem
+              - dynamodb:DeleteItem
+              - dynamodb:BatchWriteItem
+              - dynamodb:ConditionCheckItem
+              - dynamodb:DescribeTable
+            Resource:
+              - !GetAtt AuthTable.Arn
+              - !Sub "${AuthTable.Arn}/index/*"
+              - !GetAtt OpsTable.Arn
+              - !Sub "${OpsTable.Arn}/index/*"
+          - Sid: StartupCheck
+            Effect: Allow
+            Action: dynamodb:DescribeTable
+            Resource: !GetAtt UserTable.Arn
+
+  # AgentCore runtime: tenant role for user data, token usage counters in ops
+  AgentCoreDataPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub "${Prefix}agentcore-data"
+      Roles: !If [HasAgentCoreRole, [!Ref AgentCoreRoleName], !Ref AWS::NoValue]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AssumeTenantRole
+            Effect: Allow
+            Action: [sts:AssumeRole, sts:TagSession]
+            Resource: !GetAtt TenantDataRole.Arn
+          - Sid: TokenUsage
+            Effect: Allow
+            Action: [dynamodb:UpdateItem, dynamodb:GetItem]
+            Resource: !GetAtt OpsTable.Arn
+            Condition:
+              ForAllValues:StringLike:
+                dynamodb:LeadingKeys: ["USAGE#*", "META"]
+          - Sid: StartupCheck
+            Effect: Allow
+            Action: dynamodb:DescribeTable
+            Resource: [!GetAtt UserTable.Arn, !GetAtt OpsTable.Arn]
+
+  AlarmTopic:
+    Type: AWS::SNS::Topic
+    Condition: HasAlarmEmail
+    Properties:
+      Subscription:
+        - Endpoint: !Ref AlarmEmail
+          Protocol: email
+
+  UserThrottleAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${Prefix}user-throttled"
+      Namespace: AWS/DynamoDB
+      MetricName: ThrottledRequests
+      Dimensions: [{Name: TableName, Value: !Ref UserTable}]
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: !If [HasAlarmEmail, [!Ref AlarmTopic], !Ref AWS::NoValue]
+
+  UserSystemErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${Prefix}user-system-errors"
+      Namespace: AWS/DynamoDB
+      MetricName: SystemErrors
+      Dimensions: [{Name: TableName, Value: !Ref UserTable}]
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: !If [HasAlarmEmail, [!Ref AlarmTopic], !Ref AWS::NoValue]
+
+  AuthThrottleAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${Prefix}auth-throttled"
+      Namespace: AWS/DynamoDB
+      MetricName: ThrottledRequests
+      Dimensions: [{Name: TableName, Value: !Ref AuthTable}]
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: !If [HasAlarmEmail, [!Ref AlarmTopic], !Ref AWS::NoValue]
+
+  OpsThrottleAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${Prefix}ops-throttled"
+      Namespace: AWS/DynamoDB
+      MetricName: ThrottledRequests
+      Dimensions: [{Name: TableName, Value: !Ref OpsTable}]
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: !If [HasAlarmEmail, [!Ref AlarmTopic], !Ref AWS::NoValue]
+
+Outputs:
+  UserTableName:
+    Value: !Ref UserTable
+  AuthTableName:
+    Value: !Ref AuthTable
+  OpsTableName:
+    Value: !Ref OpsTable
+  TenantDataRoleArn:
+    Description: DYNAMO_TENANT_ROLE_ARN
+    Value: !GetAtt TenantDataRole.Arn
+  RuntimeDataPolicyArn:
+    Value: !Ref RuntimeDataPolicy
+  AgentCoreDataPolicyArn:
+    Value: !Ref AgentCoreDataPolicy

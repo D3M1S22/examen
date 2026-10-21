@@ -451,16 +451,22 @@ class AuthStore:
         return BeeLink(**dict(row)) if row else None
 
     def save_bee_link(self, link: BeeLink) -> BeeLink:
+        from src.core.storage.errors import UniqueConflict
+
         link.updated_at = iso(utcnow())
-        with self._lock, self._conn() as conn:
-            conn.execute(
-                "INSERT INTO bee_links (user_id, bee_user_id, bee_first_name, state, last_error, linked_at, updated_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET bee_user_id = excluded.bee_user_id,"
-                " bee_first_name = excluded.bee_first_name, state = excluded.state, last_error = excluded.last_error,"
-                " linked_at = excluded.linked_at, updated_at = excluded.updated_at",
-                (link.user_id, link.bee_user_id, link.bee_first_name, link.state, link.last_error, link.linked_at,
-                 link.updated_at),
-            )
+        try:
+            with self._lock, self._conn() as conn:
+                conn.execute(
+                    "INSERT INTO bee_links (user_id, bee_user_id, bee_first_name, state, last_error, linked_at,"
+                    " updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET"
+                    " bee_user_id = excluded.bee_user_id, bee_first_name = excluded.bee_first_name,"
+                    " state = excluded.state, last_error = excluded.last_error, linked_at = excluded.linked_at,"
+                    " updated_at = excluded.updated_at",
+                    (link.user_id, link.bee_user_id, link.bee_first_name, link.state, link.last_error,
+                     link.linked_at, link.updated_at),
+                )
+        except sqlite3.IntegrityError as err:  # the same error the DynamoDB guard item raises
+            raise UniqueConflict("Bee account already linked to another user") from err
         return link
 
     def delete_bee_link(self, user_id: str) -> None:
@@ -500,7 +506,12 @@ def get_auth_store() -> AuthStore:
     global _auth_store
     with _auth_lock:
         if _auth_store is None:
-            _auth_store = AuthStore()
+            if settings.auth_store_backend == "dynamo":
+                from src.core.auth.dynamo_store import DynamoAuthStore
+
+                _auth_store = DynamoAuthStore()
+            else:
+                _auth_store = AuthStore()
         return _auth_store
 
 

@@ -85,7 +85,14 @@ def agent_invocation(payload: Dict[str, Any], context: Any = None) -> Dict[str, 
     if user_id is None and settings.auth_enabled:
         return _tenant_error("missing user_id", payload)
     with tenant_scope(user_id):
-        return _run_pipeline(payload, context)
+        try:
+            return _run_pipeline(payload, context)
+        finally:
+            if settings.ops_store_backend == "dynamo":
+                # A remote runtime has no health monitor: its token counts go to the shared ops table now
+                from src.core import token_usage
+
+                token_usage.flush()
 
 
 def _run_pipeline(payload: Dict[str, Any], context: Any = None) -> Dict[str, Any]:

@@ -23,7 +23,6 @@ from src.core.schemas import (
     SocialWebProfile,
     VerifiedAction,
 )
-from src.core.storage.sqlite_store import SQLiteContextStore
 from src.serving.mcp_server import create_app
 from src.serving.tools.action_tools import (
     execute_create_planned_task,
@@ -44,6 +43,7 @@ from src.serving.tools.session_tools import (
     execute_list_session_dossiers,
 )
 from src.core.storage import get_storage_store
+from tests.store_backend import new_store
 
 
 @pytest.fixture
@@ -51,7 +51,7 @@ def temp_store():
     """Provides a fresh isolated SQLiteContextStore for serving tests."""
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
         db_path = f.name
-    store = SQLiteContextStore(db_path=db_path)
+    store = new_store(db_path)
     yield store
     store.close()
     if os.path.exists(db_path):
@@ -63,7 +63,7 @@ def client():
     """Provides a fresh TestClient with isolated SQLiteContextStore."""
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
         db_path = f.name
-    temp_store = SQLiteContextStore(db_path=db_path)
+    temp_store = new_store(db_path)
     import src.core.storage as storage_mod
     old_instance = storage_mod._store_instance
     storage_mod._store_instance = temp_store
@@ -854,7 +854,7 @@ class TestEventEngineEndpoints:
 
         with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
             db_path = f.name
-        temp_store = SQLiteContextStore(db_path=db_path)
+        temp_store = new_store(db_path)
         monkeypatch.setattr(storage_mod, "_store_instance", temp_store)
 
         engine = engine_mod.EventEngine(

@@ -2092,6 +2092,9 @@ def create_app() -> Starlette:
             from src.core.runtime_settings import get_settings_service
 
             install_asyncio_handler(asyncio.get_running_loop())
+            from src.core.storage.startup import report_storage_startup
+
+            report_storage_startup()  # fails fast when a DynamoDB backend is misconfigured
             service = get_settings_service()
             service.rebuild_runtimes = rebuild_all_runtimes
             try:

@@ -22,6 +22,8 @@ from src.core.tenancy import (
     tenant_has_bee_login,
     tenant_scope,
 )
+from tests import store_backend
+from tests.store_backend import new_store
 
 PASSWORD = "correct horse battery"
 
@@ -164,7 +166,8 @@ def test_each_user_sees_only_their_data(app):
     assert "Unplug the iron" in a_titles and "Feed the cat" not in a_titles
     assert "Feed the cat" in b_titles and "Unplug the iron" not in b_titles
 
-    assert Path(tenant_db_path(a_id)).exists() and Path(tenant_db_path(b_id)).exists()
+    if not store_backend.DYNAMO:  # SQLite: one file per user
+        assert Path(tenant_db_path(a_id)).exists() and Path(tenant_db_path(b_id)).exists()
     assert tenant_db_path(a_id) != tenant_db_path(b_id)
     assert alice.get("/api/status").json()["stats"]["planned_tasks_total"] == 1
 
@@ -503,7 +506,6 @@ def test_dispatch_payloads_name_the_tenant(multi_user, monkeypatch, tmp_path):
     import importlib
 
     from src.core.schemas import ChunkClassification
-    from src.core.storage.sqlite_store import SQLiteContextStore
     from src.ingestion.orchestrator import BeeStreamOrchestrator
 
     seen = []
@@ -519,7 +521,7 @@ def test_dispatch_payloads_name_the_tenant(multi_user, monkeypatch, tmp_path):
 
     async def main():
         with tenant_scope(uid):
-            orch = BeeStreamOrchestrator(store=SQLiteContextStore(str(tmp_path / "o.db")), engine=None)
+            orch = BeeStreamOrchestrator(store=new_store(str(tmp_path / "o.db")), engine=None)
             orch.engine_enabled = False
             orch.speaker_tag_wait = 0
             await orch.process_incoming_utterance(
@@ -706,11 +708,18 @@ def test_sessions_slide_when_used(multi_user, monkeypatch):
     user = store.create_user("slide@example.com", PASSWORD)
     token = store.create_session(user.id)
     soon = iso(datetime.now(timezone.utc) + timedelta(hours=1))
-    with store._conn() as conn:
-        conn.execute("UPDATE sessions SET expires_at = ? WHERE token_hash = ?", (soon, digest(token)))
-    assert store.user_for_session(token) is not None
-    with store._conn() as conn:
-        renewed = conn.execute("SELECT expires_at FROM sessions WHERE token_hash = ?", (digest(token),)).fetchone()[0]
+    if store_backend.DYNAMO:
+        key = {"pk": f"SESSION#{digest(token)}", "sk": "SESSION"}
+        store.table.update(key, set_={"expires_at": soon})
+        assert store.user_for_session(token) is not None
+        renewed = store.table.get(key)["expires_at"]
+    else:
+        with store._conn() as conn:
+            conn.execute("UPDATE sessions SET expires_at = ? WHERE token_hash = ?", (soon, digest(token)))
+        assert store.user_for_session(token) is not None
+        with store._conn() as conn:
+            renewed = conn.execute("SELECT expires_at FROM sessions WHERE token_hash = ?",
+                                   (digest(token),)).fetchone()[0]
     assert renewed > soon
 
 
@@ -740,8 +749,11 @@ def test_password_hashes_use_64_mib_scrypt_and_upgrade(multi_user, monkeypatch):
     user = store.create_user("hash@example.com", PASSWORD)
     monkeypatch.setattr(passwords, "_P", 2)  # parameters changed since the hash was made
     assert store.authenticate("hash@example.com", PASSWORD) is not None
-    with store._conn() as conn:
-        upgraded = conn.execute("SELECT password_hash FROM users WHERE id = ?", (user.id,)).fetchone()[0]
+    if store_backend.DYNAMO:
+        upgraded = store._user_item(user.id)["password_hash"]
+    else:
+        with store._conn() as conn:
+            upgraded = conn.execute("SELECT password_hash FROM users WHERE id = ?", (user.id,)).fetchone()[0]
     assert upgraded.startswith("scrypt$10$8$2$")
 
 

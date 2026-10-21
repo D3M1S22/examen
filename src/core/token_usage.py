@@ -73,6 +73,10 @@ def flush(store_getter: Optional[Callable] = None) -> int:
         store_getter().add_token_usage(rows)
         return len(rows)
     except Exception as e:
+        # DynamoDB writes in chunks: put back only what was not written, or it would be counted twice
+        remaining = getattr(e, "remaining", None)
+        written = len(rows) - len(remaining) if remaining is not None else 0
+        rows = remaining if remaining is not None else rows
         logger.warning(f"token usage flush failed, {len(rows)} rows kept for the next flush: {e}")
         with _lock:  # put them back: nothing is lost on a transient database error
             for row in rows:
@@ -80,7 +84,7 @@ def flush(store_getter: Optional[Callable] = None) -> int:
                 target = _pending.setdefault(key, dict.fromkeys(_FIELDS, 0))
                 for field in _FIELDS:
                     target[field] += row[field]
-        return 0
+        return written
 
 
 def reset() -> None:

@@ -10,7 +10,6 @@ from typing import List, Optional
 import pytest
 
 from src.core.schemas import BriefingReport, PlannedTask, UtteranceChunk
-from src.core.storage.sqlite_store import SQLiteContextStore
 from src.ingestion.event_engine import (
     ChunkSignal,
     EngineConfig,
@@ -26,6 +25,7 @@ from src.ingestion.event_engine import (
 from src.pipeline.graph import route_categories
 from src.pipeline.nodes.topic_research import SynthesisOutcome
 from src.pipeline.nodes.persist import node_persist
+from tests.store_backend import new_store, sqlite_only
 
 T0 = datetime(2026, 10, 13, 10, 0, 0).timestamp()
 
@@ -86,7 +86,7 @@ class FakeSynthesizer:
 
 @pytest.fixture
 def store(tmp_path):
-    return SQLiteContextStore(str(tmp_path / "events.db"))
+    return new_store(str(tmp_path / "events.db"))
 
 
 @pytest.fixture
@@ -419,6 +419,7 @@ class TestStorageAndPipelineIntegration:
         dossier = store.append_chunk_to_session("legacy-1", "late chunk")
         assert dossier.status == "concluded" and dossier.transcript_chunks == ["first chunk"]
 
+    @sqlite_only
     def test_legacy_finalizing_status_reads_as_paused(self, store):
         store.append_chunk_to_session("legacy-2", "chunk")
         with store._get_connection() as conn:

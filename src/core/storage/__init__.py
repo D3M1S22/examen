@@ -1,8 +1,9 @@
 """Storage factory module for EXAMEN.
 
 ``get_storage_store()`` returns the store of the current tenant (src/core/tenancy.py): each user has
-a private SQLite file under ``EXAMEN_DATA_DIR/users/<user_id>/examen.db``. With no tenant (CLI
-scripts, tests, ``AUTH_ENABLED=false``) it returns the legacy single-user store at ``SQLITE_DB_PATH``.
+a private SQLite file under ``EXAMEN_DATA_DIR/users/<user_id>/examen.db`` or, with
+``STORAGE_BACKEND=dynamo``, a private DynamoDB partition (docs/next_steps/dynamodb_storage/). With no
+tenant (CLI scripts, tests, ``AUTH_ENABLED=false``) it returns the legacy single-user store.
 """
 
 import threading
@@ -18,15 +19,21 @@ _tenant_stores: Dict[str, AbstractContextStore] = {}
 _tenant_lock = threading.Lock()
 
 
-def _build_store(cfg: Settings, db_path: str) -> AbstractContextStore:
+def cfg_backend() -> str:
+    return settings.storage_backend.lower()
+
+
+def _build_store(cfg: Settings, user_id: Optional[str]) -> AbstractContextStore:
+    """``user_id`` None: the legacy single-user store (``SQLITE_DB_PATH`` / DynamoDB partition ``_local``)."""
     backend = cfg.storage_backend.lower()
     if backend == "dynamo":
-        # Placeholder for DynamoDBContextStore (Stage 2 Cloud): partition key = user_id
-        raise NotImplementedError("DynamoDB storage backend will be activated in Stage 2 Cloud.")
+        from src.core.storage.dynamo_store import DynamoContextStore
+
+        return DynamoContextStore(user_id=user_id)
     if backend == "agentcore_memory":
         # Placeholder for AgentCoreMemoryStore (Stage 2 Cloud): actorId = user_id
         raise NotImplementedError("AgentCore Memory storage backend will be activated in Stage 2 Cloud.")
-    return SQLiteContextStore(db_path=db_path)
+    return SQLiteContextStore(db_path=tenant_db_path(user_id) if user_id else cfg.sqlite_db_path)
 
 
 def get_tenant_store(user_id: str, custom_settings: Optional[Settings] = None) -> AbstractContextStore:
@@ -34,7 +41,7 @@ def get_tenant_store(user_id: str, custom_settings: Optional[Settings] = None) -
     with _tenant_lock:
         store = _tenant_stores.get(user_id)
         if store is None:
-            store = _build_store(custom_settings or settings, tenant_db_path(user_id))
+            store = _build_store(custom_settings or settings, user_id)
             _tenant_stores[user_id] = store
         return store
 
@@ -43,6 +50,10 @@ def drop_tenant_store(user_id: str) -> None:
     """Forgets a cached tenant store (before its folder is deleted)."""
     with _tenant_lock:
         store = _tenant_stores.pop(user_id, None)
+    if cfg_backend() == "dynamo":
+        from src.core.storage.dynamo_client import drop_tenant_client
+
+        drop_tenant_client(user_id)
     close = getattr(store, "close", None)
     if callable(close):
         try:
@@ -63,7 +74,7 @@ def get_storage_store(custom_settings: Optional[Settings] = None) -> AbstractCon
     if _store_instance is not None:
         return _store_instance
     cfg = custom_settings or settings
-    _store_instance = _build_store(cfg, cfg.sqlite_db_path)
+    _store_instance = _build_store(cfg, None)
     return _store_instance
 
 

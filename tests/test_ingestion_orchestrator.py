@@ -7,7 +7,6 @@ from datetime import datetime
 import pytest
 
 from src.core.schemas import BriefingReport, ChunkClassification
-from src.core.storage.sqlite_store import SQLiteContextStore
 from src.ingestion.event_engine import EngineConfig, EventEngine
 from src.ingestion.orchestrator import BeeStreamOrchestrator
 from src.ingestion.stream_convo import normalize_bee_time
@@ -28,7 +27,7 @@ LECTURE = "Il teorema fondamentale del calcolo collega derivata e integrale defi
 
 @pytest.fixture
 def store(tmp_path):
-    return SQLiteContextStore(str(tmp_path / "orchestrator.db"))
+    return new_store(str(tmp_path / "orchestrator.db"))
 
 
 @pytest.fixture
@@ -160,6 +159,7 @@ import asyncio  # noqa: E402
 
 from src.core.schemas import VerifiedAction  # noqa: E402
 from src.ingestion.bee_identity import WearerIdentity, role_for_person  # noqa: E402
+from tests.store_backend import new_store
 
 
 def _now_iso():
