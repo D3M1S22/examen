@@ -57,6 +57,14 @@ Parameters:
   VolumeSizeGiB:
     Type: Number
     Default: 20
+  PipelineMode:
+    Type: String
+    Default: local
+    AllowedValues: [local, agentcore]
+    Description: "agentcore = pipeline on AgentCore Runtime (scripts/agentcore_deploy.py), in-process fallback"
+  AgentCoreRuntimeArn:
+    Type: String
+    Default: ""
 
 Resources:
   OriginSecurityGroup:
@@ -170,6 +178,8 @@ Resources:
           BEDROCK_GATEKEEPER_MODEL=${GatekeeperModel}
           BEDROCK_REASONER_MODEL=${ReasonerModel}
           BEDROCK_EMBEDDING_MODEL=${EmbeddingModel}
+          PIPELINE_MODE=${PipelineMode}
+          AGENTCORE_RUNTIME_ARN=${AgentCoreRuntimeArn}
           CFG
           export DEBIAN_FRONTEND=noninteractive
           apt-get update -qq

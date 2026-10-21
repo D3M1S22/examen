@@ -127,6 +127,7 @@ Whenever you inspect, modify, or extend this codebase, you **must adhere strictl
 * Every user is a tenant (`src/core/tenancy.py`, `docs/13_multi_user_accounts.md`). Request handlers and MCP tools already run inside the caller's tenant; background work for a user must be started inside `tenant_scope(user_id)`.
 * Never cache per-user objects in module globals: follow the pattern of `get_event_engine()` / `get_backfill_service()` (one instance per tenant via `resolve_tenant()`; legacy singleton only with `AUTH_ENABLED=false`). With accounts enabled, code that touches user data without a tenant raises `MissingTenant` (fail-closed): fix the missing `tenant_scope`, never catch it to fall back.
 * Pipeline payloads carry `user_id` (`agent_invocation` checks it); LLM calls go through `llm_slot()` (`src/core/limits.py`), shared by every user.
+* Dispatch the pipeline through `invoke_pipeline()` (`src/pipeline/remote.py`), never `agent_invocation` directly: with `PIPELINE_MODE=agentcore` it runs on AgentCore Runtime and falls back to in-process (`docs/17_aws_deployment_runbook.md` §5.4).
 * Dev scripts touching user data run as an account: wrap `main()` in `cli_tenant()` (`src/core/cli.py`, `EXAMEN_CLI_USER=<email>`).
 * Account, Bee and admin routes are session-only (`SESSION_ONLY_PREFIXES` in `auth_middleware.py`); admin routes manage accounts and must never return a user's data.
 

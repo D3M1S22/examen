@@ -155,3 +155,19 @@ Whenever a friction point or roadblock is encountered during development, docume
   3. `link_micro_event_to_session` records the version at which each link was added (`link_versions_json`). A conflicting save re-adds only links newer than the caller's version, and the engine adopts the stored version when it merges links.
   4. Use `pgrep` + `kill <PID>`.
 * **Platform Feedback:** A `ConsistentRead` option on GSIs (even at a higher price) would remove the confirm-on-read pattern. A moto flag that simulates GSI lag would surface the class of bug in item 2 in unit tests.
+
+### [2026-10-21] - AWS / First deployment of EXAMEN (EC2 + CloudFront + AgentCore Runtime)
+* **Context:** Deploying the compute stack and the pipeline on AgentCore Runtime from a fresh account (`docs/17_aws_deployment_runbook.md`).
+* **Friction Encountered:**
+  1. Bedrock in eu-central-1 answered *"Your account is currently being verified"* while us-east-1 worked: on a new account, model access is verified region by region.
+  2. An IAM user holds at most 10 managed policies by default. With 9 attached, the missing rights had to go into one inline policy.
+  3. CloudFront talks HTTP to the origin and forwards no `X-Forwarded-Proto` (only `CloudFront-Forwarded-Proto`), so `AUTH_COOKIE_SECURE=auto` would issue non-Secure cookies.
+  4. AgentCore Runtime sets `AWS_REGION` to the runtime's region, which overrides the Bedrock region EXAMEN reads from the same variable. `runtimeSessionId` must be at least 33 characters.
+  5. Direct code deployment (`codeConfiguration` from S3, no container) needs dependencies built for `aarch64-manylinux2014` (`uv pip install --python-platform aarch64-manylinux2014 --only-binary=:all: --target …`). The package is 78 MB zipped, 245 MB unzipped. A cold microVM adds about 5 s to the first call of a session.
+* **Workaround / Resolution:**
+  1. Bedrock stays in us-east-1. It is a runtime setting, movable from the admin console later.
+  2. One inline policy `examen-deploy`.
+  3. `AUTH_COOKIE_SECURE=true` in the cloud `.env`.
+  4. `BEDROCK_REGION` is copied into `AWS_REGION` in `deploy/agentcore/main.py` before settings load; DynamoDB uses `DYNAMO_REGION`. Session ids are `<user_id>-<session_id>`, padded, so users never share a microVM session.
+  5. `scripts/agentcore_deploy.py` builds the package.
+* **Platform Feedback:** Surface the per-region Bedrock verification state in the console. Let AgentCore keep a user-set `AWS_REGION`, or document the override. Publish a reference command for building direct-code packages.

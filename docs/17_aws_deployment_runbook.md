@@ -5,7 +5,8 @@
 > - Stacks: `examen-compute` (instance `i-0d044dbe01e1e85a4`, EIP 52.59.154.82, distribution `E36UWEYZRX6X14`) and `examen-data`, both in eu-central-1.
 > - Bundle `841b14d120c2`.
 > - Admin `admin@examen.cloud`; the password is the SecureString `/examen/bootstrap-admin-password` in SSM Parameter Store.
-> - Smoke results: §6.1. Phase 2 (AgentCore): §5.4.
+> - **Phase 2 live** (23:45 CEST): the pipeline runs on **AgentCore Runtime** `arn:aws:bedrock-agentcore:eu-central-1:301356686376:runtime/examen_pipeline-Vhjiwg2S4f` (direct code deployment, Python 3.12 ARM64). The host has `PIPELINE_MODE=agentcore`, with in-process fallback.
+> - Smoke results: §6.1 and §6.2.
 > **Related:** [06](06_aws_cloud_deployment_architecture.md) (hosting options and costs, option A chosen), [15](15_aws_split_architecture_report.md) (AgentCore split), [16](16_aws_data_layer_k3.md) and [next_steps/dynamodb_storage/](next_steps/dynamodb_storage/00_overview.md) (data layer, deployed), [11](11_homelab_test_deployment.md) (homelab scripts reused here), [14](14_aws_and_hackathon_reference.md) (hackathon rules)
 > **Deadline:** Fri 23 Oct 2026, 12:00 PT (21:00 CEST).
 
@@ -205,6 +206,22 @@ The equivalent is also available from the console (*Systems Manager → Run Comm
 - GDPR export works; erasing the test account leaves only the admin.
 - The instance uses the `examen-compute-instance` role: no AWS keys on disk.
 - Not yet done: item 9 (pairing a real Bee), which needs the device.
+
+### 6.2 Results, phase 2 (AgentCore)
+- Direct invocation with a synthetic user: the remote pipeline completed the user's task in DynamoDB using the **tenant role** (`Scoped DynamoDB credentials issued` in the runtime log). The test data was then erased.
+- Through CloudFront with `PIPELINE_MODE=agentcore`: three `/api/simulate` calls (action, scheduled task, safety action) took 8.0 s (cold microVM), then 2.6 s and 2.2 s.
+- No `pipeline.remote_fallback` event was logged. Token usage shows the runtime's gatekeeper and extraction calls, flushed to the shared ops table.
+- The first host call before logging was enabled took 53 s inside the runtime, and it was never reproduced. Most likely cause: Bedrock throttling on the new account's default quotas (botocore retries with back-off). The runtime now logs `examen.*` to `/aws/bedrock-agentcore/runtimes/examen_pipeline-Vhjiwg2S4f-DEFAULT`.
+
+### 6.3 Operations
+| Task | Command |
+|---|---|
+| New release on the host | `scripts/aws_bundle.py` then `scripts/aws_deploy.py update` |
+| New runtime version | `scripts/agentcore_deploy.py deploy` (data-stack policy, role stack, package, runtime update) |
+| Pipeline back in-process | `scripts/agentcore_deploy.py disable-host` (`enable-host` switches it back) |
+| Host logs | `scripts/aws_deploy.py logs` |
+| Admin password | SSM Parameter Store `/examen/bootstrap-admin-password` (eu-central-1) |
+| Re-create the compute stack in AgentCore mode | `scripts/aws_deploy.py stack --param PipelineMode=agentcore --param AgentCoreRuntimeArn=<arn>` |
 
 ## 7. Rollback and teardown
 - **Bad update:** `update.sh` keeps the previous release and rolls back when the health check fails.
