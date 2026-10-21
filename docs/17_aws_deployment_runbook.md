@@ -1,6 +1,8 @@
 # 🚀 17 — AWS Deployment Runbook (readiness and plan)
 
-> **Document Status:** Plan, 2026-10-21 (evening). Readiness was checked against the code on branch `aws` and the AWS account `301356686376`. **The deployment cannot start yet**: two blockers need the account owner (§2). Everything else is listed as work items with owners and estimates.
+> **Document Status:** In progress, 2026-10-21 (night).
+> - **Ready:** M1–M4 (`deploy/aws/compute.yaml`, `deploy/aws/host.sh`, `scripts/aws_bundle.py`, `scripts/aws_deploy.py`); the bundle is uploaded.
+> - **Blocked:** B1, partly lifted. CloudFormation and SSM rights are still missing (Appendix B).
 > **Related:** [06](06_aws_cloud_deployment_architecture.md) (hosting options and costs, option A chosen), [15](15_aws_split_architecture_report.md) (AgentCore split), [16](16_aws_data_layer_k3.md) and [next_steps/dynamodb_storage/](next_steps/dynamodb_storage/00_overview.md) (data layer, deployed), [11](11_homelab_test_deployment.md) (homelab scripts reused here), [14](14_aws_and_hackathon_reference.md) (hackathon rules)
 > **Deadline:** Fri 23 Oct 2026, 12:00 PT (21:00 CEST).
 
@@ -238,3 +240,34 @@ Attach as an inline policy and remove it after the deadline. Resources are limit
   ]
 }
 ```
+
+## Appendix B — Missing rights after the 2026-10-21 check
+
+`Examen` now holds `CloudFrontFullAccess`, `AmazonEC2FullAccess`, `IAMFullAccess`, `AmazonS3FullAccess` (plus Bedrock and `examen-runtime-data`). That covers EC2, CloudFront, the instance role and the artifact bucket (`examen-artifacts-301356686376-euc1`, created, bundle uploaded).
+
+Still denied: CloudFormation, SSM (parameters, Run Command, public AMI parameter), CloudWatch Logs, and for phase 2 AgentCore, ECR and CodeBuild. The user already has 9 managed policies (the default quota is 10), so the missing rights go in **one inline policy** (`examen-deploy`):
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {"Sid": "Stacks", "Effect": "Allow", "Action": "cloudformation:*",
+     "Resource": ["arn:aws:cloudformation:eu-central-1:301356686376:stack/examen-*/*",
+                  "arn:aws:cloudformation:eu-central-1:aws:transform/*"]},
+    {"Sid": "StackGlobal", "Effect": "Allow", "Action": ["cloudformation:ValidateTemplate", "cloudformation:ListStacks",
+     "cloudformation:GetTemplateSummary", "cloudformation:DescribeStacks"], "Resource": "*"},
+    {"Sid": "Parameters", "Effect": "Allow", "Action": ["ssm:PutParameter", "ssm:GetParameter", "ssm:GetParameters",
+     "ssm:DeleteParameter", "ssm:AddTagsToResource"],
+     "Resource": ["arn:aws:ssm:eu-central-1:301356686376:parameter/examen/*",
+                  "arn:aws:ssm:eu-central-1::parameter/aws/service/*"]},
+    {"Sid": "RunCommand", "Effect": "Allow", "Action": ["ssm:SendCommand", "ssm:GetCommandInvocation",
+     "ssm:ListCommandInvocations", "ssm:ListCommands", "ssm:DescribeInstanceInformation", "ssm:StartSession",
+     "ssm:TerminateSession", "ssm:ResumeSession"], "Resource": "*"},
+    {"Sid": "Logs", "Effect": "Allow", "Action": "logs:*", "Resource": "*"},
+    {"Sid": "AgentCorePhase2", "Effect": "Allow", "Action": ["bedrock-agentcore:*", "ecr:*", "codebuild:*", "xray:*"],
+     "Resource": "*"}
+  ]
+}
+```
+
+After the deadline, remove this inline policy and the broad managed ones (`IAMFullAccess`, `AmazonEC2FullAccess`, `CloudFrontFullAccess`, `AmazonS3FullAccess`, `AWSCodeDeployFullAccess`, `AmplifyBackendDeployFullAccess`, `AmazonSageMakerCanvasDirectDeployAccess`). The app needs only Bedrock and `examen-runtime-data`; on EC2 it uses the instance role instead.
