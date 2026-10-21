@@ -24,6 +24,7 @@ import { DailyRoutines } from "@/components/views/DailyRoutines";
 import { SocialRolodex } from "@/components/views/SocialRolodex";
 import { TopicDossiers } from "@/components/views/TopicDossiers";
 import { AmbientSimulator } from "@/components/views/AmbientSimulator";
+import { AdminConsole } from "@/components/views/AdminConsole";
 import { EchoShowModal } from "@/components/ui/EchoShowModal";
 import { LoginModal } from "@/components/ui/LoginModal";
 import { BackfillModal } from "@/components/ui/BackfillModal";
@@ -781,6 +782,7 @@ function Dashboard({
         initialSection={accountSection}
         authEnabled={authEnabled}
         onAccountDeleted={onSignedOut}
+        onOpenAdminConsole={() => setActiveTab("admin")}
       />
 
       {/* Left-Side Auto-Hiding Floating Status Dock (MacBook Pro Style) */}
@@ -882,6 +884,7 @@ function Dashboard({
             />
           )}
 
+          {activeTab === "admin" && currentUser?.is_admin && <AdminConsole selfId={currentUser.user_id} />}
           {activeTab === "simulator" && (
             <AmbientSimulator
               simText={simText}

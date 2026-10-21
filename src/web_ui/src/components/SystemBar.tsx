@@ -47,6 +47,7 @@ export function SystemBar({
     { id: "social", label: "SOCIAL ROLODEX" },
     { id: "topics", label: "TOPIC DOSSIERS" },
     { id: "simulator", label: "AMBIENT SIMULATOR" },
+    ...(currentUser?.is_admin ? [{ id: "admin", label: "ADMIN CONSOLE" }] : []),
   ];
 
   // Close dropdown on outside click

@@ -37,6 +37,8 @@ interface LoginModalProps {
   onLogout?: () => void;
   onAccountDeleted?: () => void;
   authEnabled?: boolean;
+  /** Admins: opens the full-screen admin console (accounts, settings, logs, health) */
+  onOpenAdminConsole?: () => void;
 }
 
 const btn = "px-3.5 py-2 rounded-xl text-xs font-semibold transition-colors disabled:opacity-50";
@@ -56,6 +58,7 @@ export function LoginModal({
   onLogout,
   onAccountDeleted,
   authEnabled = true,
+  onOpenAdminConsole,
 }: LoginModalProps) {
   const [section, setSection] = useState<Section>("bee");
   const [message, setMessage] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
@@ -129,7 +132,16 @@ export function LoginModal({
             <PrivacySection setMessage={setMessage} onDeleted={() => { onClose(); onAccountDeleted?.(); }} />
           )}
           {section === "admin" && authEnabled && currentUser?.is_admin && (
-            <AdminSection selfId={currentUser.user_id} setMessage={setMessage} />
+            onOpenAdminConsole ? (
+              <div className="space-y-3">
+                <p className="text-xs text-zinc-300">
+                  Accounts, runtime settings, the service log and health live in the admin console.
+                </p>
+                <button className={btnPrimary} onClick={() => { onOpenAdminConsole(); onClose(); }}>Open admin console</button>
+              </div>
+            ) : (
+              <AdminSection selfId={currentUser.user_id} setMessage={setMessage} />
+            )
           )}
 
           {onLogout && authEnabled && (
