@@ -1,6 +1,6 @@
 # 🗄️ DynamoDB Storage — Overview
 
-> **Document Status:** Proposed, 2026-10-21. Decisions D1–D18 are to be confirmed before implementation starts.
+> **Document Status:** Implemented (decisions D1–D18 confirmed 2026-10-21). Status, verification and deviations: [07](07_implementation_plan_and_testing.md) §0. Pending: the real-AWS stack with its IAM check, and the homelab cutover.
 > **Related:** [16_aws_data_layer_k3.md](../../16_aws_data_layer_k3.md) (why DynamoDB, comparison with Aurora and DSQL), [15_aws_split_architecture_report.md](../../15_aws_split_architecture_report.md) (always-on ingestion + AgentCore), [13_multi_user_accounts.md](../../13_multi_user_accounts.md) (tenancy), [admin_console/](../admin_console/00_overview.md) (`ops.db`)
 > **Audience:** EXAMEN engineers implementing the DynamoDB backends
 
@@ -47,7 +47,7 @@ This folder is the implementation specification: current state, data model, secu
  AgentCore Runtime (pipeline, syntheses, backfill) ── execution role ─┘ AssumeRole + tag user_id from the payload
 ```
 
-## 3. Decisions (to confirm)
+## 3. Decisions (confirmed 2026-10-21)
 
 | # | Topic | Proposal ★ | Alternatives | Details |
 |---|---|---|---|---|

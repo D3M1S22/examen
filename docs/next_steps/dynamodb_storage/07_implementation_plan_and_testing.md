@@ -4,15 +4,33 @@
 
 ---
 
-## 0. Status
+## 0. Status (2026-10-21)
 | Phase | Status |
 |---|---|
-| P0 Contract hardening and shared rules | Not started |
-| P1 `DynamoContextStore` | Not started |
-| P2 IAM tenant isolation, infrastructure, AgentCore direct access | Not started |
-| P3 `DynamoAuthStore` and `DynamoOpsStore` | Not started |
-| P4 Migration and cutover | Not started |
-| P5 Follow-ups (optional) | — |
+| P0 Contract hardening and shared rules | ✅ Done: `rules.py`, every interface method abstract, contract test, `include_chunks`, `delete_all_data`, `UniqueConflict` |
+| P1 `DynamoContextStore` | ✅ Done: [dynamo_store.py](../../../src/core/storage/dynamo_store.py), schema, client, I/O helpers; the whole suite is green on DynamoDB (moto), and the store, engine, backfill and account files are also green on DynamoDB Local |
+| P2 IAM tenant isolation, infrastructure, AgentCore direct access | ✅ Code done: [dynamodb.yaml](../../../deploy/aws/dynamodb.yaml), `TenantCredentials`, start-up checks, Health `storage` block, [dynamo_iam_check.py](../../../scripts/dynamo_iam_check.py). ⏳ Pending: deploy the stack and run the IAM check on the real account |
+| P3 `DynamoAuthStore` and `DynamoOpsStore` | ✅ Done |
+| P4 Migration and cutover | ✅ Code done: [migration.py](../../../src/core/storage/migration.py), [migrate_to_dynamo.py](../../../scripts/migrate_to_dynamo.py). ⏳ Pending: the homelab rehearsal ([06](06_migration_and_cutover.md) §2) |
+| P5 Follow-ups (optional) | Not started |
+
+**Verified:**
+- `.venv/bin/pytest tests/` (SQLite) and `EXAMEN_TEST_STORAGE=dynamo .venv/bin/pytest tests/` (moto) are both green.
+- `EXAMEN_TEST_DYNAMO_ENDPOINT=http://localhost:8001` (DynamoDB Local) runs the store, event engine, backfill, synthesis, serving, account and admin console files: 283 tests, green.
+- Smoke on DynamoDB Local, with the three stores on `dynamo` and a real server:
+  - registration, a routine, `/api/simulate` completing the routine, GDPR export;
+  - admin console: Health `storage` block, service log with integer ids, settings change and history, token usage;
+  - account erasure leaves the user's partition empty, and no auth item mentions the user.
+
+**Deviations from this plan:**
+| # | Planned | Implemented | Why |
+|---|---|---|---|
+| V1 | A `make_store` fixture parametrised over both backends in one run | `tests/store_backend.py`: `new_store(path)` replaces every `SQLiteContextStore(...)` in tests. `EXAMEN_TEST_STORAGE=dynamo` runs the **whole** suite on DynamoDB (moto, fresh tables per test), and `EXAMEN_TEST_DYNAMO_ENDPOINT` switches it to DynamoDB Local. SQLite-only tests carry `@sqlite_only` (4) or a backend branch (3) | Covers every test file, not only 5, and keeps the default run at 7 minutes |
+| V2 | Dossier written with `PutItem` + version condition | `UpdateItem` of every attribute + version condition. `link_micro_event_to_session` stores the version at which each link was added (`link_versions_json`), and a conflicting save re-adds only links newer than the caller's version | A plain merge re-added links that a manual split removed (FRICTION_LOG 2026-10-21) |
+| V3 | — | The event engine adopts the stored version when it merges persisted links (`_merge_persisted_links`), and it also merges before a split | The split partitioned a stale link set, which lost links written by the pipeline on SQLite too |
+| V4 | Tenant-role trust lists the two service roles | Trust: the account, conditioned on the `user_id` tag. Who may assume it is decided by the identity policies (`RuntimeDataPolicy`, `AgentCoreDataPolicy`) | Lets the homelab IAM user with the runtime policy use it, with no stack change |
+| V5 | Separate auth / ops implementations | `DynamoAuthStore(AuthStore)` and `DynamoOpsStore(OpsStore)` inherit the shared logic (`ensure_bootstrap_admin`, summaries). A test fails if a method that opens a SQLite connection is not overridden | No duplicated business rules |
+| V6 | — | `delete_tenant_data(uid)` also erases the DynamoDB partition; `list_tenant_ids()` reads the auth store; the AgentCore entrypoint flushes token usage after each invocation when ops is on DynamoDB | Erasure, start-up and token counting work unchanged |
 
 ## 1. Phases
 

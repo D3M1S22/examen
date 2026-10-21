@@ -80,7 +80,7 @@ This supersedes the ≈ $2 estimate of [16](../../16_aws_data_layer_k3.md) §5, 
 | Default | SQLite, nothing changes |
 | DynamoDB Local | `docker run -d -p 8001:8000 amazon/dynamodb-local`, then `DYNAMO_ENDPOINT_URL=http://localhost:8001 STORAGE_BACKEND=dynamo .venv/bin/python scripts/dynamo_tables.py create`, then start the server with the same env. Dummy credentials (`AWS_ACCESS_KEY_ID=local`) work |
 | Real AWS (dev account) | `DYNAMO_TABLE_PREFIX=examen-dev-` with the stack deployed under that prefix; SSO credentials |
-| Tests | moto in-process (no Docker, no network): [07](07_implementation_plan_and_testing.md) §3 |
+| Tests | `EXAMEN_TEST_STORAGE=dynamo .venv/bin/pytest tests/` (moto in-process, no Docker). Add `EXAMEN_TEST_DYNAMO_ENDPOINT=http://localhost:8001` to run against DynamoDB Local: [07](07_implementation_plan_and_testing.md) §0 |
 
 ## 6. Monitoring
 - **CloudWatch:** the alarms in §1, plus the `ConsumedRead/WriteCapacityUnits` dashboards that come with the table.

@@ -121,7 +121,7 @@ Whenever you inspect, modify, or extend this codebase, you **must adhere strictl
 ### E. Storage Decoupling
 * Always interact with storage via the `AbstractContextStore` interface in `src/core/storage/base.py` and obtain instances through `src/core/storage.get_storage_store()`.
 * Never hardcode direct SQLite SQL queries outside `src/core/storage/sqlite_store.py`.
-* Two backends implement the store (`STORAGE_BACKEND=sqlite|dynamo`, `docs/next_steps/dynamodb_storage/`). A change to a store method changes both, the domain rules shared by both live in `src/core/storage/rules.py`, and store tests use the `make_store` fixture so they run on both backends. DynamoDB requests of the per-user store must always target the tenant's own partition (`pk = user_id`, index keys `user_id#…`); never add `Scan`.
+* Two backends implement the store (`STORAGE_BACKEND=sqlite|dynamo`, `docs/next_steps/dynamodb_storage/`). A change to a store method changes both, the domain rules shared by both live in `src/core/storage/rules.py`, and tests build stores with `new_store(path)` (`tests/store_backend.py`) so the suite runs on both backends: `EXAMEN_TEST_STORAGE=dynamo .venv/bin/pytest tests/` must stay green as well (moto; `EXAMEN_TEST_DYNAMO_ENDPOINT` for DynamoDB Local). DynamoDB requests of the per-user store must always target the tenant's own partition (`pk = user_id`, index keys `user_id#…`); never add `Scan`.
 
 ### F2. Tenancy (multi-user)
 * Every user is a tenant (`src/core/tenancy.py`, `docs/13_multi_user_accounts.md`). Request handlers and MCP tools already run inside the caller's tenant; background work for a user must be started inside `tenant_scope(user_id)`.

@@ -76,6 +76,34 @@ The instance runs the single-user `main` until then. Its `update.sh` checks `/ap
 4. The owner registers (or signs in as admin), runs `claim-legacy-db` (above), then pairs the Bee again with the QR code. Delete the old host token: `rm -rf /var/lib/examen/.bee`.
 5. Remove the temporary drop-in `/etc/systemd/system/examen-update.service.d/health.conf`, then `systemctl daemon-reload && systemctl start examen-update.timer`. Later updates use the new script, which checks `/api/health`.
 
+### 3.2 Switching the instance to DynamoDB (optional, once)
+SQLite stays the default. To run CT 147 on DynamoDB ([next_steps/dynamodb_storage/06](next_steps/dynamodb_storage/06_migration_and_cutover.md) §2):
+1. Deploy `deploy/aws/dynamodb.yaml` with `Prefix=examen-hl-`.
+2. Create an IAM user and attach the `examen-hl-runtime-data` policy. Its keys go into `/opt/examen/.env` (mode 600), because the homelab has no instance role.
+3. Stop the service and the update timer: `systemctl stop examen-update.timer examen`.
+4. Copy the data:
+
+   ```bash
+   cd /opt/examen && .venv/bin/python scripts/migrate_to_dynamo.py users --all && \
+     .venv/bin/python scripts/migrate_to_dynamo.py auth && .venv/bin/python scripts/migrate_to_dynamo.py ops
+   ```
+
+   The script runs with the `DYNAMO_*` values of step 5 exported.
+5. Add to `/opt/examen/.env`:
+
+   ```
+   STORAGE_BACKEND=dynamo
+   AUTH_STORE_BACKEND=dynamo
+   OPS_STORE_BACKEND=dynamo
+   DYNAMO_REGION=eu-central-1
+   DYNAMO_TABLE_PREFIX=examen-hl-
+   DYNAMO_TENANT_ROLE_ARN=<TenantDataRoleArn output>
+   ```
+
+6. Start the service and the timer again. Check that the admin console *Health* shows `storage: dynamo`.
+
+The SQLite files stay untouched: restoring the previous `.env` is the rollback.
+
 ## 4. Operations
 
 ```bash

@@ -141,3 +141,17 @@ Whenever a friction point or roadblock is encountered during development, docume
 * **Friction Encountered:** In stateful streamable HTTP, tools run in the session's task, created during the `initialize` request: `contextvars` set by an ASGI middleware on later requests do not reach them. A different user who reuses an `mcp-session-id` was served the data of the user who opened the session. A test that opens a new session per call cannot see it.
 * **Workaround / Resolution:** `tenant_tool` reads the user from the HTTP request that carries each call (`ctx.request_context.request.state`) and enters `tenant_scope` per call; a regression test reuses one session with two users' tokens.
 * **Platform Feedback:** Document that request-scoped context does not propagate into tool handlers, or bind sessions to the authenticated principal by default.
+
+### [2026-10-21] - Amazon DynamoDB / Moving per-user SQLite stores to one table
+* **Context:** Implementing `DynamoContextStore`, `DynamoAuthStore` and `DynamoOpsStore` behind `STORAGE_BACKEND`, `AUTH_STORE_BACKEND` and `OPS_STORE_BACKEND` (`docs/next_steps/dynamodb_storage/`).
+* **Friction Encountered:**
+  1. A `Query` whose `ExpressionAttributeNames` holds a placeholder that no expression uses fails with `ValidationException`. This happened when a filter clause was built and then dropped (case-sensitive `contains()` replaced by an in-code SQLite `LIKE`).
+  2. Global secondary indexes are eventually consistent and accept no `ConsistentRead`. moto is strongly consistent everywhere, so a state lookup through an index ("which event is open?") looked correct in tests and could return a stale answer in production.
+  3. A plain optimistic retry ("on a version conflict, merge the stored micro-event links back in") restored links that a manual split had removed on purpose, because the engine's in-memory copy carried an old version.
+  4. `pkill -f <pattern>` matched the shell running it (exit 144) and killed the background command.
+* **Workaround / Resolution:**
+  1. Placeholders are registered only for clauses that are kept.
+  2. Indexes only list or find candidates; every decision re-reads the item with a consistent `GetItem` (confirm-on-read). A test hook (`dynamo_io.INDEX_FILTER`) simulates index lag. The store suites also run against DynamoDB Local (`EXAMEN_TEST_DYNAMO_ENDPOINT`).
+  3. `link_micro_event_to_session` records the version at which each link was added (`link_versions_json`). A conflicting save re-adds only links newer than the caller's version, and the engine adopts the stored version when it merges links.
+  4. Use `pgrep` + `kill <PID>`.
+* **Platform Feedback:** A `ConsistentRead` option on GSIs (even at a higher price) would remove the confirm-on-read pattern. A moto flag that simulates GSI lag would surface the class of bug in item 2 in unit tests.

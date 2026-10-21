@@ -13,7 +13,7 @@
 | `examen-tenant-data` | The two roles above, with session tag `user_id` | Item actions on `examen-user` and its indexes, restricted to the caller's partition (§2). No `Scan`, no table management |
 | `examen-migration` (optional, human) | Operator via SSO / CLI | `examen-user` full item access including `Scan`, for the one-shot migration and disaster recovery. Not attached to any running service |
 
-The trust policy of `examen-tenant-data` allows only the two service roles. It also requires the tag:
+The trust policy of `examen-tenant-data` requires the `user_id` tag. As implemented in [dynamodb.yaml](../../../deploy/aws/dynamodb.yaml) (07 §0, V4), the principal is the account: only identities that hold `RuntimeDataPolicy` or `AgentCoreDataPolicy` can assume the role. That includes the homelab IAM user, with no stack change. The stricter variant below lists the two roles:
 
 ```json
 {

@@ -183,7 +183,10 @@ moto is strongly consistent everywhere, so tests do not reproduce rule 4. A unit
 | Two writers completing the same task | Double completion | `UpdateItem` is idempotent; last writer wins (as today) |
 | Chunk move ↔ append | A chunk under two events | `CHUNKREF` pointer checked inside the same Tx (`ConditionCheck` on the pointer's `chunk_sk`) |
 
-The conflict merge can re-add, to the old event, a link that a manual split moved to the new event, when a pipeline linked something at the same instant. The result is a link shown on both events, never a lost link. This is accepted and documented in a code comment.
+**As implemented** ([07](07_implementation_plan_and_testing.md) §0, V2–V3):
+- The dossier is written with `UpdateItem` of every attribute, not `PutItem`. This preserves `link_versions_json`, which `link_micro_event_to_session` owns: it maps each link to the dossier version at which it was added.
+- A conflicting save re-adds only the links added **after** the caller's version. Links the caller had seen and dropped (a manual split) stay dropped.
+- The event engine adopts the stored version whenever it merges the persisted links (`_merge_persisted_links`, also before a split).
 
 ## 7. Retention (D10)
 
