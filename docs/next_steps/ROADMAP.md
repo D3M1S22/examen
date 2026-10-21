@@ -324,8 +324,8 @@
 > **Goal:** move the per-user store, `auth.db` and `ops.db` to DynamoDB (on-demand, no VPC, $0 at idle), with per-user isolation enforced by IAM (`dynamodb:LeadingKeys`). The host keeps no database files, and the AgentCore runtime reads and writes user data directly (doc 15 K3, chosen in [16](../16_aws_data_layer_k3.md)). SQLite stays the default backend.
 > **Spec & status:** [dynamodb_storage/](dynamodb_storage/00_overview.md) (decisions D1–D18 confirmed 2026-10-21; status, verification and deviations in [07 §0](dynamodb_storage/07_implementation_plan_and_testing.md)).
 
-### Phase 9: AWS Deployment (PLANNED, blocked on deploy rights)
-> **Goal:** EXAMEN on AWS for the submission: EC2 + CloudFront in eu-central-1 on the deployed DynamoDB stack, then the pipeline on AgentCore Runtime.
+### Phase 9: AWS Deployment (PHASE 1 LIVE: https://dxovk55s504hk.cloudfront.net)
+> **Goal:** EXAMEN on AWS for the submission: EC2 + CloudFront in eu-central-1 on the deployed DynamoDB stack (live since 2026-10-21), then the pipeline on AgentCore Runtime (phase 2).
 > **Runbook:** [17_aws_deployment_runbook.md](../17_aws_deployment_runbook.md) (readiness, blockers B1–B2, artifacts M1–M7, smoke list, timeline).
 
 ---

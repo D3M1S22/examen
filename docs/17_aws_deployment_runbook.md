@@ -1,8 +1,11 @@
 # 🚀 17 — AWS Deployment Runbook (readiness and plan)
 
-> **Document Status:** In progress, 2026-10-21 (night).
-> - **Ready:** M1–M4 (`deploy/aws/compute.yaml`, `deploy/aws/host.sh`, `scripts/aws_bundle.py`, `scripts/aws_deploy.py`); the bundle is uploaded.
-> - **Blocked:** B1, partly lifted. CloudFormation and SSM rights are still missing (Appendix B).
+> **Document Status:** **Phase 1 deployed** on 2026-10-21, 23:25 CEST.
+> - URL: **https://dxovk55s504hk.cloudfront.net**
+> - Stacks: `examen-compute` (instance `i-0d044dbe01e1e85a4`, EIP 52.59.154.82, distribution `E36UWEYZRX6X14`) and `examen-data`, both in eu-central-1.
+> - Bundle `841b14d120c2`.
+> - Admin `admin@examen.cloud`; the password is the SecureString `/examen/bootstrap-admin-password` in SSM Parameter Store.
+> - Smoke results: §6.1. Phase 2 (AgentCore): §5.4.
 > **Related:** [06](06_aws_cloud_deployment_architecture.md) (hosting options and costs, option A chosen), [15](15_aws_split_architecture_report.md) (AgentCore split), [16](16_aws_data_layer_k3.md) and [next_steps/dynamodb_storage/](next_steps/dynamodb_storage/00_overview.md) (data layer, deployed), [11](11_homelab_test_deployment.md) (homelab scripts reused here), [14](14_aws_and_hackathon_reference.md) (hackathon rules)
 > **Deadline:** Fri 23 Oct 2026, 12:00 PT (21:00 CEST).
 
@@ -190,6 +193,18 @@ The equivalent is also available from the console (*Systems Manager → Run Comm
 7. Admin console: Health shows `storage: dynamo`, `tenant_isolation: true`, no open critical incident; token usage counts the simulate call.
 8. GDPR export downloads; erasing a test account leaves its DynamoDB partition empty.
 9. Bee pairing by QR on a real device; the live stream reaches the Health view.
+
+### 6.1 Results, 2026-10-21 (through CloudFront)
+- HTTP → HTTPS redirect, the dashboard and `/api/health` work.
+- Admin login works; the session cookie is `Secure` and `HttpOnly`.
+- Public sign-up is refused (403).
+- The admin created a user. The user logged in, created a routine, and `/api/simulate` (real Bedrock in us-east-1 + DynamoDB in eu-central-1, 3.1 s) completed it.
+- SSE stayed open 75 s (6 keep-alives).
+- MCP `initialize` with an access token works (200).
+- Health shows `storage: dynamo`, `tenant_isolation: true`; token usage counted 2 calls.
+- GDPR export works; erasing the test account leaves only the admin.
+- The instance uses the `examen-compute-instance` role: no AWS keys on disk.
+- Not yet done: item 9 (pairing a real Bee), which needs the device.
 
 ## 7. Rollback and teardown
 - **Bad update:** `update.sh` keeps the previous release and rolls back when the health check fails.
