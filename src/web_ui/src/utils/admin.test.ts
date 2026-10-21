@@ -3,13 +3,16 @@ import {
   applyIncidentEvent,
   buildChangeSet,
   formatBytes,
+  formatTokens,
   Incident,
   inputError,
   parseInput,
   prependEvents,
+  shareOf,
   SettingRow,
   sortIncidents,
   testsNeeded,
+  usageBars,
 } from "./admin";
 
 const row = (over: Partial<SettingRow>): SettingRow => ({
@@ -82,5 +85,27 @@ describe("incidents and events", () => {
     expect(formatBytes(1536)).toBe("1.5 KB");
     expect(formatBytes(null)).toBe("—");
     expect(formatBytes(3 * 1024 ** 3)).toBe("3.0 GB");
+  });
+});
+
+describe("token usage", () => {
+  test("formats token counts and shares", () => {
+    expect(formatTokens(950)).toBe("950");
+    expect(formatTokens(12_300)).toBe("12.3k");
+    expect(formatTokens(4_500_000)).toBe("4.5M");
+    expect(formatTokens(null)).toBe("—");
+    expect(shareOf(0.4567)).toBe("46%");
+    expect(shareOf(0.004)).toBe("<1%");
+    expect(shareOf(0)).toBe("0%");
+  });
+
+  test("builds hourly bars with empty hours", () => {
+    const now = new Date(Date.UTC(2026, 9, 21, 12, 30));
+    const bars = usageBars([
+      { hour: "2026-10-21T12:00:00+00:00", tokens: 100 },
+      { hour: "2026-10-21T10:00:00+00:00", tokens: 50 },
+    ], 4, now);
+    expect(bars).toEqual([0, 0.5, 0, 1]);
+    expect(usageBars([], 3, now)).toEqual([0, 0, 0]);
   });
 });

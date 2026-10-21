@@ -150,6 +150,41 @@ export const ackIncident = (id: string) => send<{ incident: Incident }>("POST", 
 export const resolveIncident = (id: string) => send<{ incident: Incident }>("POST", `/api/admin/incidents/${id}/resolve`);
 export const getHealth = () => call<any>("/api/admin/health");
 export const getAudit = () => call<{ audit: any[] }>("/api/admin/audit");
+
+export type UsageRange = "1h" | "24h" | "7d" | "30d";
+
+export interface UsageCounters {
+  calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+}
+
+export interface UsageModel extends UsageCounters {
+  provider: string;
+  model_id: string;
+  roles: Record<string, UsageCounters>;
+  share: number;
+}
+
+export interface UsageUser extends UsageCounters {
+  user_id: string;
+  user_email?: string | null;
+  share: number;
+}
+
+export interface UsagePayload {
+  range: UsageRange;
+  since: string;
+  tracking_since?: string | null;
+  totals: UsageCounters;
+  by_model: UsageModel[];
+  by_user: UsageUser[];
+  series: { hour: string; tokens: number; calls: number }[];
+}
+
+export const getUsage = (range: UsageRange) => call<UsagePayload>(`/api/admin/usage${query({ range })}`);
 export const adminEventsUrl = () => `${getApiBaseUrl()}/api/admin/events`;
 
 // ---------------------------------------------------------------------------
@@ -243,4 +278,33 @@ export const formatBytes = (n?: number | null): string => {
     i++;
   }
   return `${v.toFixed(v >= 10 || i === 0 ? 0 : 1)} ${units[i]}`;
+};
+
+/** 950 → "950", 12_300 → "12.3k", 4_500_000 → "4.5M". */
+export const formatTokens = (n?: number | null): string => {
+  if (n == null) return "—";
+  const abs = Math.abs(n);
+  if (abs >= 1e9) return `${(n / 1e9).toFixed(1)}B`;
+  if (abs >= 1e6) return `${(n / 1e6).toFixed(1)}M`;
+  if (abs >= 1e3) return `${(n / 1e3).toFixed(1)}k`;
+  return String(Math.round(n));
+};
+
+export const totalTokens = (c: Pick<UsageCounters, "input_tokens" | "output_tokens">): number =>
+  (c.input_tokens || 0) + (c.output_tokens || 0);
+
+/** 0.4567 → "46%", tiny but non-zero shares → "<1%". */
+export const shareOf = (share: number): string => {
+  if (!share) return "0%";
+  if (share < 0.01) return "<1%";
+  return `${Math.round(share * 100)}%`;
+};
+
+/** Hourly series → bar heights in [0, 1] for the inline chart (missing hours stay zero). */
+export const usageBars = (series: { hour: string; tokens: number }[], hours: number, now: Date = new Date()): number[] => {
+  const end = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), now.getUTCHours());
+  const byHour = new Map(series.map((p) => [Date.parse(p.hour), p.tokens]));
+  const values = Array.from({ length: hours }, (_, i) => byHour.get(end - (hours - 1 - i) * 3600_000) || 0);
+  const max = Math.max(...values, 0);
+  return values.map((v) => (max ? v / max : 0));
 };

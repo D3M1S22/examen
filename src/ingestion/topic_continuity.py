@@ -305,7 +305,7 @@ class TopicSimilarity:
                 f"Last words before the pause:\n\"{' '.join(previous_text.split()[-150:])}\"\n\n"
                 f"New speech after the pause:\n\"{window_text}\""
             )
-            result: TopicContinuityVerdict = get_fast_model().with_structured_output(TopicContinuityVerdict).invoke([
+            result: TopicContinuityVerdict = get_fast_model(role="topic_judge").with_structured_output(TopicContinuityVerdict).invoke([
                 SystemMessage(content=_JUDGE_SYSTEM_PROMPT),
                 HumanMessage(content=prompt),
             ])

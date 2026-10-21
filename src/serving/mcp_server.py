@@ -2117,6 +2117,9 @@ def create_app() -> Starlette:
                 report_event("system.stopping", "info", "EXAMEN stopping", component="system", user_id=None)
                 sink.remove_listener(admin_console_routes.hub.on_sink)
                 sink.flush()
+                from src.core import token_usage
+
+                token_usage.flush()  # this hour's token totals survive the restart
 
     app.router.lifespan_context = lifespan
 

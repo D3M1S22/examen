@@ -13,7 +13,7 @@ import threading
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from src.core.tenancy import data_root
 
@@ -105,6 +105,19 @@ class OpsStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_history_change ON settings_history (change_id);
                 CREATE TABLE IF NOT EXISTS ops_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS token_usage (
+                    hour TEXT NOT NULL,
+                    provider TEXT NOT NULL,
+                    model_id TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    user_id TEXT NOT NULL DEFAULT '',
+                    calls INTEGER NOT NULL DEFAULT 0,
+                    input_tokens INTEGER NOT NULL DEFAULT 0,
+                    output_tokens INTEGER NOT NULL DEFAULT 0,
+                    cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+                    cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY (hour, provider, model_id, role, user_id)
+                );
                 """
             )
         try:
@@ -232,7 +245,8 @@ class OpsStore:
     # Retention and erasure
     # ------------------------------------------------------------------
 
-    def purge(self, *, event_days: float, max_events: int = 50_000, incident_days: float = 90) -> Dict[str, int]:
+    def purge(self, *, event_days: float, max_events: int = 50_000, incident_days: float = 90,
+              usage_days: float = 90) -> Dict[str, int]:
         now = utcnow()
         with self._lock, self._conn() as conn:
             events = conn.execute("DELETE FROM service_events WHERE at < ?",
@@ -251,7 +265,9 @@ class OpsStore:
                         (total - max_events,)).rowcount
             incidents = conn.execute("DELETE FROM incidents WHERE status = 'resolved' AND resolved_at < ?",
                                      (iso(now - timedelta(days=incident_days)),)).rowcount
-        return {"events": events, "incidents": incidents}
+            usage = conn.execute("DELETE FROM token_usage WHERE hour < ?",
+                                 (iso(now - timedelta(days=usage_days)),)).rowcount
+        return {"events": events, "incidents": incidents, "token_usage": usage}
 
     def vacuum_if_fragmented(self, ratio: float = 0.2) -> bool:
         with self._lock, self._conn() as conn:
@@ -267,6 +283,63 @@ class OpsStore:
         with self._lock, self._conn() as conn:
             conn.execute("DELETE FROM service_events WHERE user_id = ?", (user_id,))
             conn.execute("DELETE FROM incidents WHERE user_id = ?", (user_id,))
+            conn.execute("DELETE FROM token_usage WHERE user_id = ?", (user_id,))
+
+    # ------------------------------------------------------------------
+    # Token usage (03 §8): hourly totals per provider, model, role and user
+    # ------------------------------------------------------------------
+
+    _USAGE_FIELDS = ("calls", "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens")
+
+    def add_token_usage(self, rows: Iterable[Dict[str, Any]]) -> None:
+        values = [(r["hour"], r["provider"], r["model_id"], r["role"], r.get("user_id") or "",
+                   *(int(r.get(f, 0) or 0) for f in self._USAGE_FIELDS)) for r in rows]
+        if not values:
+            return
+        updates = ", ".join(f"{f} = {f} + excluded.{f}" for f in self._USAGE_FIELDS)
+        with self._lock, self._conn() as conn:
+            conn.executemany(
+                "INSERT INTO token_usage (hour, provider, model_id, role, user_id, " + ", ".join(self._USAGE_FIELDS)
+                + ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(hour, provider, model_id, role, user_id)"
+                " DO UPDATE SET " + updates, values)
+
+    def token_usage_summary(self, since: Optional[str] = None) -> Dict[str, Any]:
+        """Totals since ``since`` (UTC ISO hour), by model (with roles), by user and per hour."""
+        where, args = ("WHERE hour >= ?", [since]) if since else ("", [])
+        sums = ", ".join(f"SUM({f}) AS {f}" for f in self._USAGE_FIELDS)
+        with self._conn() as conn:
+            total = dict(conn.execute(f"SELECT {sums} FROM token_usage {where}", args).fetchone())
+            by_model_role = [dict(r) for r in conn.execute(
+                f"SELECT provider, model_id, role, {sums} FROM token_usage {where} "
+                "GROUP BY provider, model_id, role", args).fetchall()]
+            by_user = [dict(r) for r in conn.execute(
+                f"SELECT user_id, {sums} FROM token_usage {where} GROUP BY user_id", args).fetchall()]
+            series = [dict(r) for r in conn.execute(
+                f"SELECT hour, SUM(input_tokens + output_tokens) AS tokens, SUM(calls) AS calls "
+                f"FROM token_usage {where} GROUP BY hour ORDER BY hour", args).fetchall()]
+            first = conn.execute("SELECT MIN(hour) FROM token_usage").fetchone()[0]
+
+        def clean(row: Dict[str, Any]) -> Dict[str, Any]:
+            """SUM() is NULL on an empty range: counters become 0."""
+            return {**row, **{f: int(row.get(f) or 0) for f in self._USAGE_FIELDS}}
+
+        models: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        for row in by_model_role:
+            row = clean(row)
+            entry = models.setdefault((row["provider"], row["model_id"]), {
+                "provider": row["provider"], "model_id": row["model_id"], "roles": {},
+                **dict.fromkeys(self._USAGE_FIELDS, 0)})
+            entry["roles"][row["role"]] = {f: row[f] for f in self._USAGE_FIELDS}
+            for f in self._USAGE_FIELDS:
+                entry[f] += row[f]
+        return {
+            "totals": clean(total),
+            "by_model": sorted(models.values(), key=lambda m: -(m["input_tokens"] + m["output_tokens"])),
+            "by_user": sorted((clean(r) for r in by_user), key=lambda u: -(u["input_tokens"] + u["output_tokens"])),
+            "series": [{"hour": r["hour"], "tokens": int(r["tokens"] or 0), "calls": int(r["calls"] or 0)}
+                       for r in series],
+            "tracking_since": first,
+        }
 
     # ------------------------------------------------------------------
     # Runtime settings overrides

@@ -158,6 +158,7 @@ REGISTRY: Dict[str, SettingSpec] = {s.key: s for s in [
     SettingSpec("searxng_url", LIMITS, "SearXNG URL", "hot", "Empty = not used", pattern=HTTP_URL),
     SettingSpec("log_level", LIMITS, "Server log level (journald)", "hot"),
     SettingSpec("service_log_retention_days", LIMITS, "Service log retention (days)", "hot", minimum=1, maximum=365),
+    SettingSpec("token_usage_retention_days", LIMITS, "Token usage retention (days)", "hot", minimum=7, maximum=730),
     # --- Health checks (hot) -----------------------------------------------------------------------
     SettingSpec("health_check_interval_seconds", HEALTH, "Check interval (s)", "hot", minimum=15, maximum=600),
     SettingSpec("health_stream_silent_minutes", HEALTH, "Silent stream after (min)", "hot", minimum=2, maximum=1440),
@@ -266,7 +267,7 @@ def probe_gatekeeper(cfg: Settings) -> str:
     from src.core.models import get_chat_model
     from src.core.schemas import ChunkClassification
 
-    model = get_chat_model(cfg.gatekeeper_provider, cfg.gatekeeper_model_id, cfg=cfg)
+    model = get_chat_model(cfg.gatekeeper_provider, cfg.gatekeeper_model_id, cfg=cfg, role="probe")
     result = model.with_structured_output(ChunkClassification).invoke([
         SystemMessage(content="Classify the transcript into the categories social, action, deep_topic, "
                               "scheduled_task or noop."),
@@ -280,7 +281,8 @@ def probe_gatekeeper(cfg: Settings) -> str:
 def probe_reasoner(cfg: Settings) -> str:
     from src.core.models import get_chat_model
 
-    answer = get_chat_model(cfg.reasoner_provider, cfg.reasoner_model_id, temperature=0.0, cfg=cfg).invoke(
+    answer = get_chat_model(cfg.reasoner_provider, cfg.reasoner_model_id, temperature=0.0, cfg=cfg,
+                            role="probe").invoke(
         "Reply with the single word OK.")
     text = getattr(answer, "content", "")
     if not str(text).strip():

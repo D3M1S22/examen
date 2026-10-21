@@ -99,7 +99,7 @@ def _model_call_finished(started: float, error: Optional[BaseException] = None) 
 
 def _get_bedrock_classifier():
     """Initializes classifier model with structured output via model factory."""
-    llm = get_fast_model()
+    llm = get_fast_model(role="gatekeeper")
     return llm.with_structured_output(ChunkClassification)
 
 

@@ -12,11 +12,13 @@ import json
 import logging
 import threading
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 from starlette.requests import Request
 from starlette.responses import JSONResponse, StreamingResponse
 
+from src.core import token_usage
 from src.core.auth import get_auth_store
 from src.core.ops_store import get_ops_store, iso, utcnow
 from src.core.runtime_settings import SettingsError, get_settings_service
@@ -24,6 +26,8 @@ from src.serving.admin_routes import _require_admin
 from src.serving.auth_middleware import read_cookie
 
 logger = logging.getLogger("examen.serving.admin_console")
+
+USAGE_RANGES = {"1h": 1, "24h": 24, "7d": 24 * 7, "30d": 24 * 30}
 
 
 class AdminHub:
@@ -299,6 +303,28 @@ def register_admin_console_routes(mcp: Any) -> None:
             row["user_email"] = emails.get(row["user_id"])
         snap["settings_version"] = get_settings_service().version
         return JSONResponse(snap)
+
+    @mcp.custom_route("/api/admin/usage", methods=["GET"])
+    async def api_admin_usage(request: Request) -> JSONResponse:
+        """Token usage per model (with roles), per user and per hour (03 §8). Counts only, no content."""
+        _, denied = _require_admin()
+        if denied:
+            return denied
+        hours = USAGE_RANGES.get(request.query_params.get("range", "24h"))
+        if hours is None:
+            return JSONResponse({"error": "invalid_request", "message": f"range: {', '.join(USAGE_RANGES)}"},
+                                status_code=400)
+        await asyncio.to_thread(token_usage.flush)
+        since = (utcnow() - timedelta(hours=hours)).replace(minute=0, second=0, microsecond=0)
+        summary = await asyncio.to_thread(get_ops_store().token_usage_summary, iso(since))
+        emails = _emails()
+        total = summary["totals"]["input_tokens"] + summary["totals"]["output_tokens"]
+        for row in summary["by_model"]:
+            row["share"] = round((row["input_tokens"] + row["output_tokens"]) / total, 4) if total else 0.0
+        for row in summary["by_user"]:
+            row["user_email"] = emails.get(row["user_id"]) if row["user_id"] else None
+            row["share"] = round((row["input_tokens"] + row["output_tokens"]) / total, 4) if total else 0.0
+        return JSONResponse({"range": request.query_params.get("range", "24h"), "since": iso(since), **summary})
 
     # --------------------------------------------------------- admin SSE channel
 

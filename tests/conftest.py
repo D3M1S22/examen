@@ -46,6 +46,9 @@ def _single_user_mode(monkeypatch, tmp_path):
     reset_ops_store(None)
     reset_sink()
     metrics.reset()
+    from src.core import token_usage
+
+    token_usage.reset()
     reset_settings_service(None)
     saved = {key: getattr(settings, key) for key in REGISTRY}
     yield

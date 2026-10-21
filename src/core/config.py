@@ -193,6 +193,8 @@ class Settings(BaseSettings):
     log_level: Literal["DEBUG", "INFO", "WARNING"] = Field(default="INFO", alias="LOG_LEVEL")
     service_log_retention_days: int = Field(default=30, alias="SERVICE_LOG_RETENTION_DAYS")
     service_log_max_events: int = Field(default=50000, alias="SERVICE_LOG_MAX_EVENTS")
+    # Hourly token usage per model / role / user (admin console Health) is kept this long
+    token_usage_retention_days: int = Field(default=90, alias="TOKEN_USAGE_RETENTION_DAYS")
     # Health monitor rules (admin_console/03 §5)
     health_check_interval_seconds: float = Field(default=60.0, alias="HEALTH_CHECK_INTERVAL_SECONDS")
     health_stream_silent_minutes: float = Field(default=15.0, alias="HEALTH_STREAM_SILENT_MINUTES")

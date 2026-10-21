@@ -21,6 +21,7 @@ def get_chat_model(
     model_id: str,
     temperature: float = 0.0,
     cfg: Optional[Settings] = None,
+    role: str = "other",
 ) -> BaseChatModel:
     """Instantiates a chat model configured for Bedrock or Bedrock Mantle.
 
@@ -30,11 +31,16 @@ def get_chat_model(
         temperature: Sampling temperature (default 0.0 for deterministic extraction).
         cfg: Settings to read region, endpoint and credentials from (default: the live settings;
             the admin console passes a candidate copy to test a change before saving it).
+        role: Label of the token usage counter (gatekeeper, reasoner, probe, ...): every model built
+            here reports its tokens to the admin console (src/core/token_usage.py).
 
     Returns:
         A BaseChatModel instance supporting .invoke(), .ainvoke(), and .with_structured_output().
     """
+    from src.core.token_usage import TokenUsageHandler
+
     s = cfg or settings
+    callbacks = [TokenUsageHandler(provider, model_id, role)]
     if provider == "mantle":
         from langchain_openai import ChatOpenAI
 
@@ -47,6 +53,7 @@ def get_chat_model(
             base_url=endpoint,
             api_key=api_key,
             temperature=temperature,
+            callbacks=callbacks,
         )
     elif provider == "bedrock":
         from langchain_aws import ChatBedrockConverse
@@ -60,17 +67,21 @@ def get_chat_model(
             aws_secret_access_key=s.aws_secret_access_key,
             aws_session_token=s.aws_session_token,
             disable_streaming=True,
+            callbacks=callbacks,
         )
     else:
         raise ValueError(f"Unsupported provider '{provider}'. Must be 'bedrock' or 'mantle'.")
 
 
-def get_fast_model() -> BaseChatModel:
-    """Returns the configured lightweight model for Gatekeeper, Action State, Social, and Topic extraction."""
+def get_fast_model(role: str = "extraction") -> BaseChatModel:
+    """Returns the configured lightweight model for Gatekeeper, Action State, Social, and Topic extraction.
+
+    ``role`` labels its token usage: ``gatekeeper``, ``extraction`` (pipeline nodes), ``topic_judge``."""
     return get_chat_model(
         provider=settings.gatekeeper_provider,
         model_id=settings.gatekeeper_model_id,
         temperature=0.0,
+        role=role,
     )
 
 
@@ -80,6 +91,7 @@ def get_reasoner_model() -> BaseChatModel:
         provider=settings.reasoner_provider,
         model_id=settings.reasoner_model_id,
         temperature=0.2,
+        role="reasoner",
     )
 
 
@@ -95,8 +107,9 @@ def get_embedding_model(cfg: Optional[Settings] = None):
 
     Embeddings always use the native Bedrock runtime (Mantle exposes chat models only).
     """
-    from langchain_aws import BedrockEmbeddings
+    from src.core.token_usage import counting_embeddings_class
 
+    BedrockEmbeddings = counting_embeddings_class()  # records inputTextTokenCount per call
     s = cfg or settings
     model_kwargs = {"dimensions": s.embedding_dimensions, "normalize": True}
     if not s.embedding_model_id.startswith("amazon.titan-embed-text-v2"):

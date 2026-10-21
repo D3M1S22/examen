@@ -17,6 +17,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from src.core import token_usage
 from src.core.config import settings
 from src.core.limits import llm_slots_in_use
 from src.core.metrics import Metrics, metrics as default_metrics, percentile
@@ -126,6 +127,7 @@ class HealthMonitor:
         changed: List[Optional[Dict[str, Any]]] = []
         now = self.clock()
         m = self.metrics
+        token_usage.flush(self.store_getter)  # hourly token totals → ops.db (03 §8)
 
         # Per-user Bee streams
         seen = set()
@@ -227,7 +229,8 @@ class HealthMonitor:
         changed.extend(resolve_quiet_incidents(store, now=datetime.fromtimestamp(now, timezone.utc)))
         if now - self._last_purge >= 86400:
             self._last_purge = now
-            store.purge(event_days=settings.service_log_retention_days, max_events=settings.service_log_max_events)
+            store.purge(event_days=settings.service_log_retention_days, max_events=settings.service_log_max_events,
+                        usage_days=settings.token_usage_retention_days)
             store.vacuum_if_fragmented()
 
         out = [c for c in changed if c]
@@ -279,6 +282,21 @@ class HealthMonitor:
             "warnings_15m": int(m.count("level:warning", 900)),
             "incidents_open": by_severity,
             "service_log_dropped": get_sink().dropped,
+            "tokens_24h": self._tokens_24h(),
+        }
+
+    def _tokens_24h(self) -> Dict[str, Any]:
+        """Light token summary for the health cards (the full breakdown is /api/admin/usage)."""
+        token_usage.flush(self.store_getter)
+        since = datetime.fromtimestamp(self.clock() - 86400, timezone.utc).replace(minute=0, second=0, microsecond=0)
+        summary = self.store_getter().token_usage_summary(iso(since))
+        totals = summary["totals"]
+        top = summary["by_model"][0] if summary["by_model"] else None
+        return {
+            "calls": totals["calls"],
+            "tokens": totals["input_tokens"] + totals["output_tokens"],
+            "top_model": top["model_id"] if top else None,
+            "top_model_tokens": (top["input_tokens"] + top["output_tokens"]) if top else 0,
         }
 
     # -- loop -------------------------------------------------------------------------

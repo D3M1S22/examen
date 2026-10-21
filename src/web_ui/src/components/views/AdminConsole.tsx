@@ -13,6 +13,7 @@ import {
   buildChangeSet,
   ChangeSet,
   formatBytes,
+  formatTokens,
   getAudit,
   getHealth,
   getIncident,
@@ -20,6 +21,7 @@ import {
   getLogs,
   getSettings,
   getSettingsHistory,
+  getUsage,
   Incident,
   inputError,
   parseInput,
@@ -33,10 +35,15 @@ import {
   ServiceEvent,
   SettingRow,
   SettingsPayload,
+  shareOf,
   sortIncidents,
   sourceLabel,
   testSettings,
   testsNeeded,
+  totalTokens,
+  UsagePayload,
+  UsageRange,
+  usageBars,
 } from "@/utils/admin";
 
 type Tab = "accounts" | "settings" | "logs" | "health";
@@ -591,7 +598,11 @@ function HealthTab({ health, setHealth }: { health: any; setHealth: (h: any) => 
         <Stat label="Warnings (15 min)" value={health.warnings_15m ?? 0} />
         <Stat label="Pipeline dispatches (15 min)" value={llm.pipeline_dispatches_15m ?? 0} />
         <Stat label="Settings version" value={health.settings_version ?? 0} />
+        <Stat label="Tokens (24 h)"
+          value={health.tokens_24h ? formatTokens(health.tokens_24h.tokens) : "—"} />
       </div>
+
+      <TokenUsageCard />
 
       <section className={card}>
         <h3 className="text-sm font-semibold text-zinc-100 mb-2">Bee streams</h3>
@@ -609,6 +620,130 @@ function HealthTab({ health, setHealth }: { health: any; setHealth: (h: any) => 
         </div>
       </section>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Token usage (admin_console/03 §8): counts only, never content
+// ---------------------------------------------------------------------------
+
+const RANGE_HOURS: Record<UsageRange, number> = { "1h": 1, "24h": 24, "7d": 24 * 7, "30d": 24 * 30 };
+const ROLE_LABEL: Record<string, string> = {
+  gatekeeper: "gatekeeper", extraction: "extraction", reasoner: "reasoner", topic_judge: "topic judge",
+  embeddings: "embeddings", probe: "console tests", other: "other",
+};
+
+function TokenUsageCard() {
+  const [range, setRange] = useState<UsageRange>("24h");
+  const [byUser, setByUser] = useState(false);
+  const [data, setData] = useState<UsagePayload | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(() => {
+    getUsage(range).then((d) => { setData(d); setError(null); }).catch((e) => setError(e.message));
+  }, [range]);
+  useEffect(() => {
+    load();
+    const t = setInterval(load, 60000);
+    return () => clearInterval(t);
+  }, [load]);
+
+  // The chart groups 30 days by 6-hour bars so it stays readable
+  const barHours = range === "30d" ? RANGE_HOURS[range] / 6 : Math.min(RANGE_HOURS[range], 168);
+  const bars = useMemo(() => {
+    if (!data) return [];
+    if (range !== "30d") return usageBars(data.series, barHours);
+    const hourly = usageBars(data.series, RANGE_HOURS[range]);
+    const grouped = Array.from({ length: barHours }, (_, i) => hourly.slice(i * 6, i * 6 + 6).reduce((a, b) => a + b, 0));
+    const max = Math.max(...grouped, 0);
+    return grouped.map((v) => (max ? v / max : 0));
+  }, [data, range, barHours]);
+
+  const totals = data?.totals;
+  return (
+    <section className={card}>
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+        <div>
+          <h3 className="text-sm font-semibold text-zinc-100">Token usage</h3>
+          <p className="text-[10px] text-zinc-500">
+            Counted at every model call{data?.tracking_since ? ` · since ${ts(data.tracking_since)} UTC` : ""}.
+            Input includes cached tokens.
+          </p>
+        </div>
+        <div className="flex items-center gap-1">
+          {(Object.keys(RANGE_HOURS) as UsageRange[]).map((r) => (
+            <button key={r} onClick={() => setRange(r)}
+              className={`${btn} ${range === r ? "bg-cyan-500/20 text-cyan-200 border border-cyan-400/50" : "text-zinc-400 hover:text-zinc-200"}`}>
+              {r}
+            </button>
+          ))}
+          <button className={`${btnGhost} ml-2`} onClick={() => setByUser((v) => !v)}>{byUser ? "By model" : "By user"}</button>
+        </div>
+      </div>
+
+      {error && <p className="text-xs text-red-300">{error}</p>}
+      {data && totals && (
+        <>
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 mb-3 text-[11px]">
+            <p className="text-zinc-400">Total <span className="block text-base text-zinc-100 font-semibold">{formatTokens(totalTokens(totals))}</span></p>
+            <p className="text-zinc-400">Input <span className="block text-base text-zinc-100">{formatTokens(totals.input_tokens)}</span></p>
+            <p className="text-zinc-400">Output <span className="block text-base text-zinc-100">{formatTokens(totals.output_tokens)}</span></p>
+            <p className="text-zinc-400">Cache read / write <span className="block text-base text-zinc-100">{formatTokens(totals.cache_read_tokens)} / {formatTokens(totals.cache_write_tokens)}</span></p>
+            <p className="text-zinc-400">Calls <span className="block text-base text-zinc-100">{formatTokens(totals.calls)}</span></p>
+          </div>
+
+          <svg viewBox={`0 0 ${Math.max(bars.length, 1)} 20`} preserveAspectRatio="none" className="w-full h-12 mb-3" role="img"
+            aria-label={`Tokens per ${range === "30d" ? "6 hours" : "hour"}`}>
+            {bars.map((h, i) => (
+              <rect key={i} x={i + 0.1} width={0.8} y={20 - Math.max(h * 20, h ? 0.6 : 0)} height={Math.max(h * 20, h ? 0.6 : 0)}
+                className="fill-cyan-400/70" />
+            ))}
+          </svg>
+
+          {!byUser ? (
+            <div className="overflow-x-auto">
+              <table className="w-full text-[11px] text-zinc-300">
+                <thead className="text-zinc-500 text-left">
+                  <tr><th className="py-1 pr-3">Model</th><th className="pr-3">Provider</th><th className="pr-3">Roles</th>
+                    <th className="pr-3 text-right">Calls</th><th className="pr-3 text-right">Input</th><th className="pr-3 text-right">Output</th>
+                    <th className="pr-3 text-right">Cache</th><th className="pr-3 text-right">Total</th><th className="text-right">Share</th></tr>
+                </thead>
+                <tbody className="divide-y divide-white/5">
+                  {data.by_model.length === 0 && <tr><td colSpan={9} className="py-2 text-zinc-500">No model calls in this range.</td></tr>}
+                  {data.by_model.map((m) => (
+                    <tr key={`${m.provider}:${m.model_id}`}>
+                      <td className="py-1.5 pr-3 font-mono text-zinc-100 break-all">{m.model_id}</td>
+                      <td className="pr-3">{m.provider}</td>
+                      <td className="pr-3 text-zinc-400">
+                        {Object.entries(m.roles).map(([role, c]) => `${ROLE_LABEL[role] || role} ${formatTokens(totalTokens(c))}`).join(" · ")}
+                      </td>
+                      <td className="pr-3 text-right">{formatTokens(m.calls)}</td>
+                      <td className="pr-3 text-right">{formatTokens(m.input_tokens)}</td>
+                      <td className="pr-3 text-right">{formatTokens(m.output_tokens)}</td>
+                      <td className="pr-3 text-right">{formatTokens(m.cache_read_tokens + m.cache_write_tokens)}</td>
+                      <td className="pr-3 text-right text-zinc-100">{formatTokens(totalTokens(m))}</td>
+                      <td className="text-right">{shareOf(m.share)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="divide-y divide-white/5">
+              {data.by_user.length === 0 && <p className="py-2 text-[11px] text-zinc-500">No model calls in this range.</p>}
+              {data.by_user.map((u) => (
+                <div key={u.user_id || "system"} className="py-1.5 grid grid-cols-4 gap-2 text-[11px] text-zinc-300">
+                  <span className="truncate">{u.user_id ? (u.user_email || u.user_id) : "System (no user)"}</span>
+                  <span className="text-right">{formatTokens(u.calls)} calls</span>
+                  <span className="text-right text-zinc-100">{formatTokens(totalTokens(u))} tokens</span>
+                  <span className="text-right">{shareOf(u.share)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+    </section>
   );
 }
 

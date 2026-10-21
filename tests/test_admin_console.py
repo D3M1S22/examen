@@ -548,3 +548,103 @@ def test_admin_sse_channel_receives_service_events():
     assert first["type"] == "service_event" and first["data"]["code"] == "llm.access_denied"
     assert second["type"] == "incident_opened"
 
+
+
+# ---------------------------------------------------------------------------
+# Token usage per model (03 §8)
+# ---------------------------------------------------------------------------
+
+def _usage_rows():
+    from src.core import token_usage
+
+    token_usage.flush()
+    return get_ops_store().token_usage_summary()
+
+
+def test_factory_models_report_their_tokens(monkeypatch):
+    from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
+    from langchain_core.messages import AIMessage
+    from langchain_core.output_parsers import StrOutputParser
+
+    from src.core.models import get_chat_model, get_fast_model
+    from src.core.token_usage import TokenUsageHandler
+
+    model = get_chat_model("bedrock", "us.anthropic.claude-haiku-4-5", role="probe")
+    [handler] = [c for c in model.callbacks if isinstance(c, TokenUsageHandler)]
+    assert (handler.provider, handler.model_id, handler.role) == ("bedrock", "us.anthropic.claude-haiku-4-5", "probe")
+    assert get_fast_model(role="gatekeeper").callbacks[0].role == "gatekeeper"
+
+    fake = GenericFakeChatModel(
+        messages=iter([AIMessage(content="ok", usage_metadata={
+            "input_tokens": 120, "output_tokens": 30, "total_tokens": 150,
+            "input_token_details": {"cache_read": 40, "cache_creation": 10}})]),
+        callbacks=[TokenUsageHandler("bedrock", "model-x", "extraction")])
+    with tenant_scope(UID_A):
+        assert (fake | StrOutputParser()).invoke("hi") == "ok"  # wrapped like with_structured_output
+    summary = _usage_rows()
+    [row] = summary["by_model"]
+    assert row["model_id"] == "model-x" and row["calls"] == 1
+    assert (row["input_tokens"], row["output_tokens"], row["cache_read_tokens"], row["cache_write_tokens"]) == (120, 30, 40, 10)
+    assert row["roles"]["extraction"]["input_tokens"] == 120
+    assert summary["by_user"][0]["user_id"] == UID_A
+
+
+def test_embedding_tokens_are_read_from_the_bedrock_response(monkeypatch):
+    from langchain_aws import BedrockEmbeddings
+
+    from src.core.models import get_embedding_model
+
+    monkeypatch.setattr(BedrockEmbeddings, "_invoke_model",
+                        lambda self, input_body={}: {"embedding": [0.1, 0.2], "inputTextTokenCount": 7})
+    assert get_embedding_model().embed_query("hello") == [0.1, 0.2]
+    [row] = _usage_rows()["by_model"]
+    assert row["roles"]["embeddings"]["input_tokens"] == 7 and row["output_tokens"] == 0
+
+
+def test_flush_accumulates_and_survives_database_errors():
+    from src.core import token_usage
+
+    token_usage.record("mantle", "m", "reasoner", input_tokens=10, output_tokens=5, user_id="")
+    token_usage.flush()
+    token_usage.record("mantle", "m", "reasoner", input_tokens=1, output_tokens=1, user_id="")
+
+    class _Broken:
+        def add_token_usage(self, rows):
+            raise RuntimeError("database is locked")
+
+    assert token_usage.flush(lambda: _Broken()) == 0  # kept for the next flush
+    totals = _usage_rows()["totals"]
+    assert (totals["calls"], totals["input_tokens"], totals["output_tokens"]) == (2, 11, 6)
+
+
+def test_counting_never_breaks_a_model_call():
+    from src.core.token_usage import TokenUsageHandler
+
+    TokenUsageHandler("bedrock", "m", "gatekeeper").on_llm_end(object())  # malformed result: no exception
+    TokenUsageHandler("bedrock", "m", "gatekeeper").on_llm_end(None)
+
+
+def test_usage_route_groups_by_model_and_user(app):
+    from src.core import token_usage
+
+    admin, _ = _admin(app)
+    user = TestClient(app)
+    uid = _register(user, "heavy@example.com").json()["user"]["id"]
+    token_usage.record("bedrock", "gk", "gatekeeper", input_tokens=900, output_tokens=100, user_id=uid)
+    token_usage.record("mantle", "rs", "reasoner", input_tokens=50, output_tokens=50, user_id="")
+    token_usage.record("bedrock", "old", "gatekeeper", input_tokens=5, user_id=uid,
+                       now=utcnow() - timedelta(days=3))
+    body = admin.get("/api/admin/usage", params={"range": "24h"}).json()
+    assert [m["model_id"] for m in body["by_model"]] == ["gk", "rs"]  # 3-day-old row outside the range
+    assert body["by_model"][0]["share"] == pytest.approx(1000 / 1100, abs=1e-3)
+    assert {u["user_email"] for u in body["by_user"]} == {"heavy@example.com", None}
+    assert len(admin.get("/api/admin/usage", params={"range": "7d"}).json()["by_model"]) == 3
+    assert admin.get("/api/admin/usage", params={"range": "1y"}).status_code == 400
+    assert user.get("/api/admin/usage").status_code == 403
+    secret = admin.post("/api/account/tokens", json={"name": "a"}).json()["token"]["token"]
+    assert TestClient(app, headers={"Authorization": f"Bearer {secret}"}).get("/api/admin/usage").status_code == 403
+    health = admin.get("/api/admin/health").json()
+    assert health["tokens_24h"]["tokens"] == 1100 and health["tokens_24h"]["top_model"] == "gk"
+    # Erasure removes the account's usage rows
+    assert user.request("DELETE", "/api/account", json={"password": PASSWORD}).status_code == 200
+    assert {u["user_id"] for u in admin.get("/api/admin/usage", params={"range": "7d"}).json()["by_user"]} == {""}
