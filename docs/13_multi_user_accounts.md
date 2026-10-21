@@ -123,7 +123,7 @@ Each user's `bee proxy` takes its own free port from 8787 (`BEE_PROXY_PORT=0`); 
 | `POST /api/admin/users/{id}/reset-password` | admin session | one-time password; signs the user out |
 | everything else under `/api/*`, and `/mcp` | session or bearer | scoped to the caller |
 
-Admins manage **accounts only** ([admin_routes.py](../src/serving/admin_routes.py)): no admin route returns a user's speech-derived data, and every change is audited.
+Admins manage **accounts only** ([admin_routes.py](../src/serving/admin_routes.py)): no admin route returns a user's speech-derived data, and every change is audited. Runtime settings and the service log for admins are specified in [next_steps/admin_console/](next_steps/admin_console/00_overview.md).
 
 Dashboard: [AuthScreen.tsx](../src/web_ui/src/components/ui/AuthScreen.tsx) (sign in / create account / re-consent), the account modal [LoginModal.tsx](../src/web_ui/src/components/ui/LoginModal.tsx) (Bee QR pairing with `verifying` / `conflict` / `invalid` / `CAPACITY` states, name, password, MCP tokens, sign out everywhere, export, deletion, and the *Admin* tab of [AdminSection.tsx](../src/web_ui/src/components/ui/AdminSection.tsx) for admins), [utils/auth.ts](../src/web_ui/src/utils/auth.ts) and `installCredentialedFetch` in [utils/api.ts](../src/web_ui/src/utils/api.ts) (sends the cookie on API calls only, reports 401s). The dashboard mounts only after sign-in and unmounts on sign-out, so no data of one user survives in the browser for the next.
 
