@@ -11,6 +11,8 @@ dist/
 # Environment & Secrets
 .env
 .env.local
+pk-*
+rsa-*
 
 # Databases & Local state
 *.db

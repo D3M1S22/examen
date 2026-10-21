@@ -9,7 +9,7 @@
 |---|---|
 | P0 Contract hardening and shared rules | ✅ Done: `rules.py`, every interface method abstract, contract test, `include_chunks`, `delete_all_data`, `UniqueConflict` |
 | P1 `DynamoContextStore` | ✅ Done: [dynamo_store.py](../../../src/core/storage/dynamo_store.py), schema, client, I/O helpers; the whole suite is green on DynamoDB (moto), and the store, engine, backfill and account files are also green on DynamoDB Local |
-| P2 IAM tenant isolation, infrastructure, AgentCore direct access | ✅ Code done: [dynamodb.yaml](../../../deploy/aws/dynamodb.yaml), `TenantCredentials`, start-up checks, Health `storage` block, [dynamo_iam_check.py](../../../scripts/dynamo_iam_check.py). ⏳ Pending: deploy the stack and run the IAM check on the real account |
+| P2 IAM tenant isolation, infrastructure, AgentCore direct access | ✅ Code done: [dynamodb.yaml](../../../deploy/aws/dynamodb.yaml), `TenantCredentials`, start-up checks, Health `storage` block, [dynamo_iam_check.py](../../../scripts/dynamo_iam_check.py). ✅ Stack `examen-data` deployed in eu-central-1 (2026-10-21): tables ACTIVE, schema check clean, PITR, TTL and deletion protection on. The IAM policy simulator on `examen-tenant-data` passes 8/8 (own partition and index allowed; other partition, mixed batch and Scan denied). ⏳ Pending: the live `dynamo_iam_check.py`, which needs a non-root identity (the `Examen` user) |
 | P3 `DynamoAuthStore` and `DynamoOpsStore` | ✅ Done |
 | P4 Migration and cutover | ✅ Code done: [migration.py](../../../src/core/storage/migration.py), [migrate_to_dynamo.py](../../../scripts/migrate_to_dynamo.py). ⏳ Pending: the homelab rehearsal ([06](06_migration_and_cutover.md) §2) |
 | P5 Follow-ups (optional) | Not started |
