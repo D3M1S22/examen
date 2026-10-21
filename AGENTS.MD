@@ -133,6 +133,7 @@ Whenever you inspect, modify, or extend this codebase, you **must adhere strictl
 * Use `logging.getLogger("examen.<area>.<module>")` (never `__name__` outside `examen.*`): only the `examen` hierarchy reaches journald and the admin service log.
 * **Never put user content in a log message** (names, titles, summaries, transcripts, places): log ids. `tests/test_admin_console.py` greps for it. Use `Debug.debug(..., log=False)` for debug prints that carry speech.
 * Problems worth the admin's attention: `logger.warning(msg, extra={"event_code": "<catalogue code>", "ctx": {...}})` or `report_event(code, …)` (`src/core/service_log.py`, catalogue in doc 03 §4.5); model fallbacks go through `model_fallback()`. Background tasks: `watch_task()`.
+* Build every model through `src/core/models.py` (`get_chat_model(..., role=…)`, `get_fast_model(role=…)`, `get_embedding_model`): it attaches the token usage counter of the admin console; a model built elsewhere is not counted.
 * New tunables that admins may change at runtime: add a `SettingSpec` to `REGISTRY` in `src/core/runtime_settings.py` (type, limits, apply mode). Read settings at use time, or mark the key `runtime` if a component copies it at construction.
 * Every `bee` subprocess must pass `env=bee_subprocess_env()` (per-user `BEE_CONFIG_DIR` + file store). Never call `bee logout` for the host.
 * `broadcast_event` targets the current tenant; pass `tenant=` explicitly from callbacks that may run elsewhere.

@@ -192,3 +192,19 @@ Used where a meaningful state change happens without an exception (catalogue §4
 - **Incidents:** resolved ones deleted after 90 days.
 - **Housekeeping:** a daily job runs the purges and `VACUUM`s `ops.db` when ≥ 20 % is free pages.
 - **Account erasure:** deletes the user's events and incidents (§3.4).
+
+---
+
+## 8. Token usage per model
+
+How many tokens each model consumes, shown in the *Health* tab ([04](04_api_ui_and_security.md) §2.4). Code: [token_usage.py](../../../src/core/token_usage.py).
+
+| Topic | Implementation |
+|---|---|
+| Source | The model factory ([models.py](../../../src/core/models.py)) attaches a `TokenUsageHandler` callback to every chat model. In `on_llm_end` it reads `AIMessage.usage_metadata`, which Bedrock Converse and Mantle (OpenAI-compatible) both fill, also when the caller uses `.with_structured_output`. Embeddings come from `CountingBedrockEmbeddings`, which reads Titan's `inputTextTokenCount` that LangChain discards |
+| Counters | Calls, input, output, cache read and cache write tokens. Bedrock's `input_tokens` already **includes** cached tokens; the cache columns show how much of it was cached |
+| Labels | Provider, model id, **role** (`gatekeeper`, `extraction` for the pipeline nodes, `reasoner`, `topic_judge`, `embeddings`, `probe` for console tests, `other`), and user (tenant at call time; empty = system work) |
+| Storage | In-memory totals per (hour, provider, model, role, user), flushed into `ops.db` table `token_usage` by the health monitor tick (60 s), at shutdown and before every read: no database write per model call. A failed flush keeps the totals for the next one |
+| Retention | `TOKEN_USAGE_RETENTION_DAYS` (90, runtime setting); account erasure deletes the account's rows |
+| Privacy | Counts only: no prompt, answer or transcript is stored |
+| Limits | Counting starts with the feature (no history). A remote AgentCore pipeline would consume tokens in its own process. A provider that reports no usage is counted as a call with 0 tokens. Heuristics and `MOCK_AI` use no tokens. Models built outside the factory are not counted (AGENTS.MD) |

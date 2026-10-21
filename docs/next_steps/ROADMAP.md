@@ -39,7 +39,8 @@
 │    ├─ M7.1: Logging foundation & service log       │ P1       │ Medium │ ADM 01, 03  │ ✅ DONE   │
 │    ├─ M7.2: Health monitor & incidents             │ P1       │ Medium │ ADM 03      │ ✅ DONE   │
 │    ├─ M7.3: Runtime settings overrides             │ P1       │ High   │ ADM 02      │ ✅ DONE   │
-│    └─ M7.4: Admin console UI                       │ P2       │ Medium │ ADM 04      │ ✅ DONE   │
+│    ├─ M7.4: Admin console UI                       │ P2       │ Medium │ ADM 04      │ ✅ DONE   │
+│    └─ M7.5: Token usage per model (Health)         │ P2       │ Low    │ ADM 03 §8   │ ✅ DONE   │
 └──────────────────────────────────────────────────────────────────────────────────────────────────┘
 
 > **DTEE** = [docs/next_steps/deep_topic_event_engine/](deep_topic_event_engine/00_overview.md)

@@ -14,6 +14,7 @@
 | 4 Runtime settings | ✅ | [runtime_settings.py](../../../src/core/runtime_settings.py) (80 editable keys), `cfg` in [models.py](../../../src/core/models.py), P1 / P2 fixed, `rebuild_all_runtimes` in [mcp_server.py](../../../src/serving/mcp_server.py) |
 | 5 Console UI | ✅ | [AdminConsole.tsx](../../../src/web_ui/src/components/views/AdminConsole.tsx), [admin.ts](../../../src/web_ui/src/utils/admin.ts) (+ `admin.test.ts`), API in [admin_console_routes.py](../../../src/serving/admin_console_routes.py) |
 | 6 Docs & rollout | ✅ docs; rollout with the normal `main` update | `.env.example`, doc 11, doc 13, AGENTS.MD, README, ROADMAP |
+| 7 Token usage per model (2026-10-21) | ✅ | [token_usage.py](../../../src/core/token_usage.py), `token_usage` table in `ops.db`, `GET /api/admin/usage`, *Token usage* card in Health ([03](03_service_log_and_anomalies.md) §8) |
 
 Tests: [tests/test_admin_console.py](../../../tests/test_admin_console.py) (T-AC-1…18) and `src/web_ui/src/utils/admin.test.ts`.
 

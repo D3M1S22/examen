@@ -32,7 +32,8 @@ New routes live in `src/serving/admin_console_routes.py`.
 | `GET /api/admin/incidents` | `status` (open, acknowledged, resolved, all), `severity`, `component`, `user_id` |
 | `GET /api/admin/incidents/{id}` | Incident with its last 50 events |
 | `POST /api/admin/incidents/{id}/ack` / `/resolve` | Lifecycle ([03](03_service_log_and_anomalies.md) §6) |
-| `GET /api/admin/health` | Snapshot: version and commit, uptime, process RSS / cgroup limit, disk free, active streams / `MAX_ACTIVE_USERS`, LLM slots in use / max, per-user stream state (linked, streaming, last frame age, transport, capacity), last 15 min rates (gatekeeper calls, fallback %, dispatches, errors), latency averages, open incidents by severity, last backfill per user |
+| `GET /api/admin/usage?range=1h\|24h\|7d\|30d` | Token usage ([03](03_service_log_and_anomalies.md) §8): `totals`, `by_model` (with per-role counters and share), `by_user` (e-mail), hourly `series`, `tracking_since` |
+| `GET /api/admin/health` | Snapshot (also `tokens_24h`: total and top model): version and commit, uptime, process RSS / cgroup limit, disk free, active streams / `MAX_ACTIVE_USERS`, LLM slots in use / max, per-user stream state (linked, streaming, last frame age, transport, capacity), last 15 min rates (gatekeeper calls, fallback %, dispatches, errors), latency averages, open incidents by severity, last backfill per user |
 | `GET /api/admin/events` | **Admin SSE channel** (A13): `service_event` (level ≥ warning), `incident_opened` / `incident_updated` / `incident_resolved`, `settings_changed`, `health` (every 30 s) |
 
 **Admin SSE channel.**
@@ -76,6 +77,7 @@ Today's `AdminSection` (accounts, Bee state, create, disable, reset password), m
 ### 2.4 Health
 - **Cards:** uptime and version, memory and disk, LLM slots, active streams vs limit, last-15-minute rates.
 - **Per-user stream table:** e-mail, Bee state, transport, last frame age, capacity, last backfill.
+- **Token usage card:** range 1 h / 24 h / 7 d / 30 d; totals (input, output, cache, calls); hourly bar chart (6-hour bars for 30 d); table per model with provider, roles, calls, input, output, cache, total, share; *By user* toggle. Refreshed every 60 s.
 - Refreshed by the `health` SSE message.
 
 All texts are English like the rest of the dashboard. Nothing in these views reads per-user stores.
