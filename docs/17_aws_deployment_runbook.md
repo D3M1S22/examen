@@ -112,7 +112,7 @@ Written by `bootstrap.sh`. The admin password comes from SSM Parameter Store and
 | `AUTH_COOKIE_SECURE` | `true` | CloudFront talks HTTP to the origin and sends no `X-Forwarded-Proto` (only `CloudFront-Forwarded-Proto`), so `auto` would issue non-Secure cookies |
 | `MCP_HOST` / `MCP_PORT` | `0.0.0.0` / `8000` | CloudFront custom origin port |
 | `MCP_ALLOWED_HOSTS` | `*` | The origin only accepts CloudFront traffic (security group), and the Host header is the EC2 name (AllViewerExceptHostHeader) |
-| `CORS_ALLOWED_ORIGINS` | `https://<distribution>.cloudfront.net` | Dashboard origin |
+| `CORS_ALLOWED_ORIGINS` | `https://<distribution>.cloudfront.net` | **Required.** CloudFront sends the EC2 host name as `Host` (AllViewerExceptHostHeader). Without the allow-listed origin, the CSRF origin check refuses browser logins with *"Request origin not allowed."*. `scripts/aws_deploy.py stack` now sets it from the stack output |
 | `STORAGE_BACKEND`, `AUTH_STORE_BACKEND`, `OPS_STORE_BACKEND` | `dynamo` | Data layer |
 | `DYNAMO_REGION` / `DYNAMO_TABLE_PREFIX` | `eu-central-1` / `examen-` | Deployed stack |
 | `DYNAMO_TENANT_ROLE_ARN` | `arn:aws:iam::301356686376:role/examen-tenant-data` | IAM isolation |
@@ -186,7 +186,7 @@ The equivalent is also available from the console (*Systems Manager → Run Comm
 
 ## 6. Smoke list (cloud)
 1. `https://<domain>/` loads the dashboard; `/api/health` → 200.
-2. The bootstrap admin logs in; the session cookie is `Secure` and `HttpOnly`.
+2. The bootstrap admin logs in **with the browser's `Origin` header**; the session cookie is `Secure` and `HttpOnly`. A cookie write from a foreign `Origin` gets 403 `origin_not_allowed`.
 3. The admin creates a user. Sign-up from the login page is refused (closed).
 4. As the user: create a routine, run `/api/simulate` with a completing sentence, and check that the routine is completed and the action appears.
 5. The SSE stream stays open more than 2 minutes through CloudFront (keep-alives received).
@@ -206,6 +206,7 @@ The equivalent is also available from the console (*Systems Manager → Run Comm
 - GDPR export works; erasing the test account leaves only the admin.
 - The instance uses the `examen-compute-instance` role: no AWS keys on disk.
 - Not yet done: item 9 (pairing a real Bee), which needs the device.
+- **Fixed 2026-10-22:** a browser login returned *"Request origin not allowed."* because `CORS_ALLOWED_ORIGINS` was not set (§5.2 step 5 was skipped). The smoke client sent no `Origin` header and missed it. Now set on the host, and the smoke list checks it.
 
 ### 6.2 Results, phase 2 (AgentCore)
 - Direct invocation with a synthetic user: the remote pipeline completed the user's task in DynamoDB using the **tenant role** (`Scoped DynamoDB credentials issued` in the runtime log). The test data was then erased.
@@ -220,6 +221,7 @@ The equivalent is also available from the console (*Systems Manager → Run Comm
 | New runtime version | `scripts/agentcore_deploy.py deploy` (data-stack policy, role stack, package, runtime update) |
 | Pipeline back in-process | `scripts/agentcore_deploy.py disable-host` (`enable-host` switches it back) |
 | Host logs | `scripts/aws_deploy.py logs` |
+| Change boot-only `.env` keys | `scripts/aws_deploy.py env KEY=VALUE [KEY=]` (empty value removes the key; restart + health check). Runtime settings, such as self-registration, are changed from the admin console instead |
 | Admin password | SSM Parameter Store `/examen/bootstrap-admin-password` (eu-central-1) |
 | Re-create the compute stack in AgentCore mode | `scripts/aws_deploy.py stack --param PipelineMode=agentcore --param AgentCoreRuntimeArn=<arn>` |
 

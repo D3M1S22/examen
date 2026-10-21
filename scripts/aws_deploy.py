@@ -4,6 +4,7 @@
     .venv/bin/python scripts/aws_deploy.py stack                                     # create / update examen-compute
     .venv/bin/python scripts/aws_deploy.py update                                    # host.sh update via SSM
     .venv/bin/python scripts/aws_deploy.py logs                                      # bootstrap log + service status
+    .venv/bin/python scripts/aws_deploy.py env KEY=VALUE [KEY=]                      # edit the host .env, restart
 
 Run scripts/aws_bundle.py first. The admin password is generated and stored only in SSM
 (SecureString /examen/bootstrap-admin-password): read it from the Parameter Store console.
@@ -88,9 +89,41 @@ def cmd_stack(session, args) -> int:
     account = session.client("sts").get_caller_identity()["Account"]
     params = {"ArtifactBucket": f"examen-artifacts-{account}-euc1"}
     params.update(dict(p.split("=", 1) for p in args.param or []))
-    for key, value in deploy_stack(session, STACK, TEMPLATE, params).items():
+    outputs = deploy_stack(session, STACK, TEMPLATE, params)
+    for key, value in outputs.items():
         print(f"{key}: {value}")
+    # The dashboard's origin is known only now (the distribution is created after the instance):
+    # without it the origin check refuses browser logins behind CloudFront
+    if outputs.get("Url"):
+        return set_host_env(session, {"CORS_ALLOWED_ORIGINS": outputs["Url"]})
     return 0
+
+
+def set_host_env(session, values: dict) -> int:
+    """Sets (VALUE) or removes (empty) keys in the host's .env, restarts and health-checks the service."""
+    edits = []
+    for key, value in values.items():
+        if not key.replace("_", "").isalnum() or "'" in (value or ""):
+            raise SystemExit(f"Refusing unsafe key or value for {key!r}")
+        edits.append(f"sed -i '/^{key}=/d' /var/lib/examen/examen.env")
+        if value:
+            edits.append(f"echo '{key}={value}' >> /var/lib/examen/examen.env")
+    keys = "|".join(values)
+    return run_on_host(session, edits + [
+        "systemctl restart examen",
+        "for i in $(seq 1 30); do curl -fsS -m 3 http://127.0.0.1:8000/api/health && break; sleep 2; done",
+        f"echo; grep -E '^({keys})=' /var/lib/examen/examen.env | sed -E 's/(PASSWORD|SECRET|KEY)=.*/\\1=***/' || true",
+    ], timeout=180)
+
+
+def cmd_env(session, args) -> int:
+    values = {}
+    for pair in args.pairs:
+        if "=" not in pair:
+            raise SystemExit(f"Expected KEY=VALUE (or KEY= to remove), got {pair!r}")
+        key, value = pair.split("=", 1)
+        values[key.strip()] = value.strip()
+    return set_host_env(session, values)
 
 
 def _outputs(cfn, stack_name: str = STACK) -> dict:
@@ -148,6 +181,9 @@ def main() -> int:
     p.set_defaults(func=cmd_stack)
     sub.add_parser("update").set_defaults(func=cmd_update)
     sub.add_parser("logs").set_defaults(func=cmd_logs)
+    p = sub.add_parser("env")
+    p.add_argument("pairs", nargs="+", metavar="KEY=VALUE")
+    p.set_defaults(func=cmd_env)
     args = parser.parse_args()
     return args.func(_session(), args)
 

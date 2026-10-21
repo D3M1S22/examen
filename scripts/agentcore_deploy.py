@@ -22,7 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from scripts.aws_bundle import _git, _session  # noqa: E402
-from scripts.aws_deploy import deploy_stack, run_on_host  # noqa: E402
+from scripts.aws_deploy import deploy_stack, set_host_env  # noqa: E402
 
 RUNTIME_NAME = "examen_pipeline"
 REGION = "eu-central-1"
@@ -132,29 +132,17 @@ def cmd_deploy(session, args) -> int:
     return 0 if status["status"] == "READY" else 1
 
 
-def _set_host_env(session, values: dict) -> int:
-    edits = []
-    for key, value in values.items():
-        edits.append(f"sed -i '/^{key}=/d' /var/lib/examen/examen.env")
-        if value is not None:
-            edits.append(f"echo '{key}={value}' >> /var/lib/examen/examen.env")
-    return run_on_host(session, edits + ["systemctl restart examen", "sleep 8",
-                                         "curl -fsS http://127.0.0.1:8000/api/health",
-                                         "grep -E '^(PIPELINE_MODE|AGENTCORE_RUNTIME_ARN)=' /var/lib/examen/examen.env || true"],
-                       timeout=180)
-
-
 def cmd_enable_host(session, args) -> int:
     control = session.client("bedrock-agentcore-control", region_name=REGION)
     runtime = _find_runtime(control)
     if not runtime:
         print("No runtime: run deploy first")
         return 1
-    return _set_host_env(session, {"PIPELINE_MODE": "agentcore", "AGENTCORE_RUNTIME_ARN": runtime["agentRuntimeArn"]})
+    return set_host_env(session, {"PIPELINE_MODE": "agentcore", "AGENTCORE_RUNTIME_ARN": runtime["agentRuntimeArn"]})
 
 
 def cmd_disable_host(session, args) -> int:
-    return _set_host_env(session, {"PIPELINE_MODE": "local"})
+    return set_host_env(session, {"PIPELINE_MODE": "local"})
 
 
 def main() -> int:
