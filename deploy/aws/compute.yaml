@@ -1,0 +1,249 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  EXAMEN compute (docs/17_aws_deployment_runbook.md): one EC2 instance running the EXAMEN process
+  (REST, SSE, MCP, dashboard, per-user Bee ingestion) behind CloudFront. No SSH: SSM only. The origin
+  accepts traffic from CloudFront's origin-facing prefix list only. Data lives in the examen-data stack
+  (DynamoDB); the instance disk keeps Bee logins and logs.
+
+Parameters:
+  InstanceType:
+    Type: String
+    Default: t3a.small
+    AllowedValues: [t3a.small, t3a.medium, t3a.large, t3.small, t3.medium]
+  AmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id
+    Description: Ubuntu 24.04 LTS x86_64 (the Bee CLI ships for linux-x64)
+  CloudFrontPrefixListId:
+    Type: String
+    Default: pl-a3a144ca
+    Description: com.amazonaws.global.cloudfront.origin-facing in eu-central-1
+  ArtifactBucket:
+    Type: String
+    Description: Bucket holding bundles/current.tgz (scripts/aws_bundle.py)
+  BundleKey:
+    Type: String
+    Default: bundles/current.tgz
+  RuntimeDataPolicyArn:
+    Type: String
+    Default: arn:aws:iam::301356686376:policy/examen-runtime-data
+    Description: Output RuntimeDataPolicyArn of the examen-data stack
+  TenantRoleArn:
+    Type: String
+    Default: arn:aws:iam::301356686376:role/examen-tenant-data
+  DataRegion:
+    Type: String
+    Default: eu-central-1
+  TablePrefix:
+    Type: String
+    Default: examen-
+  BedrockRegion:
+    Type: String
+    Default: us-east-1
+    Description: "AWS_REGION for Bedrock (a runtime setting, the admin console can move it later)"
+  GatekeeperModel:
+    Type: String
+    Default: nvidia.nemotron-super-3-120b
+  ReasonerModel:
+    Type: String
+    Default: nvidia.nemotron-super-3-120b
+  EmbeddingModel:
+    Type: String
+    Default: amazon.titan-embed-text-v2:0
+  AdminParameterPrefix:
+    Type: String
+    Default: /examen
+    Description: "SSM parameters <prefix>/bootstrap-admin-email and <prefix>/bootstrap-admin-password (SecureString)"
+  VolumeSizeGiB:
+    Type: Number
+    Default: 20
+
+Resources:
+  OriginSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: examen-origin
+      GroupDescription: EXAMEN origin, reachable from CloudFront only (no SSH); default egress (Bedrock, DynamoDB, Bee API)
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8000
+          ToPort: 8000
+          SourcePrefixListId: !Ref CloudFrontPrefixListId
+          Description: CloudFront origin-facing
+
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: examen-compute-instance
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: ec2.amazonaws.com}
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore"
+        - !Ref RuntimeDataPolicyArn
+      Policies:
+        - PolicyName: examen-host
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: Models  # Converse / ConverseStream are authorised by InvokeModel*
+                Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                  - bedrock:CallWithBearerToken
+                  - bedrock:ListFoundationModels
+                  - bedrock:GetFoundationModel
+                Resource: "*"
+              - Sid: Bundle
+                Effect: Allow
+                Action: [s3:GetObject]
+                Resource: !Sub "arn:${AWS::Partition}:s3:::${ArtifactBucket}/*"
+              - Sid: BundleList
+                Effect: Allow
+                Action: [s3:ListBucket]
+                Resource: !Sub "arn:${AWS::Partition}:s3:::${ArtifactBucket}"
+              - Sid: AdminParameters
+                Effect: Allow
+                Action: [ssm:GetParameter, ssm:GetParameters]
+                Resource: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${AdminParameterPrefix}/*"
+              - Sid: AgentCoreInvoke
+                Effect: Allow
+                Action: [bedrock-agentcore:InvokeAgentRuntime]
+                Resource: !Sub "arn:${AWS::Partition}:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:runtime/*"
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: examen-compute-instance
+      Roles: [!Ref InstanceRole]
+
+  LaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: examen-host
+      LaunchTemplateData:
+        MetadataOptions:
+          HttpTokens: required
+          HttpEndpoint: enabled
+          HttpPutResponseHopLimit: 1
+        BlockDeviceMappings:
+          - DeviceName: /dev/sda1
+            Ebs:
+              VolumeType: gp3
+              VolumeSize: !Ref VolumeSizeGiB
+              Encrypted: true
+              DeleteOnTermination: true
+
+  Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref AmiId
+      InstanceType: !Ref InstanceType
+      IamInstanceProfile: !Ref InstanceProfile
+      SecurityGroupIds: [!GetAtt OriginSecurityGroup.GroupId]
+      LaunchTemplate:
+        LaunchTemplateId: !Ref LaunchTemplate
+        Version: !GetAtt LaunchTemplate.LatestVersionNumber
+      Tags:
+        - {Key: Name, Value: examen}
+        - {Key: project, Value: examen}
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          # Bootstrap: AWS CLI, then the bundle's deploy/aws/host.sh does the rest (idempotent)
+          set -euxo pipefail
+          exec >>/var/log/examen-bootstrap.log 2>&1
+          install -d -m 755 /etc/examen
+          cat >/etc/examen/deploy.env <<'CFG'
+          EXAMEN_BUCKET=${ArtifactBucket}
+          EXAMEN_BUNDLE_KEY=${BundleKey}
+          EXAMEN_STACK_REGION=${AWS::Region}
+          EXAMEN_PARAM_PREFIX=${AdminParameterPrefix}
+          AWS_REGION=${BedrockRegion}
+          DYNAMO_REGION=${DataRegion}
+          DYNAMO_TABLE_PREFIX=${TablePrefix}
+          DYNAMO_TENANT_ROLE_ARN=${TenantRoleArn}
+          BEDROCK_GATEKEEPER_MODEL=${GatekeeperModel}
+          BEDROCK_REASONER_MODEL=${ReasonerModel}
+          BEDROCK_EMBEDDING_MODEL=${EmbeddingModel}
+          CFG
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update -qq
+          apt-get install -y -qq unzip curl ca-certificates
+          if ! command -v aws >/dev/null; then
+            curl -sSL https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip -o /tmp/awscli.zip
+            unzip -q -o /tmp/awscli.zip -d /tmp && /tmp/aws/install
+          fi
+          rm -rf /tmp/examen-bundle && mkdir -p /tmp/examen-bundle
+          aws s3 cp "s3://${ArtifactBucket}/${BundleKey}" /tmp/examen-bundle.tgz --region ${AWS::Region}
+          tar -xzf /tmp/examen-bundle.tgz -C /tmp/examen-bundle
+          bash /tmp/examen-bundle/deploy/aws/host.sh install /tmp/examen-bundle.tgz
+
+  OriginIp:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      InstanceId: !Ref Instance
+      Tags:
+        - {Key: Name, Value: examen}
+
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: EXAMEN dashboard, API, SSE and MCP
+        HttpVersion: http2and3
+        PriceClass: PriceClass_100
+        Origins:
+          - Id: examen-origin
+            # The EIP's public DNS name: stable across instance stop/start
+            DomainName: !Sub
+              - "ec2-${Dashed}.${AWS::Region}.compute.amazonaws.com"
+              - Dashed: !Join ["-", !Split [".", !Ref OriginIp]]
+            CustomOriginConfig:
+              HTTPPort: 8000
+              OriginProtocolPolicy: http-only
+              OriginReadTimeout: 60
+              OriginKeepaliveTimeout: 60
+        DefaultCacheBehavior:
+          TargetOriginId: examen-origin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD, OPTIONS, PUT, PATCH, POST, DELETE]
+          CachedMethods: [GET, HEAD]
+          Compress: false
+          # Managed policies: CachingDisabled, AllViewerExceptHostHeader
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+          OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac
+
+  RecoverAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: examen-instance-recover
+      AlarmDescription: Recover the instance on a system status check failure (same IP, same volume)
+      Namespace: AWS/EC2
+      MetricName: StatusCheckFailed_System
+      Dimensions: [{Name: InstanceId, Value: !Ref Instance}]
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 2
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions: [!Sub "arn:${AWS::Partition}:automate:${AWS::Region}:ec2:recover"]
+
+Outputs:
+  Url:
+    Description: Public HTTPS URL (dashboard, /api, /mcp)
+    Value: !Sub "https://${Distribution.DomainName}"
+  DistributionId:
+    Value: !Ref Distribution
+  InstanceId:
+    Value: !Ref Instance
+  OriginIp:
+    Value: !Ref OriginIp
+  InstanceRoleArn:
+    Value: !GetAtt InstanceRole.Arn
