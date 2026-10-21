@@ -35,11 +35,11 @@
 │    ├─ M5.3: Replay executor & temporal guards      │ P1       │ High   │ HTB 03      │ ✅ DONE   │
 │    ├─ M5.4: Startup / reconnect auto catch-up      │ P2       │ Medium │ HTB 03      │ ✅ DONE   │
 │    └─ M5.5: History Sync UI                        │ P2       │ Medium │ HTB 04      │ ✅ DONE   │
-│  Phase 7: Admin Console                            │ High     │ High   │ ADM 00-05   │ 📝 SPEC   │
-│    ├─ M7.1: Logging foundation & service log       │ P1       │ Medium │ ADM 01, 03  │ ⏳ TODO   │
-│    ├─ M7.2: Health monitor & incidents             │ P1       │ Medium │ ADM 03      │ ⏳ TODO   │
-│    ├─ M7.3: Runtime settings overrides             │ P1       │ High   │ ADM 02      │ ⏳ TODO   │
-│    └─ M7.4: Admin console UI                       │ P2       │ Medium │ ADM 04      │ ⏳ TODO   │
+│  Phase 7: Admin Console                            │ High     │ High   │ ADM 00-05   │ ✅ IMPLEMENTED│
+│    ├─ M7.1: Logging foundation & service log       │ P1       │ Medium │ ADM 01, 03  │ ✅ DONE   │
+│    ├─ M7.2: Health monitor & incidents             │ P1       │ Medium │ ADM 03      │ ✅ DONE   │
+│    ├─ M7.3: Runtime settings overrides             │ P1       │ High   │ ADM 02      │ ✅ DONE   │
+│    └─ M7.4: Admin console UI                       │ P2       │ Medium │ ADM 04      │ ✅ DONE   │
 └──────────────────────────────────────────────────────────────────────────────────────────────────┘
 
 > **DTEE** = [docs/next_steps/deep_topic_event_engine/](deep_topic_event_engine/00_overview.md)
@@ -308,9 +308,9 @@
 > **Goal:** make every consumer of Bee data follow the observed contract ([10_bee_cli_reference.md](../10_bee_cli_reference.md)): live location, speaker identity, stream liveness, backfill durations.
 > **Plan & status:** [07_bee_data_alignment.md](07_bee_data_alignment.md).
 
-### Phase 7: Admin Console (SPECIFIED)
+### Phase 7: Admin Console (IMPLEMENTED)
 > **Goal:** let the admin override `.env` tunables at runtime (models, Bedrock / Mantle, region, engine and backfill parameters) with test-before-save and rollback, and see the health of the service in a log panel that groups errors and anomalies into incidents, without ever exposing users' data.
-> **Spec:** [admin_console/](admin_console/00_overview.md) (decisions A1–A14 to confirm; phases in [05](admin_console/05_implementation_plan_and_testing.md)).
+> **Spec & status:** [admin_console/](admin_console/00_overview.md) (decisions A1–A14 confirmed 2026-10-21; status and deviations in [05 §0](admin_console/05_implementation_plan_and_testing.md)).
 
 ---
 

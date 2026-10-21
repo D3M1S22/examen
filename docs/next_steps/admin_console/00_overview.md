@@ -1,6 +1,6 @@
 # 🛠️ Admin Console — Overview
 
-> **Document Status:** Specification (not implemented). Decisions in §3 are proposals to confirm.
+> **Document Status:** Implemented (decisions confirmed 2026-10-21). Status and deviations: [05](05_implementation_plan_and_testing.md) §0
 > **Related:** [13_multi_user_accounts.md](../../13_multi_user_accounts.md) (accounts, admin role), [11_homelab_test_deployment.md](../../11_homelab_test_deployment.md) (deployment), [06_aws_cloud_deployment_architecture.md](../../06_aws_cloud_deployment_architecture.md) (AWS target)
 > **Audience:** EXAMEN engineers implementing the admin features on top of the multi-user code now on `main`
 
@@ -43,7 +43,7 @@ The two features meet at one point. A wrong override (a model id that does not e
 
 ---
 
-## 3. Decisions (proposals)
+## 3. Decisions (confirmed 2026-10-21)
 
 | # | Topic | Proposal | Alternatives | Details |
 |---|---|---|---|---|

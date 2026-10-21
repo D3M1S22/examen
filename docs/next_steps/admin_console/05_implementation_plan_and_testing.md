@@ -1,8 +1,32 @@
-111111111# 05 — Implementation Plan, Tests & Acceptance Criteria
+# 05 — Implementation Plan, Tests & Acceptance Criteria
 
 > Part of the [Admin Console](00_overview.md) specification.
 
 ---
+
+## 0. Status (2026-10-21, branch `admin`)
+
+| Phase | Status | Code |
+|---|---|---|
+| 1 Logging foundation | ✅ | [logging_setup.py](../../../src/core/logging_setup.py), `Debug.warn` / `debug(log=False)` ([debug.py](../../../src/ingestion/debug.py)), user content removed from log lines |
+| 2 Service log & incidents | ✅ | [ops_store.py](../../../src/core/ops_store.py), [service_log.py](../../../src/core/service_log.py), [error_capture.py](../../../src/serving/error_capture.py), codes at the sources (Bee client, orchestrator, gatekeeper, pipeline nodes, backfill, auth, Bee links) |
+| 3 Health monitor | ✅ | [health_monitor.py](../../../src/serving/health_monitor.py), [metrics.py](../../../src/core/metrics.py), resizable limiter in [limits.py](../../../src/core/limits.py) |
+| 4 Runtime settings | ✅ | [runtime_settings.py](../../../src/core/runtime_settings.py) (80 editable keys), `cfg` in [models.py](../../../src/core/models.py), P1 / P2 fixed, `rebuild_all_runtimes` in [mcp_server.py](../../../src/serving/mcp_server.py) |
+| 5 Console UI | ✅ | [AdminConsole.tsx](../../../src/web_ui/src/components/views/AdminConsole.tsx), [admin.ts](../../../src/web_ui/src/utils/admin.ts) (+ `admin.test.ts`), API in [admin_console_routes.py](../../../src/serving/admin_console_routes.py) |
+| 6 Docs & rollout | ✅ docs; rollout with the normal `main` update | `.env.example`, doc 11, doc 13, AGENTS.MD, README, ROADMAP |
+
+Tests: [tests/test_admin_console.py](../../../tests/test_admin_console.py) (T-AC-1…18) and `src/web_ui/src/utils/admin.test.ts`.
+
+### 0.1 Deviations from the specification
+
+| Spec | Implementation | Reason |
+|---|---|---|
+| Revert and reset are change sets "tested when needed" (02 §7) | Revert and reset skip the probe requirement | They return to values that were in effect before; during an incident the way back must be one click |
+| Generic `log.warning` opens an incident after 5 / 15 min (03 §6) | The rule applies to every `warning` event, catalogue codes included; `error`+ opens immediately | A single Bee reconnect or throttle is normal; repeated ones are the signal |
+| Fingerprint = code, component, error type, location (03 §2) | Plus the user for `bee`, `orchestrator`, `backfill` | One user's broken stream must not hide another's |
+| `GET /api/admin/audit` not listed in 04 §1 | Added | The *Security log* of the Accounts tab (04 §2.1) needs it |
+| botocore wrapper around `invoke` / `ainvoke` (phase 2.4) | `note_llm_error()` called where model calls are caught (gatekeeper, `model_fallback()` in nodes) | Same classification without wrapping LangChain runnables |
+| `system.events_dropped` via the sink | Written directly by the writer thread | The queue is the thing that overflowed |
 
 ## 1. Phases
 

@@ -134,6 +134,7 @@ python scripts/replay_event_scenarios.py --calibrate
 - **Web Dashboard & Echo Show Ext-App:** Open [http://localhost:8000/](http://localhost:8000/) or [http://localhost:8000/ext-app/](http://localhost:8000/ext-app/) to monitor verified Peace of Mind actions, daily routine checklists, social rolodex cards, and run ambient audio simulations.
 - **Alexa+ MCP Endpoint:** Connect any MCP-compliant assistant to `http://localhost:8000/mcp` with a personal access token (*Account → Alexa+ / MCP access tokens*) sent as `Authorization: Bearer exm_…`.
 - **Accounts:** multi-user with per-user data, per-user Bee pairing and GDPR export/erasure — see [13_multi_user_accounts.md](docs/13_multi_user_accounts.md). Self-registration (`AUTH_ALLOW_SIGNUP`), a bootstrap admin (`EXAMEN_BOOTSTRAP_ADMIN=<email>`) with an *Admin* tab, one Bee account per user and shared LLM / stream limits. `AUTH_ENABLED=false` restores the single-user mode.
+- **Admin console:** runtime overrides of `.env` tunables (models, Bedrock / Mantle, region, …) with test-before-save and rollback, a sanitised service log with incidents, and a health view — see [admin_console/](docs/next_steps/admin_console/00_overview.md).
 
 ---
 

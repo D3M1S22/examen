@@ -128,6 +128,12 @@ Whenever you inspect, modify, or extend this codebase, you **must adhere strictl
 * Pipeline payloads carry `user_id` (`agent_invocation` checks it); LLM calls go through `llm_slot()` (`src/core/limits.py`), shared by every user.
 * Dev scripts touching user data run as an account: wrap `main()` in `cli_tenant()` (`src/core/cli.py`, `EXAMEN_CLI_USER=<email>`).
 * Account, Bee and admin routes are session-only (`SESSION_ONLY_PREFIXES` in `auth_middleware.py`); admin routes manage accounts and must never return a user's data.
+
+### F3. Logging, service log and runtime settings (`docs/next_steps/admin_console/`)
+* Use `logging.getLogger("examen.<area>.<module>")` (never `__name__` outside `examen.*`): only the `examen` hierarchy reaches journald and the admin service log.
+* **Never put user content in a log message** (names, titles, summaries, transcripts, places): log ids. `tests/test_admin_console.py` greps for it. Use `Debug.debug(..., log=False)` for debug prints that carry speech.
+* Problems worth the admin's attention: `logger.warning(msg, extra={"event_code": "<catalogue code>", "ctx": {...}})` or `report_event(code, …)` (`src/core/service_log.py`, catalogue in doc 03 §4.5); model fallbacks go through `model_fallback()`. Background tasks: `watch_task()`.
+* New tunables that admins may change at runtime: add a `SettingSpec` to `REGISTRY` in `src/core/runtime_settings.py` (type, limits, apply mode). Read settings at use time, or mark the key `runtime` if a component copies it at construction.
 * Every `bee` subprocess must pass `env=bee_subprocess_env()` (per-user `BEE_CONFIG_DIR` + file store). Never call `bee logout` for the host.
 * `broadcast_event` targets the current tenant; pass `tenant=` explicitly from callbacks that may run elsewhere.
 

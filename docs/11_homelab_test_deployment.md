@@ -90,6 +90,8 @@ ssh root@192.168.1.192 'cd /opt/examen && sudo -u examen -H EXAMEN_DATA_DIR=/var
 
 Through MCP from an agent: `get_lxc_service_logs(vmid=147, service_name="examen")`, `exec_lxc_command(vmid=147, ...)`.
 
+**Admin console.** An admin sees health, incidents and the sanitised service log in the dashboard (*ADMIN CONSOLE* tab), and can override most `.env` tunables there (models, Bedrock / Mantle, region, engine and backfill parameters). Overrides and the service log live in `/var/lib/examen/data/ops.db`, backed up with the rest of `EXAMEN_DATA_DIR`; *Reset all to defaults* returns to `/opt/examen/.env`. journald now receives the application's `INFO` lines (`LOG_LEVEL`), with full text: only the server operator reads it, the console shows sanitised events only.
+
 ---
 
 ## 5. Known limitations of the test instance
