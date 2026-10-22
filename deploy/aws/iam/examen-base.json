@@ -1,0 +1,28 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {"Sid": "Models", "Effect": "Allow",
+     "Action": ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream", "bedrock:CallWithBearerToken",
+                "bedrock:ListFoundationModels", "bedrock:GetFoundationModel",
+                "bedrock:ListInferenceProfiles", "bedrock:GetInferenceProfile"],
+     "Resource": "*"},
+    {"Sid": "ReleaseBundles", "Effect": "Allow",
+     "Action": ["s3:PutObject", "s3:GetObject", "s3:ListBucket"],
+     "Resource": ["arn:aws:s3:::examen-artifacts-301356686376-euc1",
+                  "arn:aws:s3:::examen-artifacts-301356686376-euc1/*"]},
+    {"Sid": "ReadStacks", "Effect": "Allow", "Action": "cloudformation:DescribeStacks",
+     "Resource": "arn:aws:cloudformation:eu-central-1:301356686376:stack/examen-*/*"},
+    {"Sid": "HostCommands", "Effect": "Allow", "Action": "ssm:SendCommand",
+     "Resource": "arn:aws:ec2:eu-central-1:301356686376:instance/*",
+     "Condition": {"StringEquals": {"ssm:resourceTag/project": "examen"}}},
+    {"Sid": "HostCommandDocument", "Effect": "Allow", "Action": "ssm:SendCommand",
+     "Resource": "arn:aws:ssm:eu-central-1::document/AWS-RunShellScript"},
+    {"Sid": "CommandResults", "Effect": "Allow",
+     "Action": ["ssm:GetCommandInvocation", "ssm:ListCommandInvocations"], "Resource": "*"},
+    {"Sid": "AdminPassword", "Effect": "Allow", "Action": "ssm:GetParameter",
+     "Resource": "arn:aws:ssm:eu-central-1:301356686376:parameter/examen/*"},
+    {"Sid": "RuntimeLogs", "Effect": "Allow",
+     "Action": ["logs:DescribeLogGroups", "logs:DescribeLogStreams", "logs:GetLogEvents", "logs:FilterLogEvents"],
+     "Resource": "*"}
+  ]
+}

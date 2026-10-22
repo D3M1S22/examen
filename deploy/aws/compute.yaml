@@ -65,6 +65,17 @@ Parameters:
   AgentCoreRuntimeArn:
     Type: String
     Default: ""
+  DomainName:
+    Type: String
+    Default: ""
+    Description: Optional custom domain (e.g. examen.devgiov.com), a DNS-only CNAME to the distribution
+  CertificateArn:
+    Type: String
+    Default: ""
+    Description: ACM certificate for DomainName, in us-east-1 (required by CloudFront)
+
+Conditions:
+  HasDomain: !And [!Not [!Equals [!Ref DomainName, ""]], !Not [!Equals [!Ref CertificateArn, ""]]]
 
 Resources:
   OriginSecurityGroup:
@@ -209,6 +220,13 @@ Resources:
         Comment: EXAMEN dashboard, API, SSE and MCP
         HttpVersion: http2and3
         PriceClass: PriceClass_100
+        Aliases: !If [HasDomain, [!Ref DomainName], !Ref AWS::NoValue]
+        ViewerCertificate: !If
+          - HasDomain
+          - AcmCertificateArn: !Ref CertificateArn
+            SslSupportMethod: sni-only
+            MinimumProtocolVersion: TLSv1.2_2021
+          - CloudFrontDefaultCertificate: true
         Origins:
           - Id: examen-origin
             # The EIP's public DNS name: stable across instance stop/start
@@ -248,6 +266,9 @@ Resources:
 Outputs:
   Url:
     Description: Public HTTPS URL (dashboard, /api, /mcp)
+    Value: !If [HasDomain, !Sub "https://${DomainName}", !Sub "https://${Distribution.DomainName}"]
+  CloudFrontUrl:
+    Description: The distribution's own HTTPS URL (always valid)
     Value: !Sub "https://${Distribution.DomainName}"
   DistributionId:
     Value: !Ref Distribution

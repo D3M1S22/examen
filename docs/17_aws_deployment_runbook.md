@@ -305,3 +305,15 @@ Still denied: CloudFormation, SSM (parameters, Run Command, public AMI parameter
 ```
 
 After the deadline, remove this inline policy and the broad managed ones (`IAMFullAccess`, `AmazonEC2FullAccess`, `CloudFrontFullAccess`, `AmazonS3FullAccess`, `AWSCodeDeployFullAccess`, `AmplifyBackendDeployFullAccess`, `AmazonSageMakerCanvasDirectDeployAccess`). The app needs only Bedrock and `examen-runtime-data`; on EC2 it uses the instance role instead.
+
+## Appendix C — Permanent and temporary policies for `Examen` (2026-10-22)
+
+These replace Appendices A and B and the broad AWS-managed policies. They are customer-managed policies rather than inline ones, because an IAM user's inline policies are capped at 2,048 characters **in total**.
+
+| Policy | File | Keep | Grants |
+|---|---|---|---|
+| `examen-base` | [deploy/aws/iam/examen-base.json](../deploy/aws/iam/examen-base.json) | **Yes** | Bedrock for local and homelab runs; releases: bundle upload, `aws_deploy.py update` / `logs` / `env` through SSM on the `project=examen` instance only; the admin password parameter; runtime logs |
+| `examen-admin` | [deploy/aws/iam/examen-admin.json](../deploy/aws/iam/examen-admin.json) | **No**: detach and delete after setup and tests | `examen-*` stacks; EC2, CloudFront, ACM; `examen-*` tables, buckets, roles and policies; SSM parameters and sessions; AgentCore; logs and alarms |
+| `examen-runtime-data` | managed by the `examen-data` stack | Yes | DynamoDB auth/ops and the tenant role (homelab/local on DynamoDB) |
+
+The running service needs **none** of these: EC2 uses the `examen-compute-instance` role and AgentCore uses `examen-agentcore-runtime`.

@@ -94,8 +94,9 @@ def cmd_stack(session, args) -> int:
         print(f"{key}: {value}")
     # The dashboard's origin is known only now (the distribution is created after the instance):
     # without it the origin check refuses browser logins behind CloudFront
-    if outputs.get("Url"):
-        return set_host_env(session, {"CORS_ALLOWED_ORIGINS": outputs["Url"]})
+    origins = sorted({outputs[k] for k in ("Url", "CloudFrontUrl") if outputs.get(k)})
+    if origins:
+        return set_host_env(session, {"CORS_ALLOWED_ORIGINS": ",".join(origins)})
     return 0
 
 
