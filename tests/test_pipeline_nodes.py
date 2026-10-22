@@ -368,6 +368,15 @@ class TestPersistNode:
         assert completed.completed_at is not None
 
 
+    def test_rerun_of_a_chunk_keeps_one_briefing(self, temp_store):
+        # A backfill retry of a chunk the AgentCore runtime may already have processed
+        for _ in range(2):
+            report = BriefingReport(topic_title="Raft consensus", context_type="lecture",
+                                    executive_summary=["Leader election"])
+            node_persist({"briefing_report": report, "session_id": "test_session", "source_key": "live:c1:u1"})
+        briefings = temp_store.list_topic_briefings(limit=10)
+        assert [b.topic_title for b in briefings] == ["Raft consensus"]
+
     def test_persist_social_and_topic_briefing(self, temp_store):
         social = SocialEntity(
             person_name="Sara Jenkins",

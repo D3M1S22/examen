@@ -173,7 +173,9 @@ The equivalent is also available from the console (*Systems Manager → Run Comm
 ### 5.4 Phase 2: AgentCore pipeline (≈ 4–6 h, after the first deploy is green)
 1. **Code**:
    - `src/pipeline/remote.py`: a `bedrock-agentcore` client `invoke_agent_runtime(agentRuntimeArn, runtimeSessionId=<session_id padded to 33+ chars>, payload)`.
-   - `PIPELINE_MODE=local|agentcore` (boot key) in `orchestrator.py`, `backfill.py` and `/api/simulate`. On a remote error or timeout it falls back to local, with event code `pipeline.remote_fallback`.
+   - `PIPELINE_MODE=local|agentcore` (boot key) in `orchestrator.py`, `backfill.py` and `/api/simulate`. The invocation is never retried (it is not idempotent).
+     - If the runtime did not receive the payload (connection, credentials, throttling, other 4xx), it falls back to local, with event code `pipeline.remote_fallback`.
+     - If the runtime may have run it (read timeout, dropped connection, 5xx, 424, unreadable answer), nothing runs locally. Event code `pipeline.remote_unknown`. The chunk is marked `failed` in the ledger and the backfill analyses it again. Ids derived from `source_key` (action, task, briefing) make that retry idempotent.
    - The payload already carries `user_id` (checked by `agent_invocation`). The remote store uses the tenant role, and token usage is flushed to ops (already implemented).
 2. **Deploy**: AgentCore starter toolkit (`agentcore configure` / `agentcore launch`, ARM64 container built in CodeBuild) in eu-central-1:
    - execution role with `examen-agentcore-data` attached (`AgentCoreRoleName` parameter of the data stack: a stack update) and Bedrock invoke rights;

@@ -4,6 +4,13 @@ import io
 import json
 
 import pytest
+from botocore.exceptions import (
+    ClientError,
+    ConnectionClosedError,
+    ConnectTimeoutError,
+    EndpointConnectionError,
+    ReadTimeoutError,
+)
 
 from src.core.config import settings
 from src.core.tenancy import tenant_scope
@@ -62,12 +69,54 @@ def test_session_ids_differ_per_user():
     assert len(remote.runtime_session_id("u", "")) >= 33
 
 
-def test_remote_failure_falls_back_in_process(agentcore):
-    agentcore(_FakeClient(error=RuntimeError("throttled")))
+def _client_error(code, status):
+    return ClientError({"Error": {"Code": code, "Message": "x"}, "ResponseMetadata": {"HTTPStatusCode": status}},
+                       "InvokeAgentRuntime")
+
+
+@pytest.mark.parametrize("error", [
+    EndpointConnectionError(endpoint_url="https://bedrock-agentcore.eu-central-1.amazonaws.com"),
+    ConnectTimeoutError(endpoint_url="https://bedrock-agentcore.eu-central-1.amazonaws.com"),
+    _client_error("ThrottlingException", 429),
+    _client_error("AccessDeniedException", 403),
+], ids=["endpoint", "connect-timeout", "throttled", "denied"])
+def test_failure_before_the_runtime_falls_back_in_process(agentcore, error):
+    agentcore(_FakeClient(error=error))
     calls = []
     with tenant_scope(UID):
         result = remote.invoke_pipeline({"text": "x"}, _local(calls))
     assert result["where"] == "local" and calls[0]["user_id"] == UID
+
+
+@pytest.mark.parametrize("error", [
+    ReadTimeoutError(endpoint_url="https://bedrock-agentcore.eu-central-1.amazonaws.com"),
+    ConnectionClosedError(endpoint_url="https://bedrock-agentcore.eu-central-1.amazonaws.com"),
+    _client_error("InternalServerException", 500),
+    _client_error("RuntimeClientError", 424),
+    RuntimeError("unexpected"),
+], ids=["read-timeout", "closed", "5xx", "runtime-424", "unknown"])
+def test_possibly_executed_payload_is_not_run_again(agentcore, error):
+    agentcore(_FakeClient(error=error))
+    calls = []
+    with tenant_scope(UID):
+        result = remote.invoke_pipeline({"text": "x"}, _local(calls))
+    assert calls == []
+    assert result["status"] == "error" and result["remote_outcome"] == "unknown"
+
+
+def test_unreadable_answer_is_not_run_again(agentcore):
+    client = agentcore(_FakeClient(result={}))
+    client.invoke_agent_runtime = lambda **kwargs: {"response": io.BytesIO(b"not json")}
+    calls = []
+    with tenant_scope(UID):
+        result = remote.invoke_pipeline({"text": "x"}, _local(calls))
+    assert calls == [] and result["remote_outcome"] == "unknown"
+
+
+def test_the_invocation_is_never_retried_by_botocore(monkeypatch):
+    monkeypatch.setattr(remote, "_clients", {})
+    client = remote._client("eu-central-1")
+    assert client.meta.config.retries["total_max_attempts"] == 1
 
 
 def test_tenant_rejection_is_not_retried_locally(agentcore):

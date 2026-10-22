@@ -114,6 +114,8 @@ def node_persist(state: ExamenState) -> Dict[str, Any]:
         try:
             if session_id and not briefing_report.session_id:
                 briefing_report.session_id = session_id
+            # Same id on a re-run of this chunk (backfill retry): the briefing is replaced, not duplicated
+            briefing_report.id = briefing_report.id or derived_entity_id(source_key, "briefing")
             rec_id = store.save_topic_briefing(briefing_report)
             logger.info(f"Persisted topic briefing {rec_id}")
         except Exception as e:

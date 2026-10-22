@@ -124,14 +124,18 @@ def _size(item: Dict[str, Any]) -> int:
     return total
 
 
+def _compressible(name: str) -> bool:
+    """Text attributes ``pack`` may store compressed as ``<name>__z``."""
+    return name.endswith("_json") or name.endswith("markdown") or name in ("text", "explanatory_synthesis")
+
+
 def pack(item: Dict[str, Any], what: str = "item") -> Dict[str, Any]:
     """Size guard: compresses the largest text attributes above ~350 KB (02 §8)."""
     if _size(item) <= COMPRESS_ABOVE:
         return item
     item = dict(item)
     candidates = sorted(
-        (k for k, v in item.items() if isinstance(v, str) and (k.endswith("_json") or k.endswith("markdown")
-                                                               or k in ("text", "explanatory_synthesis"))),
+        (k for k, v in item.items() if isinstance(v, str) and _compressible(k)),
         key=lambda k: len(item[k]), reverse=True,
     )
     compressed = []
@@ -224,6 +228,9 @@ class DynamoTable:
             if value is None:
                 remove = list(remove) + [attr]
                 continue
+            if _compressible(attr):
+                # A stale compressed copy would shadow the new value on read (decode)
+                remove = list(remove) + [f"{attr}__z"]
             sets.append(f"{e.name(attr)} = {e.value(value)}")
         for attr, value in (set_if_absent or {}).items():
             n = e.name(attr)

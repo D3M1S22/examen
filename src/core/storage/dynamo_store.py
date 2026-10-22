@@ -886,16 +886,17 @@ class DynamoContextStore(AbstractContextStore):
                        for e in dossier.linked_micro_events):
                 dossier.linked_micro_events.append(event_ref)
                 added_at[f"{event_ref.event_type}#{event_ref.record_id}"] = version + 1
-            # Only the micro-event attributes change: the event engine owns the lifecycle fields
+            # Only the micro-event attributes change. The lifecycle fields (owned by the event engine) are
+            # written back as read: the version condition guarantees nobody changed them meanwhile. The whole
+            # item goes through pack(), so a compressed dossier stays consistent and size-checked.
             payload = json.dumps([e.model_dump() for e in dossier.linked_micro_events], ensure_ascii=False)
             e = Expr()
             condition = f"{e.name('version')} = {e.value(version)}" if version else "attribute_not_exists(version)"
             sid = key_part(session_id)
+            updated = {**item, "linked_micro_events_json": payload, "link_versions_json": json.dumps(added_at),
+                       "last_updated_at": now_iso, "version": version + 1, "g3sk": f"{now_iso}#{sid}"}
             try:
-                self.table.update(self._key(f"DOSSIER#{session_id}"), set_={
-                    "linked_micro_events_json": payload, "link_versions_json": json.dumps(added_at),
-                    "last_updated_at": now_iso, "version": version + 1, "g3sk": f"{now_iso}#{sid}",
-                }, condition=condition, expr=e)
+                self._write_dossier(updated, condition, e)
                 return True
             except Exception as err:
                 if not is_conditional_failure(err):

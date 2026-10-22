@@ -249,6 +249,39 @@ def test_large_items_are_compressed_and_round_trip(store):
     assert noise[:20] not in str(err.value)
 
 
+def _raw(store, sk):
+    return store.table.client.get_item(TableName=store.table.name, Key=dynamo_io.encode(store._key(sk)))["Item"]
+
+
+def test_link_on_a_compressed_dossier_is_kept(store):
+    now = datetime.now().isoformat()
+    refs = [MicroEventRef(event_type="action", record_id=f"a{i}", timestamp=now, headline=f"{i} " + "x" * 250)
+            for i in range(1500)]
+    dossier = SessionDossier(session_id="ev-big", start_time=now, last_updated_at=now, status="active",
+                             linked_micro_events=refs)
+    store.save_session_dossier(dossier)
+    assert "linked_micro_events_json__z" in _raw(store, "DOSSIER#ev-big")
+
+    store.link_micro_event_to_session("ev-big", MicroEventRef(event_type="action", record_id="new", timestamp=now,
+                                                              headline="late link"))
+    assert "linked_micro_events_json__z" in _raw(store, "DOSSIER#ev-big")  # still compressed, size-checked
+    stored = store.get_session_dossier("ev-big")
+    assert stored.linked_micro_events[-1].record_id == "new" and len(stored.linked_micro_events) == 1501
+
+    stored.title = "Saved by the engine"
+    store.save_session_dossier(stored)
+    assert store.get_session_dossier("ev-big").linked_micro_events[-1].record_id == "new"
+
+
+def test_partial_update_drops_the_stale_compressed_copy(store):
+    big = ("Raft log replication. " * 30000)[:400_000]
+    store.table.put({"pk": store.user_id, "sk": "T#1", "notes_json": big})
+    assert "notes_json__z" in _raw(store, "T#1")
+    store.table.update(store._key("T#1"), set_={"notes_json": "small"})
+    assert "notes_json__z" not in _raw(store, "T#1")
+    assert store.table.get(store._key("T#1"))["notes_json"] == "small"
+
+
 def test_key_part_strips_separators():
     assert key_part("ev-1") == "ev-1"
     assert "#" not in key_part("a#b") and key_part("a#b").startswith("h_")
