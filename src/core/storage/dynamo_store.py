@@ -29,6 +29,7 @@ from src.core.schemas import (
     SocialCommitment,
     SocialEntity,
     SocialWebProfile,
+    SpeakerAttribution,
     UtteranceChunk,
     VerifiedAction,
 )
@@ -50,10 +51,10 @@ COLUMNS: Dict[str, Tuple[str, ...]] = {
     "planned_tasks": ("id", "title", "domain", "scheduled_time", "recurrence", "status", "completed_at",
                       "verified_action_id", "created_at", "origin", "raw_statement", "confidence",
                       "relative_time_anchor", "session_id", "location_json", "ingest_source", "ingest_run_id",
-                      "source_key", "recovered"),
+                      "source_key", "recovered", "speaker_json"),
     "verified_actions": ("id", "action_type", "domain", "raw_statement", "confidence", "timestamp", "is_revoked",
                          "matched_task_id", "location_json", "session_id", "ingest_source", "ingest_run_id",
-                         "source_key"),
+                         "source_key", "speaker_json"),
     "social_contacts": ("id", "person_name", "company_or_role", "contact_info", "commitments_json",
                         "key_topics_json", "timestamp", "web_profile_json", "location_encountered", "session_id",
                         "website_url"),
@@ -171,6 +172,7 @@ class DynamoContextStore(AbstractContextStore):
             "location_json": json.dumps(task.location) if task.location else None,
             "ingest_source": task.ingest_source, "ingest_run_id": task.ingest_run_id,
             "source_key": task.source_key, "recovered": 1 if task.recovered else 0,
+            "speaker_json": rules.speaker_to_json(task.speaker),
         }
         self.table.put(self._item(f"TASK#{rec_id}", row), what="planned task")
         return rec_id
@@ -224,6 +226,7 @@ class DynamoContextStore(AbstractContextStore):
             "raw_statement": task.raw_statement, "confidence": task.confidence,
             "relative_time_anchor": task.relative_time_anchor, "session_id": task.session_id,
             "location_json": json.dumps(task.location) if task.location else None,
+            "speaker_json": rules.speaker_to_json(task.speaker),
         })
 
     def delete_planned_task(self, task_id: str) -> bool:
@@ -285,6 +288,7 @@ class DynamoContextStore(AbstractContextStore):
             "location_json": json.dumps(action.location) if action.location else None,
             "session_id": action.session_id, "ingest_source": action.ingest_source,
             "ingest_run_id": action.ingest_run_id, "source_key": action.source_key,
+            "speaker_json": rules.speaker_to_json(action.speaker),
         }
         self.table.put(self._item(f"ACTION#{rec_id}", row, g1pk=self._gpk("ACTION"),
                                   g1sk=f"{action.timestamp}#{rec_id}"), what="action")
@@ -293,6 +297,12 @@ class DynamoContextStore(AbstractContextStore):
     def get_verified_action(self, action_id: str) -> Optional[VerifiedAction]:
         item = self._get(f"ACTION#{action_id}")
         return rules.row_to_action(item) if item else None
+
+    def set_action_speaker(self, action_id: str, speaker: SpeakerAttribution, revoke: bool = False) -> bool:
+        set_: Dict[str, Any] = {"speaker_json": rules.speaker_to_json(speaker)}
+        if revoke:
+            set_["is_revoked"] = 1
+        return self._update_existing(f"ACTION#{action_id}", set_)
 
     def get_action_status(
         self, action_query: str, target_date: Optional[str] = None

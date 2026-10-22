@@ -112,6 +112,19 @@ def create_planned_task(
     )
 
 
+def speaker_label(speaker: Any) -> Optional[str]:
+    """Short attribution for answers and cards: who said the confirming sentence."""
+    if speaker is None:
+        return None
+    role = getattr(speaker, "role", None)
+    source = getattr(speaker, "source", None)
+    if role == "user":
+        return "you (voice match)" if source in ("bee_voice_id", "bee_name") else "you"
+    if role == "contact":
+        return getattr(speaker, "name", None) or "another person"
+    return "unidentified speaker"
+
+
 def execute_verify_action_status(
     action_query: str,
     target_date: Optional[str] = None,
@@ -123,9 +136,11 @@ def execute_verify_action_status(
 
     if action:
         elapsed = _format_elapsed_time(action.timestamp)
+        spoken_by = speaker_label(action.speaker)
+        voice_note = " Bee recognised your voice." if spoken_by == "you (voice match)" else ""
         spoken = (
             f"Yes, you confirmed {action.action_type.replace('_', ' ')}: "
-            f"'{action.raw_statement}' approximately {elapsed}."
+            f"'{action.raw_statement}' approximately {elapsed}.{voice_note}"
         )
         card_payload = {
             "template": "ACTION_VERIFIED_BADGE",
@@ -137,6 +152,7 @@ def execute_verify_action_status(
             "confidence": round(action.confidence, 2),
             "elapsed_time_human": elapsed,
             "matched_task_id": action.matched_task_id,
+            "spoken_by": spoken_by,
             "spoken_summary": spoken,
         }
         return {
@@ -148,6 +164,8 @@ def execute_verify_action_status(
             "confidence": round(action.confidence, 2),
             "elapsed_time_human": elapsed,
             "matched_task_id": action.matched_task_id,
+            "spoken_by": spoken_by,
+            "voice_verified": spoken_by == "you (voice match)",
             "display_template": "ACTION_VERIFIED_BADGE",
             "ui_card_type": "ACTION_VERIFIED_BADGE",
             "spoken_summary": spoken,

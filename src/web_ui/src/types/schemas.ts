@@ -10,6 +10,14 @@ export interface ChunkClassification {
   summary_hint: string;
 }
 
+/** Who said the sentence an entity came from (src/core/schemas.py SpeakerAttribution). */
+export interface SpeakerAttribution {
+  role: "user" | "contact" | "unknown";
+  name?: string | null;
+  score?: number | null;
+  source: "bee_voice_id" | "bee_name" | "history_name" | "untagged" | "internal";
+}
+
 export interface VerifiedAction {
   id: string;
   timestamp: string;
@@ -21,6 +29,7 @@ export interface VerifiedAction {
   matched_task_id?: string;
   ingest_source?: IngestSource;
   ingest_run_id?: string | null;
+  speaker?: SpeakerAttribution | null;
 }
 
 export interface PlannedTask {
@@ -36,6 +45,7 @@ export interface PlannedTask {
   ingest_source?: IngestSource;
   ingest_run_id?: string | null;
   recovered?: boolean;
+  speaker?: SpeakerAttribution | null;
 }
 
 export interface SocialCommitment {

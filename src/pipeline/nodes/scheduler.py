@@ -250,6 +250,11 @@ def node_extract_scheduled_task(state: ExamenState) -> Dict[str, Any]:
 
     if not transcript:
         return {"scheduled_task": None}
+    if state.get("speaker_role") == "contact":
+        # Another person's "remind me to ..." is their reminder, not the user's (promises to the user
+        # are handled by the social node as commitments)
+        logger.debug("Scheduled task extraction skipped: utterance spoken by a contact")
+        return {"scheduled_task": None}
 
     # Heuristic / Mock path
     if settings.mock_ai or not has_active_model_credentials(settings.gatekeeper_provider):

@@ -328,7 +328,7 @@ data: {"type":"new-utterance","conversation_uuid":"…","utterance":{…}}
 | Metric | Value [obs] |
 |---|---|
 | Receipt − `spoken_at` | **1.6 s min · 12.8 s median · 44.1 s max** (n = 184) |
-| `tagged-utterance` after its utterance | ~1 s |
+| `tagged-utterance` after its utterance | ~1 s (0.60–0.63 s after receipt on 2026-10-22) |
 | Ping interval | 30.0 s |
 
 ---
@@ -339,7 +339,7 @@ data: {"type":"new-utterance","conversation_uuid":"…","utterance":{…}}
 |---|---|
 | Live utterance ↔ REST utterance | `utterance.id` is **equal** to the REST **realtime** utterance id (184/184) [obs], but only while the conversation is `CAPTURING`. The final transcription has new ids: match on **normalised text + `spoken_at`** instead (exact for 99 % of utterances in the session) |
 | `conversation_uuid` (live) ↔ `id` (REST) | (1) `new-utterance-chunks` lists utterance ids with the numeric `conversation_id`; join with the `conversation_uuid` of those `new-utterance` events. (2) `new-conversation` carries both [cli]. (3) For history: `daily find <date>` → `conversations[].{id, conversation_uuid}` |
-| Who is speaking (live) | `tagged-utterance.person_first_name == me.first_name` (or a stored `person_id`) ⇒ the wearer. Untagged ⇒ unknown. There are no `speaker_0/1` labels |
+| Who is speaking (live) | `tagged-utterance.person_id` bound to the wearer ⇒ the wearer; the first tag with `person_first_name == me.first_name` binds its `person_id`. `person_id` is **not** `me.id` (two different numbers on 2026-10-22). Another `person_id` ⇒ a contact. Untagged ⇒ unknown. There are no `speaker_0/1` labels ([next_steps/08](next_steps/08_speaker_identity.md)) |
 | Who is speaking (REST) | `utterance.speaker` = first name or `"Unknown"` |
 | Utterance time | Live: `utterance.spoken_at` (ISO). REST: `spoken_at` (ms). Duration: `end − start` in both |
 

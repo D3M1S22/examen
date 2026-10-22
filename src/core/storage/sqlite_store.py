@@ -18,6 +18,7 @@ from src.core.schemas import (
     SocialCommitment,
     SocialEntity,
     SocialWebProfile,
+    SpeakerAttribution,
     UtteranceChunk,
     VerifiedAction,
 )
@@ -320,6 +321,9 @@ class SQLiteContextStore(AbstractContextStore):
                 "ALTER TABLE planned_tasks ADD COLUMN ingest_run_id TEXT;",
                 "ALTER TABLE planned_tasks ADD COLUMN source_key TEXT;",
                 "ALTER TABLE planned_tasks ADD COLUMN recovered INTEGER NOT NULL DEFAULT 0;",
+                # Speaker identity (docs/next_steps/08_speaker_identity.md)
+                "ALTER TABLE verified_actions ADD COLUMN speaker_json TEXT;",
+                "ALTER TABLE planned_tasks ADD COLUMN speaker_json TEXT;",
                 "ALTER TABLE session_dossiers ADD COLUMN ingest_source TEXT NOT NULL DEFAULT 'live';",
                 "ALTER TABLE session_dossiers ADD COLUMN ingest_run_id TEXT;",
             ):
@@ -437,8 +441,8 @@ class SQLiteContextStore(AbstractContextStore):
                 INSERT OR REPLACE INTO planned_tasks
                 (id, title, domain, scheduled_time, recurrence, status, completed_at, verified_action_id, created_at,
                  origin, raw_statement, confidence, relative_time_anchor, session_id, location_json,
-                 ingest_source, ingest_run_id, source_key, recovered)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 ingest_source, ingest_run_id, source_key, recovered, speaker_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 rec_id,
                 task.title.strip(),
@@ -459,6 +463,7 @@ class SQLiteContextStore(AbstractContextStore):
                 task.ingest_run_id,
                 task.source_key,
                 1 if task.recovered else 0,
+                rules.speaker_to_json(task.speaker),
             ))
             conn.commit()
         return rec_id
@@ -529,7 +534,7 @@ class SQLiteContextStore(AbstractContextStore):
                 SET title = ?, domain = ?, scheduled_time = ?, recurrence = ?,
                     status = ?, completed_at = ?, verified_action_id = ?,
                     origin = ?, raw_statement = ?, confidence = ?,
-                    relative_time_anchor = ?, session_id = ?, location_json = ?
+                    relative_time_anchor = ?, session_id = ?, location_json = ?, speaker_json = ?
                 WHERE id = ?
             """, (
                 task.title.strip(),
@@ -545,6 +550,7 @@ class SQLiteContextStore(AbstractContextStore):
                 task.relative_time_anchor,
                 task.session_id,
                 loc_str,
+                rules.speaker_to_json(task.speaker),
                 task.id,
             ))
             conn.commit()
@@ -632,8 +638,8 @@ class SQLiteContextStore(AbstractContextStore):
             cursor.execute("""
                 INSERT OR REPLACE INTO verified_actions
                 (id, action_type, domain, raw_statement, confidence, timestamp, is_revoked, matched_task_id, location_json,
-                 session_id, ingest_source, ingest_run_id, source_key)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 session_id, ingest_source, ingest_run_id, source_key, speaker_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 rec_id,
                 action.action_type.lower(),
@@ -648,6 +654,7 @@ class SQLiteContextStore(AbstractContextStore):
                 action.ingest_source,
                 action.ingest_run_id,
                 action.source_key,
+                rules.speaker_to_json(action.speaker),
             ))
             if self._has_fts:
                 cursor.execute("""
@@ -659,6 +666,18 @@ class SQLiteContextStore(AbstractContextStore):
 
 
     _row_to_action = staticmethod(rules.row_to_action)
+
+    def set_action_speaker(self, action_id: str, speaker: SpeakerAttribution, revoke: bool = False) -> bool:
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            if revoke:
+                cursor.execute("UPDATE verified_actions SET speaker_json = ?, is_revoked = 1 WHERE id = ?",
+                               (rules.speaker_to_json(speaker), action_id))
+            else:
+                cursor.execute("UPDATE verified_actions SET speaker_json = ? WHERE id = ?",
+                               (rules.speaker_to_json(speaker), action_id))
+            conn.commit()
+            return cursor.rowcount > 0
 
     def get_verified_action(self, action_id: str) -> Optional[VerifiedAction]:
         with self._get_connection() as conn:

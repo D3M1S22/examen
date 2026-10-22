@@ -47,6 +47,7 @@
 │    ├─ M8.2: IAM tenant isolation & infra (P2)      │ P1       │ Medium │ DDB 04, 05  │ ✅ DONE   │
 │    ├─ M8.3: Auth & ops on DynamoDB (P3)            │ P2       │ Medium │ DDB 03      │ ✅ DONE   │
 │    └─ M8.4: Migration & cutover (P4)               │ P2       │ Low    │ DDB 06      │ 🔶 cutover │
+│  Phase 10: Speaker Identity (voice tags → account) │ High     │ Medium │ Doc 08      │ ✅ IMPLEMENTED│
 └──────────────────────────────────────────────────────────────────────────────────────────────────┘
 
 > **DTEE** = [docs/next_steps/deep_topic_event_engine/](deep_topic_event_engine/00_overview.md)
@@ -327,6 +328,10 @@
 ### Phase 9: AWS Deployment (LIVE: https://examen.devgiov.com, pipeline on AgentCore Runtime)
 > **Goal:** EXAMEN on AWS for the submission: EC2 + CloudFront in eu-central-1 on the deployed DynamoDB stack (live since 2026-10-21), then the pipeline on AgentCore Runtime (phase 2).
 > **Runbook:** [17_aws_deployment_runbook.md](../17_aws_deployment_runbook.md) (readiness, blockers B1–B2, artifacts M1–M7, smoke list, timeline).
+
+### Phase 10: Speaker Identity (IMPLEMENTED, device verification pending)
+> **Goal:** bind Bee `tagged-utterance` events to the EXAMEN account's wearer by `person_id`, record who said each action and task, keep a contact's statements from verifying the user's routines, and correct entities when a tag arrives late.
+> **Spec & status:** [08_speaker_identity.md](08_speaker_identity.md).
 
 ---
 

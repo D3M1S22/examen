@@ -207,6 +207,8 @@ def _run_pipeline(payload: Dict[str, Any], context: Any = None) -> Dict[str, Any
         "location": payload.get("location"),
         "speaker": payload.get("speaker") or payload.get("speaker_id"),
         "speaker_role": payload.get("speaker_role"),
+        "speaker_score": payload.get("speaker_score"),
+        "speaker_source": payload.get("speaker_source"),
         "utterance_id": payload.get("utterance_id") or payload.get("chunk_id"),
         "source_key": payload.get("source_key"),
         "ingest_source": payload.get("ingest_source") or "live",

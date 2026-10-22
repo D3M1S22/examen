@@ -17,6 +17,7 @@ from src.core.schemas import (
     SocialCommitment,
     SocialEntity,
     SocialWebProfile,
+    SpeakerAttribution,
     UtteranceChunk,
     VerifiedAction,
 )
@@ -70,6 +71,10 @@ class AbstractContextStore(ABC):
     @abstractmethod
     def get_verified_action(self, action_id: str) -> Optional[VerifiedAction]:
         """Fetch a verified action by ID."""
+
+    @abstractmethod
+    def set_action_speaker(self, action_id: str, speaker: SpeakerAttribution, revoke: bool = False) -> bool:
+        """Record who said an action (late speaker tag); ``revoke`` marks it as not the user's. True if found."""
 
     @abstractmethod
     def get_action_status(

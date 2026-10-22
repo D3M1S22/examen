@@ -11,7 +11,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, Optional
 
-from src.core.schemas import ExamenState, MicroEventRef
+from src.core.schemas import ExamenState, MicroEventRef, SpeakerAttribution
 from src.core.storage import get_storage_store
 from src.core.time_utils import historical_action_may_resolve, parse_local_iso
 
@@ -28,6 +28,25 @@ def derived_entity_id(source_key: Optional[str], kind: str) -> Optional[str]:
     return str(uuid.uuid5(_ENTITY_NAMESPACE, f"{source_key}:{kind}"))
 
 
+def speaker_from_state(state: ExamenState) -> Optional[SpeakerAttribution]:
+    """Who said the utterance, as the orchestrator or backfill knew it at dispatch (None = not recorded)."""
+    role = state.get("speaker_role")
+    source = state.get("speaker_source")
+    if not role and not source:
+        return None
+    if role not in ("user", "contact", "unknown"):
+        role = "unknown"
+    if source not in ("bee_voice_id", "bee_name", "history_name", "untagged", "internal"):
+        source = "untagged" if role == "unknown" else "internal"
+    score = state.get("speaker_score")
+    try:
+        score = None if score is None else max(0.0, min(1.0, float(score)))
+    except (TypeError, ValueError):
+        score = None
+    return SpeakerAttribution(role=role, name=state.get("speaker") if role != "unknown" else None,
+                              score=score, source=source)
+
+
 def node_persist(state: ExamenState) -> Dict[str, Any]:
     """LangGraph node: Persistence Node.
 
@@ -41,6 +60,7 @@ def node_persist(state: ExamenState) -> Dict[str, Any]:
     run_id = state.get("ingest_run_id")
     historical = ingest_source == "backfill"
     spoken_at = state.get("timestamp")
+    speaker = speaker_from_state(state)
 
     # 1. Persist Verified Action & Auto-Resolve Planned Tasks
     action_data = state.get("action_data")
@@ -51,6 +71,7 @@ def node_persist(state: ExamenState) -> Dict[str, Any]:
             action_data.ingest_source = ingest_source
             action_data.ingest_run_id = run_id
             action_data.source_key = source_key
+            action_data.speaker = action_data.speaker or speaker
             action_data.id = action_data.id or derived_entity_id(source_key, "action")
             if historical:
                 # Heuristic extractors stamp "now": a recovered action happened when it was spoken
@@ -130,6 +151,7 @@ def node_persist(state: ExamenState) -> Dict[str, Any]:
             scheduled_task.ingest_source = ingest_source
             scheduled_task.ingest_run_id = run_id
             scheduled_task.source_key = source_key
+            scheduled_task.speaker = scheduled_task.speaker or speaker
             scheduled_task.id = scheduled_task.id or derived_entity_id(source_key, "task")
             if historical:
                 # The intention was voiced in the past: date it then, and never fire a stale reminder

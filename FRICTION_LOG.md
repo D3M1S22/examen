@@ -171,3 +171,15 @@ Whenever a friction point or roadblock is encountered during development, docume
   4. `BEDROCK_REGION` is copied into `AWS_REGION` in `deploy/agentcore/main.py` before settings load; DynamoDB uses `DYNAMO_REGION`. Session ids are `<user_id>-<session_id>`, padded, so users never share a microVM session.
   5. `scripts/agentcore_deploy.py` builds the package.
 * **Platform Feedback:** Surface the per-region Bedrock verification state in the console. Let AgentCore keep a user-set `AWS_REGION`, or document the override. Publish a reference command for building direct-code packages.
+
+### [2026-10-22] - Bee CLI / Binding `tagged-utterance` to the account
+* **Context:** Linking each live utterance to the EXAMEN user who spoke it (`docs/next_steps/08_speaker_identity.md`).
+* **Friction Encountered:**
+  1. `tagged-utterance` is not documented in bee-cli; its fields were learned from a capture. Nothing says what `person_id` refers to, and no CLI command lists people, so its link to the `bee me` account id has to be verified on a device.
+  2. Only about one utterance in five is tagged, about one second after it arrives. A pipeline that waits for every tag is slow, and one that treats untagged speech as "not the user" loses most actions.
+  3. A tag can arrive after the pipeline has already stored an action, so the attribution has to be corrected afterwards.
+* **Workaround / Resolution:**
+  1. The wearer is matched by `person_id` once a first-name match has bound it (or when it equals the account id); a capture script checks the relation.
+  2. A bounded wait (`BEE_SPEAKER_TAG_WAIT_SECONDS`) for qualified utterances only; untagged speech keeps its old behaviour and only a positive contact match changes it.
+  3. Entity ids are derived from the utterance's source key, so a late tag finds the action and task it produced and updates (or revokes) them.
+* **Platform Feedback:** Document `tagged-utterance`, include the speaker (or a "pending" flag) in `new-utterance`, and expose `person_id` in `bee me` and in REST transcripts.
