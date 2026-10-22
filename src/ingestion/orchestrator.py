@@ -339,6 +339,7 @@ class BeeStreamOrchestrator(Debug):
             "speaker_role": chunk.speaker_role,
             "speaker_score": chunk.speaker_score,
             "speaker_source": chunk.speaker_source,
+            "wearer_name": self.identity.first_name,
             "utterance_id": chunk.chunk_id,
             "session_id": event_id or chunk.conversation_uuid,
             "timestamp": chunk.timestamp,
@@ -480,9 +481,16 @@ class BeeStreamOrchestrator(Debug):
             task_id = derived_entity_id(source_key, "task")
             task = store.get_planned_task(task_id) if task_id else None
             if task is not None:
+                from src.pipeline.nodes.scheduler import is_request_to_owner
+
+                requested = bool(task.speaker and task.speaker.addressed_to_user) or (
+                    match.role == "contact" and is_request_to_owner(task.raw_statement or "", self.identity.first_name))
+                if requested and match.role == "contact":
+                    # "Damiano, remember to ...": now we also know who asked; still the owner's task
+                    speaker = speaker.model_copy(update={"addressed_to_user": True})
+                elif match.role == "contact" and task.status == "pending" and task.origin == "ambient_voice":
+                    task.status = "cancelled"  # another person's own plan, not the owner's task
                 task.speaker = speaker
-                if match.role == "contact" and task.status == "pending" and task.origin == "ambient_voice":
-                    task.status = "cancelled"
                 store.update_planned_task(task)
                 out["tasks"] = 1
         except Exception as e:

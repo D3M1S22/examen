@@ -67,6 +67,11 @@ class SpeakerAttribution(BaseModel):
         default="untagged",
         description="bee_voice_id = matched by Bee person id, bee_name = by first name, history_name = REST speaker.",
     )
+    addressed_to_user: bool = Field(
+        default=False,
+        description="True when the sentence asked the owner to do something ('Damiano, remember to ...'): "
+                    "a request from someone else, kept as the owner's task.",
+    )
 
     @property
     def is_wearer(self) -> bool:
@@ -527,6 +532,17 @@ class ScheduledTaskExtraction(BaseModel):
         default=0.95, ge=0.0, le=1.0,
         description="Extraction certainty score."
     )
+    for_owner: bool = Field(
+        default=True,
+        description="True when the device owner must do it: their own intention ('remind me to ...', 'I need to ...') "
+                    "or something another person asks them to do ('Damiano, remember to ...', 'can you ...'). "
+                    "False when another person plans something for themselves, or the owner asks someone else."
+    )
+    requested_by: Optional[str] = Field(
+        default=None,
+        description="First name of the person asking the owner, when the statement is a request from someone else "
+                    "and the name is known; null otherwise."
+    )
 
 
 # ============================================================================
@@ -771,6 +787,7 @@ class ExamenState(TypedDict, total=False):
     speaker_role: Optional[str]
     speaker_score: Optional[float]
     speaker_source: Optional[str]
+    wearer_name: Optional[str]  # the owner's first name (`bee me`), to recognise requests addressed to them
     utterance_id: Optional[str]
     # Historical Transcript Backfill
     source_key: Optional[str]

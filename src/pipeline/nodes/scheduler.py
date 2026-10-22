@@ -242,39 +242,40 @@ def _get_scheduled_task_extractor():
 def node_extract_scheduled_task(state: ExamenState) -> Dict[str, Any]:
     """LangGraph node: Stage 3D Ambient Task Scheduler.
 
-    Extracts forward-looking commitments and scheduled tasks from ambient spoken audio.
+    Extracts forward-looking commitments and scheduled tasks from ambient spoken audio. Who spoke matters
+    (docs/next_steps/08_speaker_identity.md §5): the owner's own intentions and requests other people address
+    to the owner ("Damiano, remember to ...") become the owner's tasks; another person's own plans do not.
     """
     transcript = (state.get("raw_transcript") or "").strip()
     session_id = state.get("session_id")
     ref_time_iso = state.get("timestamp") or datetime.now().isoformat()
+    speaker = _SpeakerView.from_state(state)
 
     if not transcript:
-        return {"scheduled_task": None}
-    if state.get("speaker_role") == "contact":
-        # Another person's "remind me to ..." is their reminder, not the user's (promises to the user
-        # are handled by the social node as commitments)
-        logger.debug("Scheduled task extraction skipped: utterance spoken by a contact")
         return {"scheduled_task": None}
 
     # Heuristic / Mock path
     if settings.mock_ai or not has_active_model_credentials(settings.gatekeeper_provider):
         logger.debug("Extracting ambient scheduled task via heuristic engine.")
-        task = _heuristic_extract_scheduled_task(transcript, ref_time_iso, session_id)
-        return {"scheduled_task": task}
+        return {"scheduled_task": _heuristic_for_speaker(transcript, ref_time_iso, session_id, speaker)}
 
     # LLM Structured Extraction
     try:
         extractor = _get_scheduled_task_extractor()
-        sys_prompt = SCHEDULER_SYSTEM_PROMPT.format(current_time=ref_time_iso)
+        sys_prompt = SCHEDULER_SYSTEM_PROMPT.format(current_time=ref_time_iso) + speaker.prompt_section()
         messages = [
             SystemMessage(content=sys_prompt),
-            HumanMessage(content=f'User spoken statement: "{transcript}"'),
+            HumanMessage(content=f'Spoken statement: "{transcript}"'),
         ]
         extracted: ScheduledTaskExtraction = extractor.invoke(messages)
 
         if not extracted or not extracted.title:
-            task = _heuristic_extract_scheduled_task(transcript, ref_time_iso, session_id)
-            return {"scheduled_task": task}
+            return {"scheduled_task": _heuristic_for_speaker(transcript, ref_time_iso, session_id, speaker)}
+        if not extracted.for_owner:
+            logger.debug("Scheduled task dropped: not for the device owner")
+            return {"scheduled_task": None}
+        addressed = speaker.role == "contact" or (speaker.role == "unknown" and (
+            bool(extracted.requested_by) or _addressed_to_owner(transcript, speaker.owner)))
 
         # If LLM didn't resolve scheduled_time but relative anchor was mentioned, use regex parser
         scheduled_time = extracted.scheduled_time
@@ -301,8 +302,117 @@ def node_extract_scheduled_task(state: ExamenState) -> Dict[str, Any]:
             session_id=session_id,
             created_at=datetime.now().isoformat(),
         )
+        if addressed:
+            task.speaker = speaker.as_request(extracted.requested_by)
         return {"scheduled_task": task}
     except Exception as e:
         model_fallback(logger, "scheduler", e)
-        task = _heuristic_extract_scheduled_task(transcript, ref_time_iso, session_id)
-        return {"scheduled_task": task}
+        return {"scheduled_task": _heuristic_for_speaker(transcript, ref_time_iso, session_id, speaker)}
+
+
+# ---------------------------------------------------------------------------
+# Speaker awareness
+# ---------------------------------------------------------------------------
+
+_REQUEST_LEAD = r"(?:please|pls|can you|could you|would you|remember to|don't forget to|dont forget to|remind yourself to)"
+_SELF_LEAD = r"(?:remind me|i need to|i have to|i must|i'll|i will|i should|i'm going to|i am going to|let me)\b"
+
+
+class _SpeakerView:
+    """Who said the statement, as the pipeline knows it (role from the Bee tag, owner's first name)."""
+
+    def __init__(self, role: str, name: Optional[str], owner: Optional[str], score: Any, source: Optional[str]):
+        self.role = role if role in ("user", "contact", "unknown") else "unknown"
+        self.name = (name or "").strip() or None
+        self.owner = (owner or "").strip() or None
+        self.score = score
+        self.source = source
+
+    @classmethod
+    def from_state(cls, state: ExamenState) -> "_SpeakerView":
+        return cls(state.get("speaker_role") or "unknown", state.get("speaker"), state.get("wearer_name"),
+                   state.get("speaker_score"), state.get("speaker_source"))
+
+    def prompt_section(self) -> str:
+        owner = self.owner or "the owner"
+        if self.role == "user":
+            who = f"The speaker is the device owner ({owner}); Bee recognised their voice."
+        elif self.role == "contact":
+            who = (f"The speaker is NOT the device owner: it is {self.name or 'another person'}. Set for_owner=true "
+                   f"only if they ask the owner ({owner}, or 'you') to do something, and set requested_by to "
+                   f"their name. Their own plans ('remind me', 'I need to') are for_owner=false.")
+        else:
+            who = (f"The speaker was not identified: it is probably the device owner ({owner}), but it may be "
+                   f"someone else. If the statement addresses the owner by name or asks them to do something "
+                   f"('{owner}, remember to ...'), it is a request from another person: for_owner=true, "
+                   f"requested_by = the asker's name if it is said, else null.")
+        return f"\n\nSPEAKER:\n{who}\nThe title is always what the owner has to do (e.g. 'Start the washing machine').\n"
+
+    def as_request(self, requested_by: Optional[str] = None):
+        from src.core.schemas import SpeakerAttribution
+
+        name = (requested_by or "").strip() or (self.name if self.role == "contact" else None)
+        source = self.source if self.source in ("bee_voice_id", "bee_name", "history_name", "untagged",
+                                                "internal") else "untagged"
+        try:
+            score = None if self.score is None else max(0.0, min(1.0, float(self.score)))
+        except (TypeError, ValueError):
+            score = None
+        role = "contact" if self.role == "contact" else "unknown"
+        return SpeakerAttribution(role=role, name=name, score=score if role == "contact" else None,
+                                  source=source, addressed_to_user=True)
+
+
+def _addressed_to_owner(text: str, owner: Optional[str]) -> bool:
+    """'Damiano, remember to ...' / 'Damiano can you ...': the owner is asked to do something."""
+    lower = text.strip().lower()
+    if owner:
+        name = re.escape(owner.strip().lower())
+        if re.match(rf"^\W*(?:hey\s+|ok\s+|so\s+)?{name}\b", lower):
+            return True
+        if re.search(rf"\b{name}\b\W*{_REQUEST_LEAD}\b", lower):
+            return True
+    return False
+
+
+def is_request_to_owner(text: str, owner: Optional[str]) -> bool:
+    """Said by another person, is this a request for the owner? Named ('Damiano, ...') or a request lead
+    ('can you ...', 'please ...', 'don't forget to ...') that is not the speaker's own plan ('remind me')."""
+    if _addressed_to_owner(text, owner):
+        return True
+    lower = text.strip().lower()
+    lower = re.sub(r"^\W*(?:please|pls)\W+", "", lower)
+    if re.match(rf"^\W*{_SELF_LEAD}", lower):
+        return False
+    return re.match(rf"^\W*{_REQUEST_LEAD}\b", text.strip().lower()) is not None
+
+
+def _strip_address(text: str, owner: Optional[str]) -> str:
+    clean = text.strip()
+    if owner:
+        clean = re.sub(rf"^\W*(?:hey\s+|ok\s+|so\s+)?{re.escape(owner.strip())}\b[\s,!.:]*", "", clean,
+                       flags=re.IGNORECASE)
+    previous = None
+    while previous != clean:  # "pls remember to ..." carries two lead-ins
+        previous = clean
+        clean = re.sub(rf"^{_REQUEST_LEAD}[\s,]+", "", clean, flags=re.IGNORECASE).strip()
+    return clean or text.strip()
+
+
+def _heuristic_for_speaker(transcript: str, ref_time_iso: Optional[str], session_id: Optional[str],
+                           speaker: _SpeakerView) -> Optional[PlannedTask]:
+    # The owner talking to themselves ("Damiano, remember ...") is still their own task
+    addressed = speaker.role != "user" and _addressed_to_owner(transcript, speaker.owner)
+    if speaker.role == "contact":
+        if not is_request_to_owner(transcript, speaker.owner):
+            return None  # another person's own plan
+        addressed = True
+    text = _strip_address(transcript, speaker.owner) if addressed else transcript
+    task = _heuristic_extract_scheduled_task(text, ref_time_iso, session_id)
+    if task is not None:
+        task.raw_statement = transcript.strip()
+        if addressed:
+            task.speaker = speaker.as_request()
+            if task.speaker.name:  # "can you call me" from Marco: the owner calls Marco
+                task.title = re.sub(r"\bme\b", task.speaker.name, task.title, flags=re.IGNORECASE)
+    return task

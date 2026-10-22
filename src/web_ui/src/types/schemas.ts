@@ -16,6 +16,8 @@ export interface SpeakerAttribution {
   name?: string | null;
   score?: number | null;
   source: "bee_voice_id" | "bee_name" | "history_name" | "untagged" | "internal";
+  /** Someone asked the owner to do it ("Damiano, remember to …") */
+  addressed_to_user?: boolean;
 }
 
 export interface VerifiedAction {

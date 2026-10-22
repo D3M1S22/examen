@@ -48,7 +48,9 @@ Bindings live in memory per runtime and are re-learned from the first tag after 
 |---|---|---|
 | `UtteranceChunk` | `speaker_person_id`, `speaker_score`, `speaker_source` | From the tag (`speaker_id` / `speaker_role` as before) |
 | Pipeline payload and `ExamenState` | `speaker_score`, `speaker_source` | Next to `speaker`, `speaker_role`; also sent to the AgentCore runtime |
-| `VerifiedAction.speaker`, `PlannedTask.speaker` | `SpeakerAttribution {role, name, score, source}` | Who said the sentence; `None` = not recorded (manual entries, older rows). Hidden from the model's structured-output schema |
+| `VerifiedAction.speaker`, `PlannedTask.speaker` | `SpeakerAttribution {role, name, score, source, addressed_to_user}` | Who said the sentence; `addressed_to_user` = someone asked the owner to do it. `None` = not recorded (manual entries, older rows). Hidden from the action model's structured-output schema |
+| Pipeline payload | `wearer_name` | The owner's first name, so the scheduler can recognise "Damiano, remember to …" |
+| `ScheduledTaskExtraction` | `for_owner`, `requested_by` | The scheduler model says whether the owner must do it, and who asked |
 | Storage | `speaker_json` column / attribute on `verified_actions` and `planned_tasks` | Both backends; SQLite adds the column on start |
 | `GET /api/actions`, `GET /api/routines` | `speaker` | For the dashboard |
 | MCP `verify_action_status` | `spoken_by`, `voice_verified` | `"you (voice match)"`, `"you"`, a contact's name, or `"unidentified speaker"`; the spoken answer adds "Bee recognised your voice." |
@@ -59,13 +61,33 @@ Bindings live in memory per runtime and are re-learned from the first tag after 
 ## 5. Rules
 
 - **Untagged speech is still the user's.** About four in five utterances carry no tag, and most of them are the wearer's. Treating "unknown" as "not the user" would lose most actions. Only a positive `contact` changes behaviour.
-- **Contact speech** never verifies an action and never creates a scheduled task (action and scheduler nodes return nothing). The social node keeps its existing rule: a contact's promise has the contact as debtor.
+- **Contact speech** never verifies an action (the action node returns nothing). The social node keeps its existing rule: a contact's promise has the contact as debtor.
+- **Tasks follow who has to do them, not who spoke.** The scheduler prompt says who the speaker is (owner with voice match, another person, or not identified) and the owner's first name; the model returns `for_owner` and `requested_by`:
+
+  | Said by | Example | Result |
+  |---|---|---|
+  | Owner (tagged or untagged) | "Remind me to call Marco tomorrow at ten" | Owner's task |
+  | Another person, asking the owner | "Damiano, please remember to start the washing machine" / "Can you call me tomorrow?" | Owner's task, **asked by** that person (`addressed_to_user`) |
+  | Untagged, naming the owner | "Damiano pls remember to launch the washing machine" | Owner's task, asked by someone (asker unverified) |
+  | Another person, own plan | "Remind me to call my mum" | No task |
+
+  Without a model (mock or fallback) the same rules run on patterns: the owner's first name at the start of the sentence or before "please / remember / can you", request lead-ins, and self lead-ins ("remind me", "I need to").
 - **Late tags** (after the bounded wait):
   - arriving while the pipeline runs: applied right after it returns;
   - arriving after the utterance was analysed: applied at once (in a thread, tenant context copied);
-  - effect: the action and the task derived from that utterance (ids from the source key) get the speaker. If it is a contact, the action is revoked and a task it completed is reopened; an ambient task a contact voiced is cancelled.
+  - effect: the action and the task derived from that utterance (ids from the source key) get the speaker. If it is a contact, the action is revoked and a task it completed is reopened. A task becomes "asked by" that contact when it was a request to the owner (flagged, or the sentence reads as one); only another person's own plan is cancelled.
   - noop utterances only get the ring-buffer and diarization patch (no entity exists).
-- **Dashboard:** "🎙 Your voice · 81 %" on actions and routines when Bee matched the wearer, "🗣 Marco" when another person spoke. Nothing for untagged speech.
+- **Dashboard** (actions and routines):
+
+  | Badge | When |
+  |---|---|
+  | 🎙 Your voice · 81 % (green) | Bee recognised the owner |
+  | 📣 Asked by Giulia · 66 % / · unverified (blue) | A request to the owner; the score when Bee recognised the asker |
+  | ◌ Voice not verified (grey) | No Bee tag: probably the owner, not verified |
+  | 🎙 You · Bee history | Backfill, REST names the owner (no score) |
+  | 🗣 Marco (amber) | Said by another person |
+
+  Manual entries and simulator data show no badge. Alexa+ answers add "Bee could not confirm it was your voice." for unverified actions, and `get_upcoming_tasks` returns `spoken_by` ("asked by Giulia").
 - **Logging (AGENTS.MD F3):** names and transcripts never reach the logs; only counts and roles do.
 
 ## 6. Settings

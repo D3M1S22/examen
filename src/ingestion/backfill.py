@@ -734,6 +734,7 @@ class ReplayExecutor:
                     "speaker_role": chunk.speaker_role,
                     # REST transcripts name the speaker (Bee diarization), with no voice-match score
                     "speaker_source": "history_name" if chunk.speaker_role != "unknown" else "untagged",
+                    "wearer_name": get_wearer_identity().first_name,
                     "utterance_id": chunk.chunk_id,
                     "session_id": outcome.event_id or chunk.conversation_uuid,
                     "timestamp": chunk.timestamp,

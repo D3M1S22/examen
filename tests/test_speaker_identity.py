@@ -289,3 +289,112 @@ async def test_tag_arriving_while_the_pipeline_runs_is_applied_after_it(orchestr
     await task
     action = store.get_verified_action(derived_entity_id(live_source_key("uuid-1", "u10"), "action"))
     assert action.speaker is not None and action.speaker.role == "user"
+
+
+# ---------------------------------------------------------------------------
+# Requests addressed to the owner ("Damiano, remember to ...")
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def heuristic(monkeypatch):
+    from src.core.config import settings
+    monkeypatch.setattr(settings, "mock_ai", True)
+
+
+def _task(state):
+    return node_extract_scheduled_task(state)["scheduled_task"]
+
+
+def test_untagged_request_naming_the_owner_is_an_asked_task(heuristic):
+    task = _task({"raw_transcript": "Damiano pls remember to launch the washing machine tonight",
+                  "speaker_role": "unknown", "speaker_source": "untagged", "wearer_name": "Damiano"})
+    assert task.title.lower().startswith("launch the washing machine")
+    assert task.speaker.addressed_to_user and task.speaker.role == "unknown" and task.speaker.name is None
+
+
+def test_contact_request_is_the_owners_task_asked_by_them(heuristic):
+    task = _task({"raw_transcript": "Can you call me tomorrow at 10 am", "speaker_role": "contact",
+                  "speaker": "Marco", "speaker_score": 0.7, "speaker_source": "bee_voice_id", "wearer_name": "Damiano"})
+    assert "Marco" in task.title
+    assert task.speaker == SpeakerAttribution(role="contact", name="Marco", score=0.7, source="bee_voice_id",
+                                              addressed_to_user=True)
+
+
+def test_contact_own_plan_is_not_the_owners_task(heuristic):
+    assert _task({"raw_transcript": "Please remind me to call my mum tomorrow", "speaker_role": "contact",
+                  "speaker": "Marco", "wearer_name": "Damiano"}) is None
+
+
+def test_owner_talking_to_themselves_is_not_a_request(heuristic):
+    task = _task({"raw_transcript": "Damiano, remember to buy milk tomorrow", "speaker_role": "user",
+                  "speaker": "Damiano", "speaker_source": "bee_name", "wearer_name": "Damiano"})
+    assert task is not None and task.speaker is None
+
+
+class _FakeExtractor:
+    def __init__(self, result):
+        self.result, self.messages = result, None
+
+    def invoke(self, messages):
+        self.messages = messages
+        return self.result
+
+
+def _llm(monkeypatch, result):
+    from src.core.config import settings
+    from src.core.schemas import ScheduledTaskExtraction
+    import src.pipeline.nodes.scheduler as scheduler
+
+    fake = _FakeExtractor(ScheduledTaskExtraction(**result))
+    monkeypatch.setattr(settings, "mock_ai", False)
+    monkeypatch.setattr(scheduler, "has_active_model_credentials", lambda provider: True)
+    monkeypatch.setattr(scheduler, "_get_scheduled_task_extractor", lambda: fake)
+    return fake
+
+
+def test_llm_sees_the_speaker_and_can_drop_a_contacts_own_plan(monkeypatch):
+    fake = _llm(monkeypatch, {"title": "Call mum", "for_owner": False})
+    assert _task({"raw_transcript": "Remind me to call my mum", "speaker_role": "contact", "speaker": "Marco",
+                  "wearer_name": "Damiano"}) is None
+    system = fake.messages[0].content
+    assert "NOT the device owner" in system and "Marco" in system and "Damiano" in system
+
+
+def test_llm_request_from_an_unidentified_speaker(monkeypatch):
+    fake = _llm(monkeypatch, {"title": "Start the washing machine", "for_owner": True, "requested_by": "Giulia"})
+    task = _task({"raw_transcript": "Damiano, start the washing machine please, Giulia here",
+                  "speaker_role": "unknown", "speaker_source": "untagged", "wearer_name": "Damiano"})
+    assert task.speaker.addressed_to_user and task.speaker.name == "Giulia"
+    assert "not identified" in fake.messages[0].content
+
+
+def test_late_contact_tag_keeps_a_request_and_names_the_asker(orchestrator, store):
+    key = live_source_key("uuid-1", "u11")
+    store.save_planned_task(PlannedTask(id=derived_entity_id(key, "task"), title="Launch the washing machine",
+                                        origin="ambient_voice", source_key=key,
+                                        raw_statement="Damiano pls remember to launch the washing machine",
+                                        speaker=SpeakerAttribution(source="untagged", addressed_to_user=True)))
+    orchestrator.identity = WearerIdentity("Damiano")
+    match = orchestrator.identity.match_tag(person_id=77, name="Giulia", score=0.66)
+    orchestrator.reconcile_speaker(key, match)
+    task = store.get_planned_task(derived_entity_id(key, "task"))
+    assert task.status == "pending"
+    assert task.speaker.addressed_to_user and task.speaker.name == "Giulia" and task.speaker.role == "contact"
+
+
+def test_late_contact_tag_on_an_unflagged_request_keeps_it(orchestrator, store):
+    key = live_source_key("uuid-1", "u12")
+    store.save_planned_task(PlannedTask(id=derived_entity_id(key, "task"), title="Buy bread", origin="ambient_voice",
+                                        source_key=key, raw_statement="Can you buy bread on the way home"))
+    orchestrator.reconcile_speaker(key, orchestrator.identity.match_tag(person_id=77, name="Giulia"))
+    task = store.get_planned_task(derived_entity_id(key, "task"))
+    assert task.status == "pending" and task.speaker.addressed_to_user
+
+
+def test_asked_and_unverified_labels(store):
+    assert speaker_label(SpeakerAttribution(role="contact", name="Giulia", addressed_to_user=True)) == "asked by Giulia"
+    store.save_action(VerifiedAction(id="a9", action_type="door_locked", domain="safety",
+                                     raw_statement="I locked the door", confidence=0.9,
+                                     speaker=SpeakerAttribution(role="unknown", source="untagged")))
+    card = execute_verify_action_status("door", store=store)
+    assert card["spoken_by"] == "unidentified speaker" and "could not confirm" in card["spoken_summary"]
