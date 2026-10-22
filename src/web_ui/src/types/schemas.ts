@@ -19,6 +19,7 @@ export interface VerifiedAction {
   confidence: number;
   elapsed_time_human?: string;
   matched_task_id?: string;
+  session_id?: string | null;
   ingest_source?: IngestSource;
   ingest_run_id?: string | null;
 }
@@ -26,16 +27,52 @@ export interface VerifiedAction {
 export interface PlannedTask {
   id: string;
   title: string;
-  domain: "safety" | "routine" | "work_task";
-  status: "pending" | "completed" | "overdue" | "skipped";
-  scheduled_time?: string;
+  domain: "safety" | "routine" | "work_task" | "personal";
+  status: "pending" | "completed" | "overdue" | "skipped" | "cancelled";
+  scheduled_time?: string | null;
   recurrence: string;
-  verified_action_id?: string;
+  verified_action_id?: string | null;
   created_at: string;
-  completed_at?: string;
+  completed_at?: string | null;
+  origin?: "manual" | "ambient_voice" | "social_commitment";
+  /** Sentence the routine was scheduled from (voice) or the commitment text */
+  raw_statement?: string | null;
+  /** Transcript of the action that completed the routine (GET /api/routines) */
+  completion_statement?: string | null;
+  session_id?: string | null;
   ingest_source?: IngestSource;
   ingest_run_id?: string | null;
   recovered?: boolean;
+}
+
+// Manual curation (docs/next_steps/manual_curation/04): bodies of the PUT routes
+export interface ActionChanges {
+  action_type?: string;
+  domain?: VerifiedAction["domain"];
+}
+
+export interface TaskChanges {
+  title?: string;
+  domain?: PlannedTask["domain"];
+  scheduled_time?: string;
+  recurrence?: "none" | "daily" | "weekdays" | "weekly";
+}
+
+export interface ContactChanges {
+  person_name?: string;
+  company_or_role?: string;
+  contact_info?: string;
+  website_url?: string;
+  key_topics?: string[];
+  location_encountered?: string;
+}
+
+/** GET /api/contacts/{id}/cascade: what deleting a contact also deletes */
+export interface ContactCascade {
+  id: string;
+  name: string;
+  commitments: { id: string; description: string; debtor: "user" | "contact"; status: string }[];
+  tasks: { id: string; title: string }[];
 }
 
 export interface SocialCommitment {

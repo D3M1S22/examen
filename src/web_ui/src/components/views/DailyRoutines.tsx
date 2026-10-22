@@ -1,9 +1,12 @@
 import React, { useState } from "react";
-import { PlannedTask } from "@/types/schemas";
+import { PlannedTask, TaskChanges } from "@/types/schemas";
 import { StatusBadge, DomainBadge } from "../ui/StatusBadge";
 import { RecoveredBadge } from "../ui/RecoveredBadge";
 import { CreateTaskModal } from "../ui/CreateTaskModal";
-import { playAcousticVerificationTone } from "@/utils/audioEffects";
+import { CardActions } from "../ui/CardActions";
+import { ConfirmDialog } from "../ui/ConfirmDialog";
+import { TranscriptExcerpt } from "../ui/TranscriptExcerpt";
+import { excerptLabels } from "@/utils/curation";
 
 interface DailyRoutinesProps {
   routinesData: { tasks: PlannedTask[] } | undefined;
@@ -11,6 +14,7 @@ interface DailyRoutinesProps {
   handleToggleRoutine: (task: PlannedTask) => void;
   handleAddRoutine: (title: string, domain: string, scheduled_time: string, recurrence?: string) => Promise<void>;
   handleDeleteRoutine?: (taskId: string) => Promise<void>;
+  handleEditRoutine?: (taskId: string, changes: TaskChanges) => Promise<void>;
 }
 
 export function DailyRoutines({
@@ -19,15 +23,17 @@ export function DailyRoutines({
   handleToggleRoutine,
   handleAddRoutine,
   handleDeleteRoutine,
+  handleEditRoutine,
 }: DailyRoutinesProps) {
   const [statusFilter, setStatusFilter] = useState<"ALL" | "PENDING" | "COMPLETED">("ALL");
   const [domainFilter, setDomainFilter] = useState<string>("ALL");
   const [searchQuery, setSearchQuery] = useState("");
   const [showAddModal, setShowAddModal] = useState(false);
-  const [activeAudioIndex, setActiveAudioIndex] = useState<number | null>(null);
+  const [editingTask, setEditingTask] = useState<PlannedTask | null>(null);
+  const [deletingTask, setDeletingTask] = useState<PlannedTask | null>(null);
 
   // Dynamic Telemetry State
-  const sensorMesh = statusData?.telemetry?.sensor_mesh || "ACOUSTIC INGESTION: ACTIVE";
+  const sensorMesh = statusData?.telemetry?.sensor_mesh || "BEE TRANSCRIPTS";
   const latencyMetrics = statusData?.telemetry?.latency;
   const avgLatency = latencyMetrics?.average_ms
     ? `${latencyMetrics.average_ms}MS (AVG)`
@@ -64,12 +70,6 @@ export function DailyRoutines({
     return matchesStatus && matchesDomain && matchesSearch;
   });
 
-  const handleSimulateCheck = (idx: number) => {
-    setActiveAudioIndex(idx);
-    playAcousticVerificationTone();
-    setTimeout(() => setActiveAudioIndex(null), 1200);
-  };
-
   return (
     <div className="space-y-space-lg animate-in fade-in max-w-[1300px] mx-auto relative">
       {/* ADD ROUTINE MODAL (Clean fixed viewport positioning) */}
@@ -80,6 +80,49 @@ export function DailyRoutines({
           await handleAddRoutine(title, domain, scheduledTime, recurrence);
         }}
       />
+
+      {/* EDIT ROUTINE MODAL */}
+      {handleEditRoutine && (
+        <CreateTaskModal
+          mode="edit"
+          isOpen={!!editingTask}
+          initial={
+            editingTask
+              ? {
+                  title: editingTask.title,
+                  domain: editingTask.domain,
+                  scheduledTime: editingTask.scheduled_time || "",
+                  recurrence: editingTask.recurrence || "none",
+                }
+              : undefined
+          }
+          onClose={() => setEditingTask(null)}
+          onSubmit={async (title, domain, scheduledTime, recurrence) => {
+            if (!editingTask) return;
+            await handleEditRoutine(editingTask.id, {
+              title,
+              domain: domain as TaskChanges["domain"],
+              scheduled_time: scheduledTime,
+              recurrence: recurrence as TaskChanges["recurrence"],
+            });
+          }}
+        />
+      )}
+
+      {handleDeleteRoutine && (
+        <ConfirmDialog
+          isOpen={!!deletingTask}
+          title={`Delete "${deletingTask?.title || ""}"?`}
+          body="The routine is removed from your checklist."
+          consequences={
+            deletingTask?.origin === "social_commitment"
+              ? "The commitment it was scheduled from stays open in the Social Rolodex."
+              : undefined
+          }
+          onConfirm={() => handleDeleteRoutine((deletingTask as PlannedTask).id)}
+          onClose={() => setDeletingTask(null)}
+        />
+      )}
 
       {/* Screen Header Banner */}
       <div className="card-elevated p-space-xl flex flex-col md:flex-row justify-between items-start md:items-center gap-space-lg mb-space-lg bg-surface-container-low border-surface-container-highest">
@@ -92,7 +135,7 @@ export function DailyRoutines({
             Passive Routine Tracking & Domestic Safety Checklist
           </h2>
           <p className="font-sans text-body-md text-secondary leading-relaxed max-w-3xl pr-4">
-            EXAMEN passively monitors recurring household routines, appliance disconnects, and perimeter closures without requiring manual checkmarks. Acoustic anchors registered by the Bee wearable evaluate completion states in real-time.
+            EXAMEN passively monitors recurring household routines, appliance disconnects, and perimeter closures without requiring manual checkmarks. When you mention a completed check near the Bee, its transcript closes the matching routine; each card shows the words it came from.
           </p>
         </div>
         <div className="shrink-0 flex flex-col items-end gap-3 self-center md:self-auto mt-4 md:mt-0">
@@ -182,7 +225,7 @@ export function DailyRoutines({
               <span className="text-amber-400 text-lg">➕</span>
             </div>
             <div className="font-sans text-body-xs text-secondary leading-relaxed mb-4">
-              Track recurring mechanical closures via acoustic resonance.
+              Track recurring checks closed by what you say.
             </div>
           </div>
           <button
@@ -327,7 +370,6 @@ export function DailyRoutines({
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-space-lg">
           {filteredTasks.map((task, idx) => {
             const isCompleted = task.status === "completed";
-            const isAudioActive = activeAudioIndex === idx;
 
             return (
               <div
@@ -393,86 +435,33 @@ export function DailyRoutines({
                   </button>
                 </div>
 
-                <p className="font-sans text-body-sm text-secondary mb-6 leading-relaxed">
-                  {isCompleted
-                    ? `Passive acoustic verification completed at ${task.completed_at ? task.completed_at.split("T")[1]?.substring(0, 8) : "nominal time"}. Resonance signature locked.`
-                    : `Passively monitoring environmental acoustic signatures for domain: ${task.domain}. Waiting for closure latch.`}
-                </p>
-
-                {/* Waveform Acoustic Anchor Box */}
-                <div
-                  className={`border rounded-xl p-4 mb-6 transition-all ${
-                    isCompleted
-                      ? "bg-[#0b0f12] border-emerald-900/40"
-                      : "bg-[#0c0d10] border-surface-container-highest/60"
-                  }`}
-                >
-                  <div className="flex items-center justify-between mb-3">
-                    <div className="font-mono text-[9px] text-secondary uppercase tracking-widest flex items-center gap-2">
-                      <span
-                        className={`w-1.5 h-1.5 rounded-full ${
-                          isCompleted ? "bg-emerald-400" : "bg-amber-400 animate-pulse"
-                        }`}
-                      />
-                      <span>
-                        {isCompleted ? "ACOUSTIC ANCHOR REGISTERED" : "ACOUSTIC SENSING ARMED"}
-                      </span>
+                {/* Transcript excerpts: where the routine came from and what completed it */}
+                {(() => {
+                  const excerpts = excerptLabels(task);
+                  if (excerpts.length === 0) {
+                    return (
+                      <p className="font-sans text-body-sm text-secondary mb-6">
+                        Created manually{task.created_at ? ` · ${task.created_at.split("T")[0]}` : ""}
+                      </p>
+                    );
+                  }
+                  return (
+                    <div className="space-y-3 mb-6">
+                      {excerpts.map((ex) => (
+                        <TranscriptExcerpt key={ex.label} label={ex.label} text={ex.text} meta={ex.meta} />
+                      ))}
                     </div>
-                    <div className="font-mono text-[9px] text-secondary uppercase tracking-widest">
-                      {isCompleted ? "99.4% CONFIDENCE" : "CONTINUOUS SCAN"}
-                    </div>
-                  </div>
-
-                  {/* SVG Waveform Simulation */}
-                  <div className="h-9 flex items-center">
-                    <svg
-                      width="100%"
-                      height="36"
-                      viewBox="0 0 400 36"
-                      preserveAspectRatio="none"
-                      className={`transition-colors ${
-                        isCompleted
-                          ? "text-emerald-400"
-                          : isAudioActive
-                          ? "text-amber-400"
-                          : "text-zinc-600"
-                      }`}
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="1.5"
-                    >
-                      {isCompleted ? (
-                        <path d="M0,18 L140,18 L155,6 L170,30 L185,2 L200,24 L215,18 L400,18" />
-                      ) : isAudioActive ? (
-                        <path d="M0,18 L120,18 L135,2 L150,34 L165,6 L180,30 L195,18 L400,18" />
-                      ) : (
-                        <path d="M0,18 L180,18 L190,14 L200,22 L210,18 L400,18" strokeDasharray="3 3" />
-                      )}
-                    </svg>
-                  </div>
-                </div>
+                  );
+                })()}
 
                 {/* Footer Controls */}
                 <div className="mt-auto flex items-center justify-between font-mono text-[10px] text-secondary tracking-widest uppercase border-t border-white/5 pt-4">
                   <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => handleSimulateCheck(idx)}
-                      className="px-3 py-1.5 rounded-md bg-white/5 hover:bg-white/10 text-primary transition-colors flex items-center gap-1.5"
-                      title="Play simulated acoustic verification audio"
-                    >
-                      <span>🔊</span>
-                      <span>Test Chime</span>
-                    </button>
-                    {handleDeleteRoutine && (
-                      <button
-                        onClick={() => handleDeleteRoutine(task.id)}
-                        className="p-1.5 rounded-md hover:bg-rose-950/60 text-secondary hover:text-rose-400 transition-colors"
-                        title="Delete routine"
-                        aria-label="Delete routine"
-                      >
-                        🗑️
-                      </button>
-                    )}
+                    <CardActions
+                      noun="routine"
+                      onEdit={handleEditRoutine ? () => setEditingTask(task) : undefined}
+                      onDelete={handleDeleteRoutine ? () => setDeletingTask(task) : undefined}
+                    />
                   </div>
 
                   <button

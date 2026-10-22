@@ -10,10 +10,12 @@ import {
 import { getApiBaseUrl } from "@/utils/api";
 import { speakAlexaReassurance } from "@/utils/audioEffects";
 import { RecoveredBadge } from "./RecoveredBadge";
+import { ConfirmDialog } from "./ConfirmDialog";
+import { formatCascade } from "@/utils/curation";
 
 const fetcher = (url: string) => fetch(`${getApiBaseUrl()}${url}`).then((res) => res.json());
 
-export type EventAction = "pause" | "resume" | "conclude" | "split" | "merge";
+export type EventAction = "pause" | "resume" | "conclude" | "split" | "merge" | "delete";
 
 interface EventCardProps {
   event: EventSummary;
@@ -140,6 +142,7 @@ export function EventCard({
   const [expanded, setExpanded] = useState(defaultExpanded);
   const [showLog, setShowLog] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   const isOpen = event.status === "active" || event.status === "paused" || event.status === "finalizing";
   const { data: detail } = useSWR<EventDetail>(
@@ -377,6 +380,14 @@ export function EventCard({
             🔊 ALEXA RECAP
           </button>
         )}
+        <button
+          disabled={busy !== null}
+          onClick={() => setConfirmDelete(true)}
+          className="px-3 py-1.5 rounded-lg border border-rose-500/30 hover:bg-rose-950/40 text-rose-300 font-mono text-[9px] tracking-widest uppercase disabled:opacity-40"
+          title="Delete this event, its transcript log and its briefings"
+        >
+          {busy === "delete" ? "…" : "🗑️ DELETE"}
+        </button>
         {event.last_transition && !showLog && (
           <span className="font-mono text-[9px] text-zinc-500 ml-auto truncate max-w-[420px]" title={event.last_transition.detail || ""}>
             LAST: {event.last_transition.rule} · {event.last_transition.reason.replace(/_/g, " ")} · {hhmm(event.last_transition.at)}
@@ -385,6 +396,15 @@ export function EventCard({
       </div>
 
       {showLog && <DecisionLog transitions={detail?.transitions || []} />}
+
+      <ConfirmDialog
+        isOpen={confirmDelete}
+        title={`Delete "${title || "this event"}"?`}
+        body="Its transcript log and briefings are deleted. The actions, contacts and routines found in it are kept."
+        consequences={formatCascade({ briefings: segments.filter((s) => s.briefing_id).length + (event.final_briefing_id ? 1 : 0) })}
+        onConfirm={() => run("delete")}
+        onClose={() => setConfirmDelete(false)}
+      />
     </div>
   );
 }

@@ -1,6 +1,6 @@
 # ✏️ Manual Curation — 03: Service Layer, REST API and MCP
 
-> **Document Status:** Planned
+> **Document Status:** Implemented 2026-10-22 (deviations in [05](05_implementation_plan_and_testing.md) §0)
 > **Related:** [02_data_layer.md](02_data_layer.md) · [04_ui.md](04_ui.md) · AGENTS.MD §F2 (tenancy), §F3 (logging)
 
 ---
@@ -17,7 +17,7 @@ One module owns every curation operation; REST routes and MCP tools only adapt i
 | `execute_delete_task(task_id, confirm)` | `delete_planned_task` | `routine_deleted` |
 | `execute_update_contact(contact_id, changes)` | `update_social_contact`; if `anchors_changed`, schedule enrichment (§2) | `contact_updated` |
 | `execute_delete_contact(contact_id, confirm)` | `delete_social_contact`, then `engine.unlink_micro_event(session_id, "social_contact", id)` | `contact_deleted` |
-| `execute_delete_event(session_id, confirm)` | `engine.delete(session_id)` | `event_deleted` (forwarded by the engine runtime) |
+| `execute_delete_event(session_id, confirm)` | `engine.delete(session_id)` | `event_deleted` (broadcast here, see [05](05_implementation_plan_and_testing.md) §0 deviation 1) |
 
 Rules:
 - **Exact ids only.** No function resolves a name or a fuzzy query. Contacts are no exception, even though `get_social_contact` accepts names: the curation path calls it only with an id, and returns 404 otherwise.

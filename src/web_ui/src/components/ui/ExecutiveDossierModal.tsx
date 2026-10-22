@@ -16,6 +16,13 @@ interface ExecutiveDossierModalProps {
   onClose: () => void;
   onEnrich?: (contactId: string) => Promise<void>;
   onToggleCommitment?: (commitmentId: string, action: "fulfill" | "cancel") => Promise<void>;
+  /** Manual curation (docs/next_steps/manual_curation/04 §4) */
+  onEdit?: (contact: SocialEntity) => void;
+  onDelete?: (contact: SocialEntity) => void;
+  /** A web search re-run after an edit is in progress for this contact */
+  reSearching?: boolean;
+  /** Why the last re-run found nothing (insufficient_anchors | error) */
+  enrichFailure?: string | null;
 }
 
 export function ExecutiveDossierModal({
@@ -24,6 +31,10 @@ export function ExecutiveDossierModal({
   onClose,
   onEnrich,
   onToggleCommitment,
+  onEdit,
+  onDelete,
+  reSearching = false,
+  enrichFailure = null,
 }: ExecutiveDossierModalProps) {
   const [mounted, setMounted] = useState(false);
   const [isEnriching, setIsEnriching] = useState(false);
@@ -436,6 +447,19 @@ export function ExecutiveDossierModal({
         {/* Footer Actions */}
         <div className="bg-[#0e1014] p-4 sm:p-6 border-t border-white/5 flex flex-wrap items-center justify-between gap-3">
           <div className="text-zinc-400 font-mono text-[9px] tracking-widest uppercase">
+            {reSearching && (
+              <span className="text-amber-300 font-bold flex items-center gap-2">
+                <span className="w-3 h-3 border-2 border-amber-400 border-t-transparent rounded-full animate-spin" />
+                Re-searching the web with the new details…
+              </span>
+            )}
+            {!reSearching && enrichFailure && (
+              <span className="text-rose-300 font-bold normal-case tracking-normal font-sans text-[11px]">
+                {enrichFailure === "insufficient_anchors"
+                  ? "Web search skipped: add the company or role to tell this person apart."
+                  : "The web search failed; you can run it again."}
+              </span>
+            )}
             {enrichSuccess && (
               <span className="text-emerald-400 font-bold">✅ Enrichment updated successfully!</span>
             )}
@@ -444,7 +468,25 @@ export function ExecutiveDossierModal({
             )}
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
+            {onEdit && (
+              <button
+                onClick={() => onEdit(contact)}
+                className="px-4 py-2.5 rounded-lg border border-[#2b303c] bg-zinc-800 hover:bg-zinc-700 text-white font-mono text-[10px] tracking-widest uppercase font-bold flex items-center gap-2 transition-colors cursor-pointer"
+              >
+                <span>✏️</span>
+                <span>Edit</span>
+              </button>
+            )}
+            {onDelete && (
+              <button
+                onClick={() => onDelete(contact)}
+                className="px-4 py-2.5 rounded-lg border border-rose-500/40 bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 font-mono text-[10px] tracking-widest uppercase font-bold flex items-center gap-2 transition-colors cursor-pointer"
+              >
+                <span>🗑️</span>
+                <span>Delete</span>
+              </button>
+            )}
             <button
               onClick={handleDownload}
               className="px-4 py-2.5 rounded-lg border border-cyan-500/40 bg-cyan-950/60 hover:bg-cyan-900 text-cyan-300 font-mono text-[10px] tracking-widest uppercase font-bold flex items-center gap-2 transition-colors cursor-pointer"
@@ -464,7 +506,7 @@ export function ExecutiveDossierModal({
             {onEnrich && (
               <button
                 onClick={handleRunEnrich}
-                disabled={isEnriching}
+                disabled={isEnriching || reSearching}
                 className="px-5 py-2.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/40 text-amber-300 font-mono text-[10px] tracking-widest uppercase font-bold flex items-center gap-2 transition-all cursor-pointer disabled:opacity-50"
               >
                 {isEnriching ? (

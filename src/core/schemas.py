@@ -3,7 +3,7 @@ import re
 import uuid
 from datetime import datetime
 from typing import Annotated, Any, Dict, List, Literal, Optional, Union
-from pydantic import BaseModel, Field, PrivateAttr, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator
 from typing_extensions import TypedDict
 
 
@@ -820,3 +820,98 @@ class BackfillRun(BaseModel):
     @property
     def is_terminal(self) -> bool:
         return self.status in ("completed", "partial", "failed", "cancelled")
+
+
+# ============================================================================
+# Manual curation: user edits of extracted results (docs/next_steps/manual_curation/02 §5)
+# ============================================================================
+class ActionChanges(BaseModel):
+    """Editable fields of a verified action; ``raw_statement`` is the evidence and stays read-only."""
+    model_config = ConfigDict(extra="forbid")
+
+    action_type: Optional[str] = Field(default=None, min_length=1, max_length=80)
+    domain: Optional[Literal["safety", "routine", "work_task"]] = None
+
+
+class TaskChanges(BaseModel):
+    """Editable fields of a planned task (``status`` kept for the existing PUT /api/routines clients)."""
+    model_config = ConfigDict(extra="forbid")
+
+    title: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    domain: Optional[Literal["safety", "routine", "work_task", "personal"]] = None
+    scheduled_time: Optional[str] = Field(default=None, max_length=40)
+    recurrence: Optional[Literal["none", "daily", "weekdays", "weekly"]] = None
+    status: Optional[Literal["pending", "completed", "overdue", "skipped", "cancelled"]] = None
+
+    @field_validator("scheduled_time")
+    @classmethod
+    def _schedule(cls, value: Optional[str]) -> Optional[str]:
+        if value is None or not value.strip():
+            return value
+        value = value.strip()
+        if re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", value):
+            return value
+        try:
+            datetime.fromisoformat(value)
+        except ValueError as e:
+            raise ValueError("scheduled_time must be HH:MM or an ISO timestamp") from e
+        return value
+
+
+class ContactChanges(BaseModel):
+    """Editable fields of a contact. Omitted = unchanged; an empty string clears an optional field."""
+    model_config = ConfigDict(extra="forbid")
+
+    person_name: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    company_or_role: Optional[str] = Field(default=None, max_length=200)
+    contact_info: Optional[str] = Field(default=None, max_length=500)
+    website_url: Optional[str] = Field(default=None, max_length=500)
+    key_topics: Optional[List[str]] = Field(default=None, max_length=20)
+    location_encountered: Optional[str] = Field(default=None, max_length=200)
+
+    @field_validator("person_name")
+    @classmethod
+    def _name(cls, value: Optional[str]) -> Optional[str]:
+        if value is not None and not value.strip():
+            raise ValueError("person_name cannot be empty")
+        return value.strip() if value is not None else None
+
+    @field_validator("website_url")
+    @classmethod
+    def _url(cls, value: Optional[str]) -> Optional[str]:
+        if value and not re.match(r"^https?://[^\s/$.?#].[^\s]*$", value.strip(), re.I):
+            raise ValueError("website_url must be an http(s) URL")
+        return value.strip() if value is not None else None
+
+    @field_validator("key_topics")
+    @classmethod
+    def _topics(cls, value: Optional[List[str]]) -> Optional[List[str]]:
+        if value is None:
+            return None
+        return [t.strip()[:60] for t in value if t and t.strip()]
+
+
+class RevokeResult(BaseModel):
+    action: VerifiedAction
+    reopened_task_id: Optional[str] = None
+
+
+class ContactUpdate(BaseModel):
+    contact: SocialEntity
+    anchors_changed: bool = False
+    renamed_from: Optional[str] = None
+
+
+class ContactDeletion(BaseModel):
+    contact_id: str
+    name: str
+    session_id: Optional[str] = None
+    commitments_deleted: int = 0
+    tasks_deleted: int = 0
+
+
+class EventDeletion(BaseModel):
+    session_id: str
+    title: Optional[str] = None
+    briefings_deleted: int = 0
+    chunks_deleted: int = 0

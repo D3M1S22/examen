@@ -148,6 +148,37 @@ def test_contact_name_guard_keeps_one_contact(store):
     assert store.get_social_contact("Marco Rossi") is None
 
 
+def test_curation_rename_moves_name_and_commitment_guards(store):
+    from src.core.schemas import ContactChanges
+    from src.core.storage import rules
+
+    cid = store.save_social_contact(SocialEntity(person_name="Marco Rosi", commitments=[
+        SocialCommitment(contact_name="Marco Rosi", debtor="contact", description="Share the docs")]))
+    old_key = rules.commitment_key("Marco Rosi", "Share the docs", "contact")
+    new_key = rules.commitment_key("Marco Rossi", "Share the docs", "contact")
+    assert store._get(f"COMMITKEY#{old_key}") is not None
+
+    store.update_social_contact(cid, ContactChanges(person_name="Marco Rossi"))
+    assert store._get("CONTACTNAME#marco rosi") is None
+    assert store._get("CONTACTNAME#marco rossi")["contact_id"] == cid
+    assert store._get(f"COMMITKEY#{old_key}") is None
+    commitment_id = store._get(f"COMMITKEY#{new_key}")["commitment_id"]
+    assert store.get_social_commitment(commitment_id).contact_name == "Marco Rossi"
+
+    store.delete_social_contact(cid)
+    assert store._get("CONTACTNAME#marco rossi") is None and store._get(f"COMMITKEY#{new_key}") is None
+
+
+def test_curation_delete_event_removes_chunk_pointers(store):
+    now = datetime.now().isoformat()
+    store.save_session_dossier(SessionDossier(session_id="ev-x", start_time=now, last_updated_at=now))
+    store.append_session_chunk(UtteranceChunk(chunk_id="c1", text="Raft", timestamp=now), "ev-x")
+    store.patch_utterance_speaker("c1", "Prof")
+    store.delete_event("ev-x")
+    assert store._get("CHUNKREF#c1") is None and store._get("DIAR#c1") is None
+    assert [i["sk"] for i in store.table.query("pk", store.user_id)] == []
+
+
 def test_concurrent_commitment_creation_adopts_the_winner(store, monkeypatch):
     winner = store.save_social_commitment(SocialCommitment(contact_name="Ada", debtor="user",
                                                            description="send the slides"))

@@ -20,19 +20,26 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from src.core.schemas import (
+    ActionChanges,
     BackfillRun,
     BriefingReport,
+    ContactChanges,
+    ContactDeletion,
+    ContactUpdate,
     CoverageInterval,
+    EventDeletion,
     MicroEventRef,
     PlannedTask,
     SessionDossier,
     SocialCommitment,
     SocialEntity,
     SocialWebProfile,
+    RevokeResult,
     UtteranceChunk,
     VerifiedAction,
 )
 from src.core.storage import rules
+from src.core.storage.errors import UniqueConflict
 from src.core.storage.base import AbstractContextStore
 from src.core.storage.dynamo_io import DynamoTable, Expr, is_conditional_failure, pack
 from src.core.storage.dynamo_schema import INDEX, USER, key_part, table_name
@@ -339,6 +346,64 @@ class DynamoContextStore(AbstractContextStore):
                 break
         return out
 
+    def update_action(self, action_id: str, changes: ActionChanges) -> Optional[VerifiedAction]:
+        fields: Dict[str, Any] = {}
+        if changes.action_type is not None:
+            title = rules.normalize_action_type(changes.action_type)
+            if not title:
+                raise ValueError("action title cannot be empty")
+            fields["action_type"] = title
+        if changes.domain is not None:
+            fields["domain"] = changes.domain
+        if not fields:
+            action = self.get_verified_action(action_id)
+            return action if action and not action.is_revoked else None
+        e = Expr()
+        try:
+            self.table.update(self._key(f"ACTION#{action_id}"), set_=fields, expr=e,
+                              condition=f"attribute_exists(sk) AND {e.name('is_revoked')} = {e.value(0)}")
+        except Exception as err:
+            if is_conditional_failure(err):
+                return None
+            raise
+        return self.get_verified_action(action_id)
+
+    def revoke_action(self, action_id: str) -> Optional[RevokeResult]:
+        action = self.get_verified_action(action_id)
+        if action is None or action.is_revoked:
+            return None
+        e = Expr()
+        revoke = self.table.tx_update(self._key(f"ACTION#{action_id}"), f"SET {e.name('is_revoked')} = {e.value(1)}",
+                                      e, condition=f"{e.name('is_revoked')} = {e.value(0)}")
+        ops = [revoke]
+        if action.matched_task_id:
+            t = Expr()
+            ops.append(self.table.tx_update(
+                self._key(f"TASK#{action.matched_task_id}"),
+                f"SET {t.name('status')} = {t.value('pending')} REMOVE {t.name('completed_at')}, "
+                f"{t.name('verified_action_id')}", t,
+                condition=f"{t.name('verified_action_id')} = {t.value(action_id)} AND "
+                          f"{t.name('status')} = {t.value('completed')}",
+            ))
+        reopened = action.matched_task_id if len(ops) > 1 else None
+        try:
+            self.table.transact(ops)
+        except Exception as err:
+            if not is_conditional_failure(err):
+                raise
+            if len(ops) == 1:
+                return None  # revoked concurrently
+            # The task was completed by something else meanwhile: revoke the action alone
+            reopened = None
+            try:
+                self.table.transact([revoke])
+            except Exception as err2:
+                if is_conditional_failure(err2):
+                    return None
+                raise
+        action.is_revoked = True
+        return RevokeResult(action=action, reopened_task_id=reopened)
+
     # ------------------------------------------------------------------
     # Social recall
     # ------------------------------------------------------------------
@@ -579,6 +644,109 @@ class DynamoContextStore(AbstractContextStore):
             except Exception:
                 pass
         return True
+
+    def update_social_contact(self, contact_id: str, changes: ContactChanges) -> Optional[ContactUpdate]:
+        item = self._get(f"CONTACT#{contact_id}")
+        if item is None:
+            return None
+        data = changes.model_dump(exclude_unset=True)
+        old_name = item["person_name"]
+        new_name = data.get("person_name") or old_name
+        old_key, new_key = rules.contact_name_key(old_name), rules.contact_name_key(new_name)
+        renamed = old_key != new_key
+        if renamed:
+            # Claim the new name first: a guard owned by another contact refuses the rename (D5)
+            e = Expr()
+            try:
+                self.table.put(self._item(f"CONTACTNAME#{new_key}", {"contact_id": contact_id}),
+                               condition=f"attribute_not_exists(sk) OR {e.name('contact_id')} = {e.value(contact_id)}",
+                               expr=e)
+            except Exception as err:
+                if is_conditional_failure(err):
+                    raise UniqueConflict("Another contact already has this name") from err
+                raise
+        anchors_changed = any(
+            field in data and rules.contact_name_key(data[field]) != rules.contact_name_key(item.get(field))
+            for field in rules.CONTACT_ANCHORS
+        )
+        sets: Dict[str, Any] = {}
+        for field in ("person_name", "company_or_role", "contact_info", "website_url", "location_encountered"):
+            if field in data:
+                sets[field] = (data[field] or "").strip() or None
+        if "key_topics" in data:
+            sets["key_topics_json"] = json.dumps(data["key_topics"] or [], ensure_ascii=False)
+        if anchors_changed:
+            sets["web_profile_json"] = None  # the profile described the person the old anchors found
+            if "website_url" not in data:
+                sets["website_url"] = None
+        if sets:
+            self._update_existing(f"CONTACT#{contact_id}", sets)
+        if renamed:
+            e = Expr()
+            try:
+                self.table.delete(self._key(f"CONTACTNAME#{old_key}"),
+                                  condition=f"{e.name('contact_id')} = {e.value(contact_id)}", expr=e)
+            except Exception as err:
+                if not is_conditional_failure(err):
+                    raise
+            self._rename_commitments(old_name, new_name)
+            payload = [c.model_dump() for c in self.list_social_commitments(contact_name=new_name, limit=10_000)]
+            self._update_existing(f"CONTACT#{contact_id}",
+                                  {"commitments_json": json.dumps(payload, ensure_ascii=False)})
+        return ContactUpdate(contact=self._contact_model(self._get(f"CONTACT#{contact_id}")),
+                             anchors_changed=anchors_changed, renamed_from=old_name if renamed else None)
+
+    def _rename_commitments(self, old_name: str, new_name: str) -> None:
+        """Moves each commitment and its dedup guard to the new contact name. Idempotent per commitment;
+        one already filed under the new name with the same text wins, the moving duplicate is dropped."""
+        for com in self.list_social_commitments(contact_name=old_name, limit=10_000):
+            row = self._get(f"COMMIT#{com.id}")
+            if row is None:
+                continue
+            old_key = rules.commitment_key(com.contact_name, com.description, com.debtor)
+            new_key = rules.commitment_key(new_name, com.description, com.debtor)
+            e, d = Expr(), Expr()
+            ops = [
+                self.table.tx_put({**row, "contact_name": new_name}),
+                self.table.tx_put(self._item(f"COMMITKEY#{new_key}", {"commitment_id": com.id}),
+                                  condition=f"attribute_not_exists(sk) OR {e.name('commitment_id')} = {e.value(com.id)}",
+                                  expr=e),
+            ]
+            if old_key != new_key:
+                ops.append(self.table.tx_delete(
+                    self._key(f"COMMITKEY#{old_key}"),
+                    condition=f"attribute_not_exists(sk) OR {d.name('commitment_id')} = {d.value(com.id)}", expr=d))
+            try:
+                self.table.transact(ops)
+            except Exception as err:
+                if not is_conditional_failure(err):
+                    raise
+                self.delete_social_commitment(com.id)
+
+    def delete_social_contact(self, contact_id: str) -> Optional[ContactDeletion]:
+        item = self._get(f"CONTACT#{contact_id}")
+        if item is None:
+            return None
+        name = item["person_name"]
+        name_key = rules.contact_name_key(name)
+        guard = self._get(f"CONTACTNAME#{name_key}") if name_key else None
+        # Commitments are keyed by name: keep them when the name belongs to another contact
+        shared = guard is not None and guard.get("contact_id") != contact_id
+        commitments = [] if shared else rules.contact_cascade(self, name)
+        tasks = 0
+        for com in commitments:
+            if com.auto_scheduled_task_id and self.get_planned_task(com.auto_scheduled_task_id):
+                tasks += 1
+            self.delete_social_commitment(com.id)
+        ops = [self.table.tx_delete(self._key(f"CONTACT#{contact_id}"))]
+        if name_key and not shared:
+            e = Expr()
+            ops.append(self.table.tx_delete(
+                self._key(f"CONTACTNAME#{name_key}"),
+                condition=f"attribute_not_exists(sk) OR {e.name('contact_id')} = {e.value(contact_id)}", expr=e))
+        self.table.transact(ops)
+        return ContactDeletion(contact_id=contact_id, name=name, session_id=item.get("session_id"),
+                               commitments_deleted=len(commitments), tasks_deleted=tasks)
 
     # ------------------------------------------------------------------
     # Topic intelligence
@@ -902,6 +1070,49 @@ class DynamoContextStore(AbstractContextStore):
                 if not is_conditional_failure(err):
                     raise
         raise RuntimeError("micro-event link could not be saved after concurrent updates")
+
+    def unlink_micro_event(self, session_id: str, event_type: str, record_id: str) -> bool:
+        for _ in range(_MAX_RETRIES):
+            item = self._get(f"DOSSIER#{session_id}")
+            if item is None:
+                return False
+            refs = json.loads(item.get("linked_micro_events_json") or "[]")
+            kept = [r for r in refs if not (r.get("event_type") == event_type and r.get("record_id") == record_id)]
+            if len(kept) == len(refs):
+                return False
+            # Dropping the link_versions entry keeps a concurrent engine save from merging the link back
+            added_at = json.loads(item.get("link_versions_json") or "{}")
+            added_at.pop(f"{event_type}#{record_id}", None)
+            version = int(item.get("version") or 0)
+            e = Expr()
+            condition = f"{e.name('version')} = {e.value(version)}" if version else "attribute_not_exists(version)"
+            updated = {**item, "linked_micro_events_json": json.dumps(kept, ensure_ascii=False),
+                       "link_versions_json": json.dumps(added_at), "version": version + 1}
+            try:
+                self._write_dossier(updated, condition, e)
+                return True
+            except Exception as err:
+                if not is_conditional_failure(err):
+                    raise
+        raise RuntimeError("micro-event link could not be removed after concurrent updates")
+
+    def delete_event(self, session_id: str) -> Optional[EventDeletion]:
+        item = self._get(f"DOSSIER#{session_id}")
+        if item is None:
+            return None
+        briefing_ids = {b.id for b in self.list_briefings_for_session(session_id)}
+        if item.get("final_briefing_id"):
+            briefing_ids.add(item["final_briefing_id"])
+        briefings = sum(1 for bid in briefing_ids if bid and self.delete_topic_briefing(bid))
+        rows = [r for r in self._prefix(self._chunk_prefix(session_id), attributes=["sk", "chunk_id", "session_id"])
+                if r.get("session_id") == session_id]
+        doomed = [r["sk"] for r in rows]
+        for row in rows:
+            doomed += [f"CHUNKREF#{row['chunk_id']}", f"DIAR#{row['chunk_id']}"]
+        self._delete_keys(doomed)
+        self.table.delete(self._key(f"DOSSIER#{session_id}"))
+        return EventDeletion(session_id=session_id, title=item.get("title"), briefings_deleted=briefings,
+                             chunks_deleted=len(rows))
 
     def conclude_session_dossier(
         self, session_id: str, briefing_report_id: Optional[str] = None

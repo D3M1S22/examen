@@ -1,6 +1,6 @@
 # ✏️ Manual Curation — Overview
 
-> **Document Status:** Planned (decisions D1–D4 confirmed 2026-10-22, D5–D8 proposed by design)
+> **Document Status:** Implemented 2026-10-22 (decisions D1–D8; status and deviations in [05](05_implementation_plan_and_testing.md) §0)
 > **Related:** [deep_topic_event_engine/](../deep_topic_event_engine/00_overview.md) (events, merge/split), [06_social_web_enrichment.md](../06_social_web_enrichment.md) (web profiler), [historical_backfill/](../historical_backfill/00_overview.md) (re-analysis of chunks), [dynamodb_storage/](../dynamodb_storage/00_overview.md) (second store backend)
 > **Audience:** EXAMEN engineers implementing edit and delete of extracted results, in the dashboard and over MCP
 
@@ -52,10 +52,10 @@ Two UI issues ship with the same work.
 | **D2** | Deleting a contact **cascades**: the contact, its commitments, and the tasks scheduled from those commitments. | Confirmed |
 | **D3** | When a contact's anchors change (name, company or role), the old web profile is dropped and enrichment **re-runs automatically** in the background; the result arrives over SSE. | Confirmed |
 | **D4** | Destructive MCP tools take **exact ids only** and use a **two-step confirmation**: without `confirm=true` they return a preview of what would be deleted; with it they delete. They carry `destructiveHint`. | Confirmed |
-| **D5** | Renaming a contact to the name of another existing contact is refused with **409** (`UniqueConflict`). No silent merge. | Proposed |
-| **D6** | Deleting an event removes its dossier, its chunk log and its briefings. The actions, contacts and tasks linked to it **stay**: they are results in their own right. | Proposed |
-| **D7** | Any change to an event's micro-event links goes through the **event engine** (`unlink_micro_event`), never only through the store: the engine's in-memory copy would otherwise add the link back ([01](01_current_state.md) §5b). | Proposed |
-| **D8** | Every delete in the dashboard asks for confirmation and shows the cascade ("also deletes 2 commitments and 1 routine"). The routine delete, which today has no confirmation, is aligned. | Proposed |
+| **D5** | Renaming a contact to the name of another existing contact is refused with **409** (`UniqueConflict`). No silent merge. | Implemented |
+| **D6** | Deleting an event removes its dossier, its chunk log and its briefings. The actions, contacts and tasks linked to it **stay**: they are results in their own right. | Implemented |
+| **D7** | Any change to an event's micro-event links goes through the **event engine** (`unlink_micro_event`), never only through the store: the engine's in-memory copy would otherwise add the link back ([01](01_current_state.md) §5b). | Implemented |
+| **D8** | Every delete in the dashboard asks for confirmation and shows the cascade ("also deletes 2 commitments and 1 routine"). The routine delete, which today has no confirmation, is aligned. | Implemented |
 
 ---
 

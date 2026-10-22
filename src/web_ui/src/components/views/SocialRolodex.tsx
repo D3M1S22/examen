@@ -1,15 +1,27 @@
 import React, { useState } from "react";
-import { SocialEntity } from "@/types/schemas";
+import { ContactCascade, ContactChanges, SocialEntity } from "@/types/schemas";
 import { ScreenHeader } from "../ui/ScreenHeader";
 import { StatusBadge } from "../ui/StatusBadge";
 import { ExecutiveDossierModal } from "../ui/ExecutiveDossierModal";
 import { FollowUpModal } from "../ui/FollowUpModal";
+import { EditContactModal } from "../ui/EditContactModal";
+import { ConfirmDialog } from "../ui/ConfirmDialog";
+import { CardActions } from "../ui/CardActions";
+import { formatCascade } from "@/utils/curation";
 
 interface SocialRolodexProps {
   socialData: { contacts: SocialEntity[] } | undefined;
   statusData?: any;
   onEnrichContact?: (contactId: string) => Promise<void>;
   onToggleCommitment?: (commitmentId: string, action: "fulfill" | "cancel") => Promise<void>;
+  // Manual curation (docs/next_steps/manual_curation/04 §4)
+  onEditContact?: (contactId: string, changes: ContactChanges) => Promise<void>;
+  onDeleteContact?: (contact: SocialEntity) => Promise<void>;
+  loadContactCascade?: (contactId: string) => Promise<ContactCascade>;
+  /** Contacts whose web search re-runs after an edit */
+  enrichingContactIds?: Set<string>;
+  /** contact id -> reason of the last failed re-run */
+  enrichFailures?: Record<string, string>;
 }
 
 export function SocialRolodex({
@@ -17,7 +29,31 @@ export function SocialRolodex({
   statusData,
   onEnrichContact,
   onToggleCommitment,
+  onEditContact,
+  onDeleteContact,
+  loadContactCascade,
+  enrichingContactIds,
+  enrichFailures,
 }: SocialRolodexProps) {
+  const [editingContact, setEditingContact] = useState<SocialEntity | null>(null);
+  const [deletingContact, setDeletingContact] = useState<SocialEntity | null>(null);
+  const [cascade, setCascade] = useState<ContactCascade | null>(null);
+  const [cascadeLoading, setCascadeLoading] = useState(false);
+
+  const askDelete = async (contact: SocialEntity) => {
+    setDeletingContact(contact);
+    setCascade(null);
+    if (!loadContactCascade) return;
+    setCascadeLoading(true);
+    try {
+      setCascade(await loadContactCascade(contact.id));
+    } catch {
+      setCascade(null);
+    } finally {
+      setCascadeLoading(false);
+    }
+  };
+
   const [searchQuery, setSearchQuery] = useState("");
   const [activeFilter, setActiveFilter] = useState<string>("ALL");
   // Track the selected contact by id so the open dossier re-renders with fresh SWR data (e.g. after enrichment)
@@ -91,7 +127,37 @@ export function SocialRolodex({
         onClose={() => setSelectedDossierId(null)}
         onEnrich={onEnrichContact}
         onToggleCommitment={onToggleCommitment}
+        onEdit={onEditContact ? (c) => setEditingContact(c) : undefined}
+        onDelete={onDeleteContact ? (c) => askDelete(c) : undefined}
+        reSearching={!!selectedDossierContact && !!enrichingContactIds?.has(selectedDossierContact.id)}
+        enrichFailure={selectedDossierContact ? enrichFailures?.[selectedDossierContact.id] ?? null : null}
       />
+
+      {onEditContact && (
+        <EditContactModal contact={editingContact} onClose={() => setEditingContact(null)} onSubmit={onEditContact} />
+      )}
+
+      {onDeleteContact && (
+        <ConfirmDialog
+          isOpen={!!deletingContact}
+          title={`Delete ${deletingContact?.name || deletingContact?.person_name || "this contact"}?`}
+          body="The contact and its web profile are removed from the Social Rolodex."
+          loading={cascadeLoading}
+          consequences={
+            cascadeLoading
+              ? "Checking commitments…"
+              : cascade
+              ? formatCascade({ commitments: cascade.commitments.length, tasks: cascade.tasks.length })
+              : undefined
+          }
+          onConfirm={async () => {
+            const target = deletingContact as SocialEntity;
+            await onDeleteContact(target);
+            if (selectedDossierId === target.id) setSelectedDossierId(null);
+          }}
+          onClose={() => setDeletingContact(null)}
+        />
+      )}
 
       {/* Follow-Up Composer Modal */}
       <FollowUpModal
@@ -378,6 +444,11 @@ export function SocialRolodex({
 
                   {/* Top Action Buttons */}
                   <div className="flex items-center gap-2 self-end md:self-center shrink-0">
+                    <CardActions
+                      noun="contact"
+                      onEdit={onEditContact ? () => setEditingContact(contact) : undefined}
+                      onDelete={onDeleteContact ? () => askDelete(contact) : undefined}
+                    />
                     <button
                       onClick={() => setSelectedFollowUpContact(contact)}
                       className="px-4 py-2 rounded-lg border border-surface-container-highest bg-transparent hover:bg-surface-container text-secondary hover:text-primary font-mono text-[9px] tracking-[0.2em] flex items-center gap-1.5 transition-colors uppercase font-bold"

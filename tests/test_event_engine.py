@@ -460,3 +460,48 @@ class TestStorageAndPipelineIntegration:
         ev = store.get_session_dossier(out.event_id)
         assert [e.event_type for e in ev.linked_micro_events] == ["task_scheduled"]
         assert ev.segments and ev.status == "active"  # linking did not clobber engine fields
+
+
+# ---------------------------------------------------------------------------
+# Manual curation (docs/next_steps/manual_curation/02 §4)
+# ---------------------------------------------------------------------------
+
+class TestManualCuration:
+    def test_unlink_survives_a_save_of_the_current_event(self, engine, store):
+        from src.core.schemas import MicroEventRef
+
+        lecture_block(engine, 0)
+        event_id = engine.current_event_id()
+        for rid in ("a1", "a2"):
+            store.link_micro_event_to_session(event_id, MicroEventRef(
+                event_type="action", record_id=rid, timestamp=to_iso(T0 + 10), headline=rid))
+        engine.record_chunk(chunk(LECTURE, 130))  # the engine merges the persisted links into memory
+        assert {r.record_id for r in engine.current_event().linked_micro_events} == {"a1", "a2"}
+
+        assert engine.unlink_micro_event(event_id, "action", "a1")
+        engine.record_chunk(chunk(LECTURE, 170))  # next engine save of the live event
+        engine.tick(now=T0 + 170 + 300)
+        assert [r.record_id for r in store.get_session_dossier(event_id).linked_micro_events] == ["a2"]
+        assert [r.record_id for r in engine.current_event().linked_micro_events] == ["a2"]
+
+    def test_delete_the_live_event(self, engine, store):
+        lecture_block(engine, 0)
+        event_id = engine.current_event_id()
+        deleted = engine.delete(event_id)
+        assert deleted.chunks_deleted == 3
+        assert engine.current_event() is None and store.get_session_dossier(event_id) is None
+        out = engine.record_chunk(chunk(LECTURE, 200))
+        assert out.event_id and out.event_id != event_id
+
+    def test_delete_drops_queued_jobs(self, engine, store, synth):
+        lecture_block(engine, 0)
+        event_id = engine.current_event_id()
+        engine.tick(now=T0 + 80 + 300)           # segment closed -> one synthesis job queued
+        assert engine.pending_jobs() == 1
+        engine.delete(event_id)
+        assert engine.pending_jobs() == 0
+        assert engine.run_pending_jobs_sync() == 0
+        assert store.get_session_dossier(event_id) is None and synth.calls == []
+
+    def test_delete_unknown_event(self, engine):
+        assert engine.delete("missing") is None

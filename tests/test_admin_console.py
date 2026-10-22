@@ -122,7 +122,9 @@ def test_debug_lines_with_speech_never_reach_the_logs():
 
 def test_no_log_line_interpolates_user_content():
     """Phase 1 exit: names, titles and summaries are never interpolated into log messages."""
-    pattern = re.compile(r"logger\.\w+\(f[\"'].*\{[^}]*(person_name|topic_title|\.title|summary|transcript|\.text)\b")
+    # Manual curation added the fields of actions and commitments (docs/next_steps/manual_curation/05 T-MC-16)
+    pattern = re.compile(r"logger\.\w+\(f[\"'].*\{[^}]*(person_name|topic_title|\.title|summary|transcript|\.text"
+                         r"|raw_statement|action_type|\.description|contact_name)\b")
     offenders = []
     for path in Path("src").rglob("*.py"):
         for n, line in enumerate(path.read_text().splitlines(), 1):

@@ -30,6 +30,7 @@ from typing import Any, Callable, Deque, Dict, List, Optional, Protocol, Set, Tu
 from src.core.config import Settings, settings
 from src.core.schemas import (
     BriefingReport,
+    EventDeletion,
     EventTransitionLog,
     SessionDossier,
     SessionSegment,
@@ -967,6 +968,37 @@ class EventEngine:
             self.store.save_session_dossier(target)
             self._emit("event_merged", {"event": self._summary(target), "merged": [e.session_id for e in events[1:]]})
             return target
+
+    def delete(self, session_id: str) -> Optional[EventDeletion]:
+        """User delete of an event with its chunk log and briefings (manual_curation/02 §4). The live
+        event can be deleted too: the next qualified chunk opens a new one."""
+        self.rehydrate()
+        with self._lock:
+            if self._current is not None and self._current.session_id == session_id:
+                self._reset_continuity_state()
+                self._current = None
+            # Queued jobs of this event would only find a missing dossier: drop them
+            self._jobs = deque(j for j in self._jobs if j.session_id != session_id)
+            self._job_keys = {k for k in self._job_keys if k[1] != session_id}
+            # The caller (curation_tools) broadcasts event_deleted: the engine's SSE listener is only
+            # wired once the dashboard runtime starts, and an MCP call may come first
+            return self.store.delete_event(session_id)
+
+    def unlink_micro_event(self, session_id: str, event_type: str, record_id: str) -> bool:
+        """Removes a micro-event link from the in-memory current event too, otherwise the next save
+        of that event would write the link back (manual_curation/01 §5b)."""
+        with self._lock:
+            if self._current is not None and self._current.session_id == session_id:
+                self._current.linked_micro_events = [
+                    r for r in self._current.linked_micro_events
+                    if not (r.event_type == event_type and r.record_id == record_id)
+                ]
+            removed = self.store.unlink_micro_event(session_id, event_type, record_id)
+            if removed and self._current is not None and self._current.session_id == session_id:
+                persisted = self.store.get_session_dossier(session_id, include_chunks=False)
+                if persisted is not None:
+                    self._current._store_version = persisted._store_version
+            return removed
 
     def _invalidate_final(self, ev: SessionDossier) -> None:
         """Drops a stale consolidated briefing and schedules a new one (doc 03 §7)."""

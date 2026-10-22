@@ -1,23 +1,32 @@
 import React, { useState } from "react";
-import { VerifiedAction } from "@/types/schemas";
+import { ActionChanges, VerifiedAction } from "@/types/schemas";
 import { ScreenHeader } from "../ui/ScreenHeader";
 import { StatusBadge, DomainBadge } from "../ui/StatusBadge";
 import { RecoveredBadge } from "../ui/RecoveredBadge";
 import { CreateActionModal } from "../ui/CreateActionModal";
-import { playAcousticVerificationTone, speakAlexaReassurance } from "@/utils/audioEffects";
+import { EditActionModal } from "../ui/EditActionModal";
+import { ConfirmDialog } from "../ui/ConfirmDialog";
+import { CardActions } from "../ui/CardActions";
+import { TranscriptExcerpt } from "../ui/TranscriptExcerpt";
+import { speakAlexaReassurance } from "@/utils/audioEffects";
+import { displayActionTitle } from "@/utils/curation";
 
 interface PeaceOfMindProps {
   actionsData: { actions: VerifiedAction[] } | undefined;
   statusData?: any;
   onAddAction?: (statement: string) => Promise<void>;
+  onEditAction?: (actionId: string, changes: ActionChanges) => Promise<void>;
+  onDeleteAction?: (action: VerifiedAction) => Promise<void>;
 }
 
-export function PeaceOfMind({ actionsData, statusData, onAddAction }: PeaceOfMindProps) {
+export function PeaceOfMind({ actionsData, statusData, onAddAction, onEditAction, onDeleteAction }: PeaceOfMindProps) {
   const [confidenceFilter, setConfidenceFilter] = useState<"ALL" | "HIGH">("ALL");
   const [domainFilter, setDomainFilter] = useState<string>("ALL");
   const [searchQuery, setSearchQuery] = useState("");
   const [showAddModal, setShowAddModal] = useState(false);
   const [activeAudioId, setActiveAudioId] = useState<string | null>(null);
+  const [editingAction, setEditingAction] = useState<VerifiedAction | null>(null);
+  const [deletingAction, setDeletingAction] = useState<VerifiedAction | null>(null);
 
   // Dynamic Telemetry Data
   const sensorMesh = statusData?.telemetry?.sensor_mesh || "BEE HARDWARE (STANDBY)";
@@ -61,12 +70,6 @@ export function PeaceOfMind({ actionsData, statusData, onAddAction }: PeaceOfMin
     return matchesConfidence && matchesDomain && matchesSearch;
   });
 
-  const handlePlayCitation = (action: VerifiedAction) => {
-    setActiveAudioId(action.id);
-    playAcousticVerificationTone();
-    setTimeout(() => setActiveAudioId(null), 1200);
-  };
-
   const handleEchoReassurance = (action: VerifiedAction) => {
     setActiveAudioId(action.id);
     const text = `EXAMEN Corroboration: Your ${action.action_type.replace(/_/g, " ")} is verified with ${(action.confidence * 100).toFixed(1)} percent certainty.`;
@@ -87,13 +90,31 @@ export function PeaceOfMind({ actionsData, statusData, onAddAction }: PeaceOfMin
         />
       )}
 
+      {onEditAction && (
+        <EditActionModal action={editingAction} onClose={() => setEditingAction(null)} onSubmit={onEditAction} />
+      )}
+      {onDeleteAction && (
+        <ConfirmDialog
+          isOpen={!!deletingAction}
+          title={`Delete "${deletingAction ? displayActionTitle(deletingAction.action_type) : ""}"?`}
+          body="The action disappears from Peace of Mind, the recap and what Alexa answers."
+          consequences={
+            deletingAction?.matched_task_id
+              ? "The routine this action had completed goes back to pending."
+              : undefined
+          }
+          onConfirm={() => onDeleteAction(deletingAction as VerifiedAction)}
+          onClose={() => setDeletingAction(null)}
+        />
+      )}
+
       {/* Screen Header */}
       <ScreenHeader
         directive="SCREEN PURPOSE // ARCHITECTURAL CONTEXT"
-        title="DOMESTIC REASSURANCE & ACOUSTIC PROOF"
+        title="DOMESTIC REASSURANCE & SPOKEN PROOF"
         description={
           <>
-            The Peace of Mind sector captures spontaneous verbal notes, appliance disconnects, and ad-hoc domestic checks without tedious manual app logging. EXAMEN passively corroborates these actions via the Bee wearable's acoustic sensors and provides reassuring voice and visual proof.
+            The Peace of Mind sector captures spontaneous verbal notes, appliance disconnects, and ad-hoc domestic checks without tedious manual app logging. EXAMEN recognises these actions in the transcripts of what you say near the Bee and shows the exact words as proof. Anything extracted by mistake can be corrected or deleted.
           </>
         }
         rightElement={
@@ -309,45 +330,17 @@ export function PeaceOfMind({ actionsData, statusData, onAddAction }: PeaceOfMin
                   <StatusBadge status="verified" label="VERIFIED" />
                 </div>
 
-                {/* Subtitle / Timestamp */}
+                {/* Timestamp */}
                 <div className="flex items-center justify-between font-mono text-[9px] text-secondary tracking-[0.2em] uppercase mb-4">
-                  <span>ACOUSTIC DETENT + VOCAL PROOF</span>
+                  <span>{action.elapsed_time_human || "SPOKEN"}</span>
                   <span className="text-emerald-400 font-bold">
-                    {action.timestamp ? action.timestamp.replace("T", " ").substring(11, 19) : "RECENT"} UTC
+                    {action.timestamp ? action.timestamp.replace("T", " ").substring(11, 19) : "RECENT"}
                   </span>
                 </div>
 
-                {/* Raw Spoken Statement */}
-                <div className="bg-[#121419] border border-surface-container-highest rounded-xl p-4 mb-6">
-                  <div className="font-mono text-[8px] text-secondary tracking-widest uppercase mb-1">
-                    Captured Spoken Utterance
-                  </div>
-                  <p className="font-sans text-body-md text-primary leading-relaxed italic">
-                    "{action.raw_statement}"
-                  </p>
-                </div>
-
-                {/* Simulated Waveform Bar */}
-                <div className="bg-[#101217] border border-surface-container-highest rounded-xl p-3 mb-6">
-                  <div className="flex items-center justify-between font-mono text-[8px] text-secondary uppercase tracking-widest mb-2">
-                    <span className="flex items-center gap-1.5">
-                      <span className={`w-1.5 h-1.5 rounded-full ${isAudioActive ? "bg-amber-400 animate-ping" : "bg-emerald-400"}`}></span>
-                      SPECTRAL ENVELOPE (1.2 kHz - 4.8 kHz)
-                    </span>
-                    <span className="text-emerald-400 font-bold">{(action.confidence * 100).toFixed(1)}% CONFIDENCE</span>
-                  </div>
-                  <svg
-                    width="100%"
-                    height="28"
-                    viewBox="0 0 400 28"
-                    preserveAspectRatio="none"
-                    className={`transition-colors ${isAudioActive ? "text-amber-400" : "text-emerald-400/80"}`}
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.5"
-                  >
-                    <path d="M0,14 L120,14 L135,2 L150,26 L165,6 L180,24 L195,14 L400,14" />
-                  </svg>
+                {/* What was said: the evidence of the action */}
+                <div className="mb-6">
+                  <TranscriptExcerpt label="Transcript" text={action.raw_statement} />
                 </div>
 
                 {/* Bottom Controls */}
@@ -359,19 +352,17 @@ export function PeaceOfMind({ actionsData, statusData, onAddAction }: PeaceOfMin
                     </span>
                   </div>
 
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => handlePlayCitation(action)}
-                      className="px-4 py-2 rounded-lg bg-surface-container-highest text-primary font-mono text-[9px] font-bold tracking-[0.2em] flex items-center gap-1.5 hover:bg-outline-variant transition-colors"
-                      title="Play acoustic verification tone"
-                    >
-                      <span>🔊</span>
-                      <span>PLAY CITATION</span>
-                    </button>
-
+                  <div className="flex items-center gap-2">
+                    <CardActions
+                      noun="action"
+                      onEdit={onEditAction ? () => setEditingAction(action) : undefined}
+                      onDelete={onDeleteAction ? () => setDeletingAction(action) : undefined}
+                    />
                     <button
                       onClick={() => handleEchoReassurance(action)}
-                      className="px-4 py-2 rounded-lg border border-surface-container-highest bg-transparent hover:bg-surface-container text-secondary hover:text-amber-300 font-mono text-[9px] tracking-[0.2em] transition-colors flex items-center gap-1.5"
+                      className={`px-4 py-2 rounded-lg border border-surface-container-highest bg-transparent hover:bg-surface-container hover:text-amber-300 font-mono text-[9px] tracking-[0.2em] transition-colors flex items-center gap-1.5 ${
+                        isAudioActive ? "text-amber-300" : "text-secondary"
+                      }`}
                       title="Speak Alexa voice reassurance"
                     >
                       <span>💬</span>

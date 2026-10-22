@@ -12,6 +12,10 @@ import {
   EventEngineStatus,
   EventSummary,
   BackfillProgress,
+  ActionChanges,
+  TaskChanges,
+  ContactChanges,
+  ContactCascade,
 } from "@/types/schemas";
 import { EventAction } from "@/components/ui/EventCard";
 
@@ -139,6 +143,9 @@ function Dashboard({
   const [eventMode, setEventMode] = useState(false);
   const [showBackfillModal, setShowBackfillModal] = useState(false);
   const [backfillProgress, setBackfillProgress] = useState<BackfillProgress | null>(null);
+  // Manual curation: contacts whose web search re-runs after an edit, and why the last one failed
+  const [enrichingContactIds, setEnrichingContactIds] = useState<Set<string>>(new Set());
+  const [enrichFailures, setEnrichFailures] = useState<Record<string, string>>({});
   const { mutate: globalMutate } = useSWRConfig();
 
   const handleOpenEchoModal = useCallback((tab: string = "overview") => {
@@ -272,6 +279,54 @@ function Dashboard({
 
           // Revalidate status on any backend change
           mutateStatus();
+
+          // Manual curation (docs/next_steps/manual_curation/03 §4): handled here, the substring routing
+          // below would announce a deletion as a new verified action
+          if (eventType === "action_updated" || eventType === "action_deleted") {
+            mutateActions();
+            if (eventPayload.reopened_task_id) mutateRoutines();
+            markTabUpdated("peace");
+            return;
+          }
+          if (eventType === "contact_updated" || eventType === "contact_deleted") {
+            mutateSocial();
+            if (eventType === "contact_deleted") mutateRoutines();
+            if (eventType === "contact_updated" && eventPayload.enrichment === "scheduled" && eventPayload.contact_id) {
+              setEnrichingContactIds((prev) => new Set(prev).add(eventPayload.contact_id));
+            }
+            markTabUpdated("social");
+            return;
+          }
+          if (eventType === "contact_enrich_failed") {
+            const id = eventPayload.contact_id;
+            setEnrichingContactIds((prev) => {
+              const next = new Set(prev);
+              next.delete(id);
+              return next;
+            });
+            setEnrichFailures((prev) => ({ ...prev, [id]: eventPayload.reason || "error" }));
+            mutateSocial();
+            showToast("👥 Web search found nothing new for the edited contact");
+            return;
+          }
+          if (eventType === "contact_enriched" && eventPayload.id) {
+            const id = eventPayload.id;
+            setEnrichingContactIds((prev) => {
+              const next = new Set(prev);
+              next.delete(id);
+              return next;
+            });
+            setEnrichFailures((prev) => {
+              const { [id]: _drop, ...rest } = prev;
+              return rest;
+            });
+          }
+          if (eventType === "event_deleted") {
+            refreshEvents();
+            mutateTopics();
+            markTabUpdated("topics");
+            return;
+          }
 
           // History backfill: one progress indicator and one completion toast per run (no per-entity toasts)
           if (eventType.startsWith("backfill_")) {
@@ -527,16 +582,21 @@ function Dashboard({
     const baseUrl = getApiBaseUrl();
     let url = `${baseUrl}/api/sessions/${ev.session_id}/${action}`;
     let body: Record<string, any> = {};
+    let method = "POST";
     if (action === "split") body = { at_time: extra?.at_time };
     if (action === "merge") {
       url = `${baseUrl}/api/sessions/merge`;
       body = { session_ids: [extra?.with, ev.session_id] };
     }
+    if (action === "delete") {
+      url = `${baseUrl}/api/sessions/${ev.session_id}`;
+      method = "DELETE";
+    }
     try {
       const res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
+        method,
+        headers: method === "POST" ? { "Content-Type": "application/json" } : undefined,
+        body: method === "POST" ? JSON.stringify(body) : undefined,
       });
       const data = await res.json();
       if (!res.ok || data.success === false) throw new Error(data.error || `HTTP ${res.status}`);
@@ -546,12 +606,14 @@ function Dashboard({
         conclude: "Event concluded — final synthesis scheduled",
         split: "Event split — both parts will be re-synthesized",
         merge: "Events merged — final briefing will be regenerated",
+        delete: "Event deleted",
       };
       showToast(labels[action]);
     } catch (err: any) {
       showToast(`Event ${action} failed: ${err.message}`);
     } finally {
       refreshEvents();
+      if (action === "delete") mutateTopics();
     }
   };
 
@@ -619,6 +681,82 @@ function Dashboard({
     }
   };
 
+  // Manual curation (docs/next_steps/manual_curation/04 §6)
+  const curationRequest = async (path: string, method: "GET" | "PUT" | "DELETE", body?: unknown) => {
+    const res = await fetch(`${getApiBaseUrl()}${path}`, {
+      method,
+      headers: body ? { "Content-Type": "application/json" } : undefined,
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.success === false) throw new Error(data.error || `HTTP ${res.status}`);
+    return data;
+  };
+
+  const handleEditAction = async (actionId: string, changes: ActionChanges) => {
+    await curationRequest(`/api/actions/${actionId}`, "PUT", changes);
+    await mutateActions();
+    markTabUpdated("peace");
+    showToast("Action updated.");
+  };
+
+  const handleDeleteAction = async (action: VerifiedAction) => {
+    const previous = actionsData;
+    await mutateActions({ actions: (previous?.actions || []).filter((a) => a.id !== action.id) }, false);
+    try {
+      const data = await curationRequest(`/api/actions/${action.id}`, "DELETE");
+      mutateActions();
+      if (data.reopened_task_id) mutateRoutines();
+      mutateStatus();
+      markTabUpdated("peace");
+      markTabUpdated("overview");
+      showToast(data.reopened_task_id ? "Action deleted — its routine is pending again." : "Action deleted.");
+    } catch (err) {
+      mutateActions(previous, false);
+      throw err;
+    }
+  };
+
+  const handleEditRoutine = async (taskId: string, changes: TaskChanges) => {
+    await curationRequest(`/api/routines/${taskId}`, "PUT", changes);
+    await mutateRoutines();
+    markTabUpdated("routines");
+    showToast("Routine updated.");
+  };
+
+  const handleEditContact = async (contactId: string, changes: ContactChanges) => {
+    const data = await curationRequest(`/api/contacts/${contactId}`, "PUT", changes);
+    if (data.enrichment === "scheduled") {
+      setEnrichingContactIds((prev) => new Set(prev).add(contactId));
+      setEnrichFailures((prev) => {
+        const { [contactId]: _drop, ...rest } = prev;
+        return rest;
+      });
+    }
+    await mutateSocial();
+    markTabUpdated("social");
+    showToast(data.enrichment === "scheduled" ? "Contact updated — searching the web again…" : "Contact updated.");
+  };
+
+  const handleDeleteContact = async (contact: SocialEntity) => {
+    const data = await curationRequest(`/api/contacts/${contact.id}`, "DELETE");
+    await mutateSocial();
+    mutateRoutines();
+    mutateStatus();
+    markTabUpdated("social");
+    markTabUpdated("overview");
+    showToast(
+      data.commitments_deleted
+        ? `Contact deleted with ${data.commitments_deleted} commitment(s).`
+        : "Contact deleted."
+    );
+  };
+
+  const loadContactCascade = async (contactId: string): Promise<ContactCascade> => {
+    const { success: _ok, ...cascade } = await curationRequest(`/api/contacts/${contactId}/cascade`, "GET");
+    return cascade as ContactCascade;
+  };
+
   // Delete routine
   const handleDeleteRoutine = async (taskId: string) => {
     try {
@@ -641,6 +779,7 @@ function Dashboard({
     } catch (err: any) {
       console.error(err);
       showToast("Error deleting routine.");
+      throw err;
     }
   };
 
@@ -852,6 +991,8 @@ function Dashboard({
               actionsData={actionsData}
               statusData={statusData}
               onAddAction={handleAddAction}
+              onEditAction={handleEditAction}
+              onDeleteAction={handleDeleteAction}
             />
           )}
 
@@ -862,6 +1003,7 @@ function Dashboard({
               handleToggleRoutine={handleToggleRoutine}
               handleAddRoutine={handleAddRoutine}
               handleDeleteRoutine={handleDeleteRoutine}
+              handleEditRoutine={handleEditRoutine}
             />
           )}
 
@@ -871,6 +1013,11 @@ function Dashboard({
               statusData={statusData}
               onEnrichContact={handleEnrichContact}
               onToggleCommitment={handleToggleCommitment}
+              onEditContact={handleEditContact}
+              onDeleteContact={handleDeleteContact}
+              loadContactCascade={loadContactCascade}
+              enrichingContactIds={enrichingContactIds}
+              enrichFailures={enrichFailures}
             />
           )}
 

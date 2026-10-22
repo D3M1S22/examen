@@ -9,14 +9,20 @@ backends keep these signatures.
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
 from src.core.schemas import (
+    ActionChanges,
     BackfillRun,
     BriefingReport,
+    ContactChanges,
+    ContactDeletion,
+    ContactUpdate,
     CoverageInterval,
+    EventDeletion,
     PlannedTask,
     SessionDossier,
     SocialCommitment,
     SocialEntity,
     SocialWebProfile,
+    RevokeResult,
     UtteranceChunk,
     VerifiedAction,
 )
@@ -83,6 +89,15 @@ class AbstractContextStore(ABC):
     ) -> List[VerifiedAction]:
         """List recently verified actions ordered by timestamp descending."""
 
+    @abstractmethod
+    def update_action(self, action_id: str, changes: ActionChanges) -> Optional[VerifiedAction]:
+        """User edit of an action's title (normalised) or domain. None if missing or revoked."""
+
+    @abstractmethod
+    def revoke_action(self, action_id: str) -> Optional[RevokeResult]:
+        """User delete: the action becomes a tombstone (``is_revoked``) so a re-analysis of its chunk
+        cannot recreate it; a routine it had completed goes back to pending. None if missing or revoked."""
+
     # --- Social Recall ---
     @abstractmethod
     def save_social_contact(self, contact: SocialEntity) -> str:
@@ -127,6 +142,16 @@ class AbstractContextStore(ABC):
     @abstractmethod
     def delete_social_commitment(self, commitment_id: str) -> bool:
         """Delete a commitment by ID. Returns True if deleted."""
+
+    @abstractmethod
+    def update_social_contact(self, contact_id: str, changes: ContactChanges) -> Optional[ContactUpdate]:
+        """User edit of a contact. A rename moves its commitments and raises ``UniqueConflict`` when
+        another contact has the new name; a changed anchor (``rules.CONTACT_ANCHORS``) clears the
+        web profile. None if the contact does not exist."""
+
+    @abstractmethod
+    def delete_social_contact(self, contact_id: str) -> Optional[ContactDeletion]:
+        """Deletes a contact with its commitments and the tasks they scheduled. None if missing."""
 
     # --- Topic Intelligence ---
     @abstractmethod
@@ -186,6 +211,14 @@ class AbstractContextStore(ABC):
     @abstractmethod
     def delete_session_dossier(self, session_id: str) -> bool:
         """Delete a dossier (not its chunks). Returns True if deleted."""
+
+    @abstractmethod
+    def delete_event(self, session_id: str) -> Optional[EventDeletion]:
+        """Deletes an event with its chunk log and briefings; linked results stay. None if missing."""
+
+    @abstractmethod
+    def unlink_micro_event(self, session_id: str, event_type: str, record_id: str) -> bool:
+        """Removes one micro-event link from an event. Returns True if a link was removed."""
 
     @abstractmethod
     def append_chunk_to_session(

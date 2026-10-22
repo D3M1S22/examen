@@ -1,6 +1,6 @@
 # ✏️ Manual Curation — 01: Current State
 
-> **Document Status:** Planned (code survey of branch `aws`, 2026-10-22)
+> **Document Status:** Survey of the code before the implementation (branch `aws`, 2026-10-22); line numbers refer to that state
 > **Related:** [00_overview.md](00_overview.md)
 
 ---

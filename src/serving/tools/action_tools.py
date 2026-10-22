@@ -141,6 +141,7 @@ def execute_verify_action_status(
         }
         return {
             "status": "verified",
+            "action_id": action.id,  # what update_action / delete_action take
             "action_type": action.action_type,
             "domain": action.domain,
             "timestamp": action.timestamp,

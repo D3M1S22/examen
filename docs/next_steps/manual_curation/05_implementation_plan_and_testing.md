@@ -4,15 +4,38 @@
 
 ---
 
-## 0. Status (2026-10-22)
+## 0. Status (2026-10-22, branch `final_fix`)
 
-| Phase | Status |
-|---|---|
-| A Store + engine | ⏳ planned |
-| B Service layer, REST, SSE | ⏳ planned |
-| C MCP tools | ⏳ planned |
-| D Dashboard | ⏳ planned |
-| E Docs & rollout | ⏳ planned |
+| Phase | Status | Code |
+|---|---|---|
+| A Store + engine | ✅ | `ActionChanges` / `TaskChanges` / `ContactChanges` and result models in [schemas.py](../../../src/core/schemas.py), `normalize_action_type` / `CONTACT_ANCHORS` / `contact_cascade` in [rules.py](../../../src/core/storage/rules.py), six abstract methods in [base.py](../../../src/core/storage/base.py), implemented in [sqlite_store.py](../../../src/core/storage/sqlite_store.py) and [dynamo_store.py](../../../src/core/storage/dynamo_store.py), `EventEngine.delete` / `unlink_micro_event` in [event_engine.py](../../../src/ingestion/event_engine.py) |
+| B Service layer, REST, SSE | ✅ | [curation_tools.py](../../../src/serving/tools/curation_tools.py); routes and `set_notifier(broadcast_event)` in [mcp_server.py](../../../src/serving/mcp_server.py) |
+| C MCP tools | ✅ | seven tools with `ToolAnnotations`; `verify_action_status` returns `action_id` |
+| D Dashboard | ✅ | `ConfirmDialog`, `TranscriptExcerpt`, `CardActions`, `EditModalFrame`, `EditActionModal`, `EditContactModal`, [curation.ts](../../../src/web_ui/src/utils/curation.ts); views and [page.tsx](../../../src/web_ui/src/app/page.tsx) |
+| E Docs & rollout | ✅ docs; rollout with the normal update | this section, ROADMAP Phase 10, AGENTS.MD |
+
+Tests:
+- [test_curation_store.py](../../../tests/test_curation_store.py) and [test_curation_api.py](../../../tests/test_curation_api.py), on both backends;
+- curation cases in `test_event_engine.py` and `test_dynamo_store.py`;
+- `curation.test.ts` (bun).
+
+Verified on a local server (`MOCK_AI=true`), over HTTP, SSE and a real MCP client (streamable HTTP):
+- a routine completed by a simulated sentence shows "Completed by"; deleting the action reopens it;
+- a contact rename moves its commitment, re-runs the enrichment in the background and broadcasts `contact_updated` then `contact_enriched`;
+- deleting the contact removes the routine its commitment scheduled;
+- `delete_action` previews without `confirm`, deletes with it, and returns `not_found` the second time.
+
+**Deviations from 02–04**
+1. `event_deleted` is broadcast by `curation_tools`, not by the engine: the engine's SSE listener is only wired once the dashboard starts the runtime, and an MCP call may come first.
+2. `TaskChanges` keeps `status` (validated literal), so the existing `PUT /api/routines/{id}` clients keep working; the dashboard uses the toggle route for status.
+3. A rename that collides with an identical commitment already filed under the new name drops the **moving** duplicate (DynamoDB guard collision), not the older one.
+4. `delete_social_contact` skips the commitment cascade when another contact still has the same name (commitments are keyed by name).
+5. The background enrichment runs in a daemon thread inside `tenant_scope` (works the same from REST and from MCP tool calls). A stale run is detected by a store proxy (`_AnchorGuard`) that drops the profile write when the anchors changed meanwhile.
+6. The contact editor is a separate `EditContactModal`, opened from the dossier modal and from the card, rather than an inline mode of `ExecutiveDossierModal`.
+7. [04](04_ui.md) §7 is implemented:
+   - "Test Chime", "PLAY CITATION" and `AcousticSignatureBox` are removed;
+   - the acoustic header texts of both screens are reworded around transcripts.
+8. `CreateTaskModal` offered a "Continuous Mesh" recurrence that the server rejects (`PlannedTask.recurrence`); it is replaced by "One-off" (`none`).
 
 ---
 

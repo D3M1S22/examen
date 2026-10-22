@@ -24,6 +24,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import uvicorn
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
+from mcp.types import ToolAnnotations
 from starlette.applications import Starlette
 from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
@@ -45,6 +46,13 @@ from src.serving.auth_routes import TenantHooks, register_auth_routes
 from src.pipeline.app import agent_invocation
 from src.serving.tools import (
     create_planned_task,
+    delete_action,
+    delete_contact,
+    delete_planned_task,
+    delete_session_dossier,
+    update_action,
+    update_contact,
+    update_planned_task,
     get_ingestion_coverage,
     get_live_event_outline,
     get_contact_profile,
@@ -59,6 +67,8 @@ from src.serving.tools import (
 from src.serving.tenant_tools import tenant_tool
 from src.serving.tools.action_tools import _format_elapsed_time
 from src.serving.tools.topic_tools import get_topic_briefing
+from src.serving.tools import curation_tools
+from src.serving.tools.curation_tools import CurationError
 
 logger = logging.getLogger("examen.serving.mcp")
 
@@ -100,6 +110,9 @@ def broadcast_event(event_type: str, data: Optional[Dict[str, Any]] = None, tena
         except Exception:
             subs.discard(q)
 
+
+# Curation operations (REST and MCP) broadcast through the same per-tenant SSE channel
+curation_tools.set_notifier(broadcast_event)
 
 _engine_listener_registered: set = set()
 _backfill_prepared: set = set()
@@ -156,7 +169,7 @@ def _ensure_backfill_service(live_engine: Any = None) -> Any:
     return service
 
 
-# Register the 12 MCP tools for Alexa+; each runs on behalf of the calling user (tenant_tools.py)
+# Register the MCP tools for Alexa+; each runs on behalf of the calling user (tenant_tools.py)
 mcp.tool()(tenant_tool(create_planned_task))
 mcp.tool()(tenant_tool(get_upcoming_tasks))
 mcp.tool()(tenant_tool(verify_action_status))
@@ -169,6 +182,14 @@ mcp.tool()(tenant_tool(get_session_dossier))
 mcp.tool()(tenant_tool(list_session_dossiers))
 mcp.tool()(tenant_tool(get_live_event_outline))
 mcp.tool()(tenant_tool(get_ingestion_coverage))
+
+# Manual curation tools (docs/next_steps/manual_curation/03 §5): deletes need confirm=true (two steps)
+_EDIT_TOOL = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True)
+_DELETE_TOOL = ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True)
+for _fn in (update_action, update_planned_task, update_contact):
+    mcp.tool(annotations=_EDIT_TOOL)(tenant_tool(_fn))
+for _fn in (delete_action, delete_planned_task, delete_contact, delete_session_dossier):
+    mcp.tool(annotations=_DELETE_TOOL)(tenant_tool(_fn))
 
 
 # ---------------------------------------------------------------------------
@@ -882,100 +903,53 @@ async def api_routines(request: Request) -> JSONResponse:
         origin=filter_origin,
         ingest_source=request.query_params.get("ingest_source") or None,
     )
-    result = []
-    for t in tasks:
-        result.append({
-            "id": t.id,
-            "title": t.title,
-            "domain": t.domain,
-            "scheduled_time": t.scheduled_time,
-            "recurrence": t.recurrence,
-            "origin": t.origin,
-            "raw_statement": t.raw_statement,
-            "confidence": t.confidence,
-            "relative_time_anchor": t.relative_time_anchor,
-            "session_id": t.session_id,
-            "status": t.status,
-            "completed_at": t.completed_at,
-            "verified_action_id": t.verified_action_id,
-            "created_at": t.created_at,
-            "ingest_source": t.ingest_source,
-            "ingest_run_id": t.ingest_run_id,
-            "recovered": t.recovered,
-        })
+    # completion_statement: the transcript of the action that completed the routine (card excerpt)
+    result = [curation_tools.task_dict(t, curation_tools.completion_statement(store, t)) for t in tasks]
     return JSONResponse({"tasks": result, "count": len(result)})
+
+
+async def _json_body(request: Request) -> Optional[Dict[str, Any]]:
+    try:
+        body = await request.json()
+    except Exception:
+        return None
+    return body if isinstance(body, dict) else None
+
+
+async def _curation(fn: Any) -> JSONResponse:
+    """Runs a curation operation off the event loop (it may wait on the engine lock) and maps its errors."""
+    try:
+        result = await asyncio.to_thread(fn)
+    except CurationError as e:
+        return JSONResponse({"success": False, "error": str(e), "code": e.code}, status_code=e.status)
+    return JSONResponse({"success": True, **result})
+
+
+_BAD_JSON = JSONResponse({"success": False, "error": "Invalid JSON body", "code": "invalid"}, status_code=400)
 
 
 @mcp.custom_route("/api/routines/{task_id}", methods=["PUT", "DELETE"])
 async def api_routine_detail(request: Request) -> JSONResponse:
-    """Updates (PUT) or deletes (DELETE) a planned routine task."""
-    store = get_storage_store()
-    task_id = request.path_params.get("task_id")
-    if not task_id:
-        return JSONResponse({"error": "Missing task_id"}, status_code=400)
-
-    task = store.get_planned_task(task_id)
-    if not task:
-        return JSONResponse({"error": f"Task '{task_id}' not found"}, status_code=404)
-
+    """Updates (PUT, TaskChanges) or deletes (DELETE) a planned routine task."""
+    task_id = request.path_params["task_id"]
     if request.method == "DELETE":
-        deleted = store.delete_planned_task(task_id)
-        if not deleted:
-            return JSONResponse({"error": "Failed to delete task"}, status_code=500)
-        broadcast_event("routine_deleted", {"task_id": task_id, "title": task.title})
-        return JSONResponse({"success": True, "deleted_id": task_id})
+        return await _curation(lambda: curation_tools.execute_delete_task(task_id, confirm=True))
+    body = await _json_body(request)
+    if body is None:
+        return _BAD_JSON
+    return await _curation(lambda: curation_tools.execute_update_task(task_id, body))
 
-    # PUT
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
 
-    if "title" in body and body["title"].strip():
-        task.title = body["title"].strip()
-    if "domain" in body:
-        task.domain = body["domain"]
-    if "scheduled_time" in body:
-        task.scheduled_time = body["scheduled_time"]
-    if "recurrence" in body:
-        task.recurrence = body["recurrence"]
-    if "origin" in body:
-        task.origin = body["origin"]
-    if "raw_statement" in body:
-        task.raw_statement = body["raw_statement"]
-    if "relative_time_anchor" in body:
-        task.relative_time_anchor = body["relative_time_anchor"]
-    if "status" in body:
-        new_status = body["status"]
-        if new_status == "completed" and task.status != "completed":
-            task.completed_at = datetime.now().isoformat()
-        elif new_status != "completed":
-            task.completed_at = None
-            task.verified_action_id = None
-        task.status = new_status
-
-    updated = store.update_planned_task(task)
-    if not updated:
-        return JSONResponse({"error": "Failed to update task"}, status_code=500)
-
-    task_dict = {
-        "id": task.id,
-        "title": task.title,
-        "domain": task.domain,
-        "scheduled_time": task.scheduled_time,
-        "recurrence": task.recurrence,
-        "origin": task.origin,
-        "raw_statement": task.raw_statement,
-        "confidence": task.confidence,
-        "relative_time_anchor": task.relative_time_anchor,
-        "session_id": task.session_id,
-        "status": task.status,
-        "completed_at": task.completed_at,
-        "verified_action_id": task.verified_action_id,
-        "created_at": task.created_at,
-    }
-    broadcast_event("routine_updated", task_dict)
-    return JSONResponse({"success": True, "task": task_dict})
+@mcp.custom_route("/api/actions/{action_id}", methods=["PUT", "DELETE"])
+async def api_action_detail(request: Request) -> JSONResponse:
+    """Corrects (PUT, ActionChanges) or deletes (DELETE: tombstone, reopens its routine) an action."""
+    action_id = request.path_params["action_id"]
+    if request.method == "DELETE":
+        return await _curation(lambda: curation_tools.execute_delete_action(action_id, confirm=True))
+    body = await _json_body(request)
+    if body is None:
+        return _BAD_JSON
+    return await _curation(lambda: curation_tools.execute_update_action(action_id, body))
 
 
 @mcp.custom_route("/api/routines/{task_id}/toggle", methods=["POST"])
@@ -1041,9 +1015,31 @@ async def api_contacts(request: Request) -> JSONResponse:
             "key_topics": c.key_topics,
             "commitments": comms_list,
             "web_profile": c.web_profile.model_dump() if c.web_profile else None,
+            "location_encountered": c.location_encountered,
+            "session_id": c.session_id,
             "timestamp": c.timestamp,
         })
     return JSONResponse({"contacts": result, "count": len(result)})
+
+
+@mcp.custom_route("/api/contacts/{contact_id}", methods=["PUT", "DELETE"])
+async def api_contact_detail(request: Request) -> JSONResponse:
+    """Corrects (PUT, ContactChanges; a changed name or role re-runs the web search) or deletes
+    (DELETE, with its commitments and their routines) a contact."""
+    contact_id = request.path_params["contact_id"]
+    if request.method == "DELETE":
+        return await _curation(lambda: curation_tools.execute_delete_contact(contact_id, confirm=True))
+    body = await _json_body(request)
+    if body is None:
+        return _BAD_JSON
+    return await _curation(lambda: curation_tools.execute_update_contact(contact_id, body))
+
+
+@mcp.custom_route("/api/contacts/{contact_id}/cascade", methods=["GET"])
+async def api_contact_cascade(request: Request) -> JSONResponse:
+    """What deleting a contact also deletes (commitments and their routines), for the confirmation."""
+    contact_id = request.path_params["contact_id"]
+    return await _curation(lambda: curation_tools.contact_cascade_preview(contact_id))
 
 
 @mcp.custom_route("/api/contacts/{contact_id}/profile", methods=["GET"])
@@ -1602,6 +1598,14 @@ async def api_session_detail(request: Request) -> JSONResponse:
     if not data.get("found"):
         return JSONResponse({"error": f"Session '{session_id}' not found", "found": False}, status_code=404)
     return JSONResponse(data)
+
+
+@mcp.custom_route("/api/sessions/{session_id}", methods=["DELETE"])
+async def api_session_delete(request: Request) -> JSONResponse:
+    """Deletes an event with its transcript log and briefings; the results found in it are kept."""
+    session_id = request.path_params["session_id"]
+    engine = _ensure_event_engine()
+    return await _curation(lambda: curation_tools.execute_delete_event(session_id, confirm=True, engine=engine))
 
 
 @mcp.custom_route("/api/sessions/{session_id}/conclude", methods=["POST"])

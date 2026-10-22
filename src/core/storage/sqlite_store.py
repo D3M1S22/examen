@@ -8,21 +8,28 @@ import uuid
 from typing import Any, Dict, List, Optional, Union
 
 from src.core.schemas import (
+    ActionChanges,
     BackfillPlan,
     BackfillRun,
     BriefingReport,
+    ContactChanges,
+    ContactDeletion,
+    ContactUpdate,
     CoverageInterval,
+    EventDeletion,
     MicroEventRef,
     PlannedTask,
     SessionDossier,
     SocialCommitment,
     SocialEntity,
     SocialWebProfile,
+    RevokeResult,
     UtteranceChunk,
     VerifiedAction,
 )
 from src.core.storage import rules
 from src.core.storage.base import AbstractContextStore
+from src.core.storage.errors import UniqueConflict
 from src.core.time_utils import historical_action_may_resolve
 
 logger = logging.getLogger("examen.storage.sqlite")
@@ -711,6 +718,69 @@ class SQLiteContextStore(AbstractContextStore):
                 results.append(self._row_to_action(row))
         return results
 
+    def _fts_sync(self, conn: sqlite3.Connection, fts: str, columns: tuple, table: str, record_id: str,
+                  remove: bool) -> None:
+        """Keeps an external-content FTS5 mirror in step with one row (``remove``: before it changes)."""
+        if not self._has_fts:
+            return
+        cols = ", ".join(columns)
+        try:
+            if remove:
+                conn.execute(f"INSERT INTO {fts}({fts}, rowid, {cols}) SELECT 'delete', rowid, {cols} "
+                             f"FROM {table} WHERE id = ?", (record_id,))
+            else:
+                conn.execute(f"INSERT INTO {fts}(rowid, {cols}) SELECT rowid, {cols} FROM {table} WHERE id = ?",
+                             (record_id,))
+        except sqlite3.OperationalError:
+            pass
+
+    _ACTION_FTS = ("action_type", "raw_statement")
+
+    def update_action(self, action_id: str, changes: ActionChanges) -> Optional[VerifiedAction]:
+        fields: Dict[str, Any] = {}
+        if changes.action_type is not None:
+            title = rules.normalize_action_type(changes.action_type)
+            if not title:
+                raise ValueError("action title cannot be empty")
+            fields["action_type"] = title
+        if changes.domain is not None:
+            fields["domain"] = changes.domain
+        with self._get_connection() as conn:
+            row = conn.execute("SELECT id FROM verified_actions WHERE id = ? AND is_revoked = 0",
+                               (action_id,)).fetchone()
+            if not row:
+                return None
+            if fields:
+                self._fts_sync(conn, "fts_actions", self._ACTION_FTS, "verified_actions", action_id, remove=True)
+                conn.execute(f"UPDATE verified_actions SET {', '.join(f'{k} = ?' for k in fields)} WHERE id = ?",
+                             (*fields.values(), action_id))
+                self._fts_sync(conn, "fts_actions", self._ACTION_FTS, "verified_actions", action_id, remove=False)
+                conn.commit()
+        return self.get_verified_action(action_id)
+
+    def revoke_action(self, action_id: str) -> Optional[RevokeResult]:
+        action = self.get_verified_action(action_id)
+        if action is None or action.is_revoked:
+            return None
+        reopened = None
+        with self._get_connection() as conn:
+            self._fts_sync(conn, "fts_actions", self._ACTION_FTS, "verified_actions", action_id, remove=True)
+            cur = conn.execute("UPDATE verified_actions SET is_revoked = 1 WHERE id = ? AND is_revoked = 0",
+                               (action_id,))
+            if cur.rowcount == 0:
+                return None
+            if action.matched_task_id:
+                cur = conn.execute(
+                    "UPDATE planned_tasks SET status = 'pending', completed_at = NULL, verified_action_id = NULL "
+                    "WHERE id = ? AND verified_action_id = ? AND status = 'completed'",
+                    (action.matched_task_id, action_id),
+                )
+                if cur.rowcount:
+                    reopened = action.matched_task_id
+            conn.commit()
+        action.is_revoked = True
+        return RevokeResult(action=action, reopened_task_id=reopened)
+
     # =========================================================================
     # Social Recall
     # =========================================================================
@@ -1018,6 +1088,78 @@ class SQLiteContextStore(AbstractContextStore):
                 pass
 
         return True
+
+    _SOCIAL_FTS = ("person_name", "company_or_role")
+
+    def update_social_contact(self, contact_id: str, changes: ContactChanges) -> Optional[ContactUpdate]:
+        data = changes.model_dump(exclude_unset=True)
+        with self._get_connection() as conn:
+            row = conn.execute("SELECT * FROM social_contacts WHERE id = ?", (contact_id,)).fetchone()
+            if not row:
+                return None
+            old_name = row["person_name"]
+            new_name = data.get("person_name") or old_name
+            renamed = rules.contact_name_key(new_name) != rules.contact_name_key(old_name)
+            if renamed and conn.execute(
+                "SELECT 1 FROM social_contacts WHERE LOWER(person_name) = LOWER(?) AND id <> ? LIMIT 1",
+                (new_name.strip(), contact_id),
+            ).fetchone():
+                raise UniqueConflict("Another contact already has this name")
+            anchors_changed = any(
+                field in data and rules.contact_name_key(data[field]) != rules.contact_name_key(row[field])
+                for field in rules.CONTACT_ANCHORS
+            )
+            sets: Dict[str, Any] = {}
+            for field in ("person_name", "company_or_role", "contact_info", "website_url", "location_encountered"):
+                if field in data:
+                    sets[field] = (data[field] or "").strip() or None
+            if "key_topics" in data:
+                sets["key_topics_json"] = json.dumps(data["key_topics"] or [], ensure_ascii=False)
+            if anchors_changed:
+                sets["web_profile_json"] = None  # the profile described the person the old anchors found
+                if "website_url" not in data:
+                    sets["website_url"] = None
+            if sets:
+                self._fts_sync(conn, "fts_social", self._SOCIAL_FTS, "social_contacts", contact_id, remove=True)
+                conn.execute(f"UPDATE social_contacts SET {', '.join(f'{k} = ?' for k in sets)} WHERE id = ?",
+                             (*sets.values(), contact_id))
+                if renamed:
+                    conn.execute("UPDATE social_commitments SET contact_name = ? WHERE LOWER(contact_name) = LOWER(?)",
+                                 (new_name, old_name))
+                self._fts_sync(conn, "fts_social", self._SOCIAL_FTS, "social_contacts", contact_id, remove=False)
+                conn.commit()
+        if renamed:
+            payload = [c.model_dump() for c in self.list_social_commitments(contact_name=new_name, limit=10_000)]
+            with self._get_connection() as conn:
+                conn.execute("UPDATE social_contacts SET commitments_json = ? WHERE id = ?",
+                             (json.dumps(payload, ensure_ascii=False), contact_id))
+                conn.commit()
+        contact = self.get_social_contact(contact_id)
+        return ContactUpdate(contact=contact, anchors_changed=anchors_changed,
+                             renamed_from=old_name if renamed else None)
+
+    def delete_social_contact(self, contact_id: str) -> Optional[ContactDeletion]:
+        with self._get_connection() as conn:
+            row = conn.execute("SELECT * FROM social_contacts WHERE id = ?", (contact_id,)).fetchone()
+            if not row:
+                return None
+            shared = conn.execute(
+                "SELECT 1 FROM social_contacts WHERE LOWER(person_name) = LOWER(?) AND id <> ? LIMIT 1",
+                (row["person_name"], contact_id),
+            ).fetchone()
+        # Commitments are keyed by name: keep them when another contact still has that name
+        commitments = [] if shared else rules.contact_cascade(self, row["person_name"])
+        tasks = 0
+        for com in commitments:
+            if com.auto_scheduled_task_id and self.get_planned_task(com.auto_scheduled_task_id):
+                tasks += 1
+            self.delete_social_commitment(com.id)
+        with self._get_connection() as conn:
+            self._fts_sync(conn, "fts_social", self._SOCIAL_FTS, "social_contacts", contact_id, remove=True)
+            conn.execute("DELETE FROM social_contacts WHERE id = ?", (contact_id,))
+            conn.commit()
+        return ContactDeletion(contact_id=contact_id, name=row["person_name"], session_id=row["session_id"],
+                               commitments_deleted=len(commitments), tasks_deleted=tasks)
 
     # =========================================================================
     # Topic Intelligence
@@ -1475,6 +1617,38 @@ class SQLiteContextStore(AbstractContextStore):
 
         self.save_session_dossier(dossier)
         return True
+
+    def unlink_micro_event(self, session_id: str, event_type: str, record_id: str) -> bool:
+        with self._get_connection() as conn:
+            row = conn.execute("SELECT linked_micro_events_json FROM session_dossiers WHERE session_id = ?",
+                               (session_id,)).fetchone()
+            if not row:
+                return False
+            refs = json.loads(row["linked_micro_events_json"] or "[]")
+            kept = [r for r in refs if not (r.get("event_type") == event_type and r.get("record_id") == record_id)]
+            if len(kept) == len(refs):
+                return False
+            conn.execute("UPDATE session_dossiers SET linked_micro_events_json = ? WHERE session_id = ?",
+                         (json.dumps(kept, ensure_ascii=False), session_id))
+            conn.commit()
+        return True
+
+    def delete_event(self, session_id: str) -> Optional[EventDeletion]:
+        dossier = self.get_session_dossier(session_id, include_chunks=False)
+        if dossier is None:
+            return None
+        briefing_ids = {b.id for b in self.list_briefings_for_session(session_id)}
+        if dossier.final_briefing_id:
+            briefing_ids.add(dossier.final_briefing_id)
+        briefings = sum(1 for bid in briefing_ids if bid and self.delete_topic_briefing(bid))
+        with self._get_connection() as conn:
+            conn.execute("DELETE FROM utterance_diarization WHERE chunk_id IN "
+                         "(SELECT chunk_id FROM session_chunks WHERE session_id = ?)", (session_id,))
+            chunks = conn.execute("DELETE FROM session_chunks WHERE session_id = ?", (session_id,)).rowcount
+            conn.execute("DELETE FROM session_dossiers WHERE session_id = ?", (session_id,))
+            conn.commit()
+        return EventDeletion(session_id=session_id, title=dossier.title, briefings_deleted=briefings,
+                             chunks_deleted=chunks)
 
     def conclude_session_dossier(
         self, session_id: str, briefing_report_id: Optional[str] = None

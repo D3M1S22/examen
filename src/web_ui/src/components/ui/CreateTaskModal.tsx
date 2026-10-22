@@ -1,16 +1,29 @@
 import React, { useState, useEffect } from "react";
 import { createPortal } from "react-dom";
 
+export interface TaskFormValues {
+  title: string;
+  domain: string;
+  scheduledTime: string;
+  recurrence: string;
+}
+
 interface CreateTaskModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSubmit: (title: string, domain: string, scheduledTime: string, recurrence?: string) => Promise<void>;
+  /** "edit" prefills the form from `initial` (manual curation, docs/next_steps/manual_curation/04 §3) */
+  mode?: "create" | "edit";
+  initial?: TaskFormValues;
 }
 
-export function CreateTaskModal({ isOpen, onClose, onSubmit }: CreateTaskModalProps) {
+const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+export function CreateTaskModal({ isOpen, onClose, onSubmit, mode = "create", initial }: CreateTaskModalProps) {
+  const editing = mode === "edit";
   const [mounted, setMounted] = useState(false);
   const [title, setTitle] = useState("");
-  const [domain, setDomain] = useState<"safety" | "routine" | "work_task">("safety");
+  const [domain, setDomain] = useState<string>("safety");
   const [scheduledTime, setScheduledTime] = useState("08:00");
   const [recurrence, setRecurrence] = useState("daily");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -19,6 +32,16 @@ export function CreateTaskModal({ isOpen, onClose, onSubmit }: CreateTaskModalPr
   useEffect(() => {
     setMounted(true);
   }, []);
+
+  useEffect(() => {
+    if (isOpen && editing && initial) {
+      setTitle(initial.title);
+      setDomain(initial.domain);
+      setScheduledTime(initial.scheduledTime);
+      setRecurrence(initial.recurrence);
+      setError(null);
+    }
+  }, [isOpen, editing, initial]);
 
   // Lock scroll on background body when modal is mounted
   useEffect(() => {
@@ -61,7 +84,7 @@ export function CreateTaskModal({ isOpen, onClose, onSubmit }: CreateTaskModalPr
       setTitle("");
       onClose();
     } catch (err: any) {
-      setError(err?.message || "Failed to create routine.");
+      setError(err?.message || (editing ? "Failed to save routine." : "Failed to create routine."));
     } finally {
       setIsSubmitting(false);
     }
@@ -83,10 +106,10 @@ export function CreateTaskModal({ isOpen, onClose, onSubmit }: CreateTaskModalPr
           <div>
             <div className="font-mono text-[9px] text-amber-400/90 tracking-[0.2em] uppercase mb-1 flex items-center gap-2">
               <span className="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
-              SECTOR 04 // OPERATIONAL DIRECTIVE
+              {editing ? "DAILY ROUTINES // CORRECTION" : "SECTOR 04 // OPERATIONAL DIRECTIVE"}
             </div>
             <h2 className="font-serif text-[26px] text-primary tracking-wide">
-              Add Monitored Routine
+              {editing ? "Edit Routine" : "Add Monitored Routine"}
             </h2>
           </div>
           <button
@@ -99,7 +122,7 @@ export function CreateTaskModal({ isOpen, onClose, onSubmit }: CreateTaskModalPr
         </div>
 
         {/* Quick Suggestion Chips */}
-        <div className="mb-6">
+        {!editing && <div className="mb-6">
           <label className="block font-mono text-[9px] text-secondary tracking-widest uppercase mb-2">
             Quick Ingestion Templates
           </label>
@@ -119,7 +142,7 @@ export function CreateTaskModal({ isOpen, onClose, onSubmit }: CreateTaskModalPr
               </button>
             ))}
           </div>
-        </div>
+        </div>}
 
         <form onSubmit={handleSubmit} className="space-y-5">
           {/* Title */}
@@ -189,7 +212,7 @@ export function CreateTaskModal({ isOpen, onClose, onSubmit }: CreateTaskModalPr
                 Scheduled Target Cadence
               </label>
               <input
-                type="time"
+                type={!editing || HHMM.test(scheduledTime) || !scheduledTime ? "time" : "text"}
                 value={scheduledTime}
                 onChange={(e) => setScheduledTime(e.target.value)}
                 className="w-full bg-[#0d0e11] border border-[#2b303c] rounded-lg py-3 px-4 text-body-sm font-sans text-primary focus:outline-none focus:border-amber-400 [color-scheme:dark]"
@@ -208,7 +231,7 @@ export function CreateTaskModal({ isOpen, onClose, onSubmit }: CreateTaskModalPr
                 <option value="daily">Daily Cycle</option>
                 <option value="weekdays">Weekdays Only</option>
                 <option value="weekly">Weekly</option>
-                <option value="continuous">Continuous Mesh</option>
+                <option value="none">One-off</option>
               </select>
             </div>
           </div>
@@ -237,10 +260,10 @@ export function CreateTaskModal({ isOpen, onClose, onSubmit }: CreateTaskModalPr
               {isSubmitting ? (
                 <>
                   <span className="w-3 h-3 border-2 border-background border-t-transparent rounded-full animate-spin" />
-                  <span>Configuring...</span>
+                  <span>{editing ? "Saving..." : "Configuring..."}</span>
                 </>
               ) : (
-                <span>Activate Routine</span>
+                <span>{editing ? "Save Routine" : "Activate Routine"}</span>
               )}
             </button>
           </div>

@@ -12,6 +12,15 @@ from src.serving.tools.social_tools import (
     query_social_contact,
 )
 from src.serving.tools.topic_tools import get_topic_briefing
+from src.serving.tools.curation_tools import (
+    delete_action,
+    delete_contact,
+    delete_planned_task,
+    delete_session_dossier,
+    update_action,
+    update_contact,
+    update_planned_task,
+)
 from src.serving.tools.ingestion_tools import get_ingestion_coverage
 from src.serving.tools.session_tools import (
     get_live_event_outline,
@@ -32,4 +41,11 @@ __all__ = [
     "get_live_event_outline",
     "get_session_dossier",
     "list_session_dossiers",
+    "update_action",
+    "delete_action",
+    "update_planned_task",
+    "delete_planned_task",
+    "update_contact",
+    "delete_contact",
+    "delete_session_dossier",
 ]

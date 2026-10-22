@@ -72,6 +72,23 @@ def commitment_key(contact_name: str, description: str, debtor: str) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+def normalize_action_type(text: str) -> str:
+    """A user-edited action title in the pipeline's format: trimmed, lower case, ``_`` between words."""
+    return re.sub(r"\s+", "_", (text or "").strip().lower())[:80]
+
+
+# Fields the web profiler disambiguates a contact with: changing one invalidates the web profile
+CONTACT_ANCHORS = ("person_name", "company_or_role")
+
+
+def contact_cascade(store: Any, contact_name: str) -> List[SocialCommitment]:
+    """The commitments that go with a contact (matched by name, as the stores do); each may carry
+    the ``auto_scheduled_task_id`` it scheduled. Shared by the delete and its preview."""
+    if not (contact_name or "").strip():
+        return []
+    return store.list_social_commitments(contact_name=contact_name, limit=10_000)
+
+
 def latency_summary(values: List[float]) -> Dict[str, Any]:
     """Aggregate of the latest-first latency samples returned by ``get_latency_metrics``."""
     if not values:

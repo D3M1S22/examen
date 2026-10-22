@@ -1,6 +1,6 @@
 # ✏️ Manual Curation — 02: Data Layer
 
-> **Document Status:** Planned
+> **Document Status:** Implemented 2026-10-22 (deviations in [05](05_implementation_plan_and_testing.md) §0)
 > **Related:** [01_current_state.md](01_current_state.md) §1, §5 · [dynamodb_storage/02](../dynamodb_storage/02_user_store_data_model.md) (item layout, guards, versions)
 
 Every method below is added **abstract** to `AbstractContextStore` ([base.py](../../../src/core/storage/base.py)) and implemented in both `SQLiteContextStore` and `DynamoContextStore`. `tests/test_store_contract.py` keeps the signatures aligned. Shared rules (normalisation, which fields count as anchors) go in [rules.py](../../../src/core/storage/rules.py), so the two backends cannot diverge.
