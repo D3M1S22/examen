@@ -15,7 +15,7 @@ export interface SpeakerAttribution {
   role: "user" | "contact" | "unknown";
   name?: string | null;
   score?: number | null;
-  source: "bee_voice_id" | "bee_name" | "history_name" | "untagged" | "internal";
+  source: "bee_voice_id" | "bee_name" | "history_name" | "untagged" | "internal" | "user_confirmed";
   /** Someone asked the owner to do it ("Damiano, remember to …") */
   addressed_to_user?: boolean;
 }
@@ -30,6 +30,8 @@ export interface VerifiedAction {
   elapsed_time_human?: string;
   matched_task_id?: string;
   session_id?: string | null;
+  /** Untagged speech waiting for the owner's confirmation (GET /api/review) */
+  needs_review?: boolean;
   ingest_source?: IngestSource;
   ingest_run_id?: string | null;
   speaker?: SpeakerAttribution | null;
@@ -39,7 +41,8 @@ export interface PlannedTask {
   id: string;
   title: string;
   domain: "safety" | "routine" | "work_task" | "personal";
-  status: "pending" | "completed" | "overdue" | "skipped" | "cancelled";
+  /** review = waiting for the owner's confirmation (untagged speech); dismissed is never listed */
+  status: "pending" | "completed" | "overdue" | "skipped" | "cancelled" | "review" | "dismissed";
   scheduled_time?: string | null;
   recurrence: string;
   verified_action_id?: string | null;
@@ -550,4 +553,11 @@ export interface HistoryTelemetry {
     active_run: BackfillProgress | null;
     queued: number;
   };
+}
+
+/** GET /api/review: results of speech Bee did not attribute to anyone (docs/next_steps/speaker_review/) */
+export interface ReviewQueue {
+  actions: VerifiedAction[];
+  tasks: PlannedTask[];
+  count: number;
 }

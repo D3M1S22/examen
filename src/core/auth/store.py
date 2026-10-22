@@ -66,6 +66,8 @@ class User(BaseModel):
     privacy_consent_at: Optional[str] = None
     is_admin: bool = False
     status: str = "active"  # active | disabled
+    # Speaker review: untagged speech skips the confirmation step (docs/next_steps/speaker_review/02 §5)
+    auto_accept_untagged: bool = False
 
     @property
     def active(self) -> bool:
@@ -180,6 +182,8 @@ class AuthStore:
                 conn.execute("ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0")
             if "status" not in columns:
                 conn.execute("ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT 'active'")
+            if "auto_accept_untagged" not in columns:
+                conn.execute("ALTER TABLE users ADD COLUMN auto_accept_untagged INTEGER NOT NULL DEFAULT 0")
         try:
             Path(self.db_path).chmod(0o600)
         except OSError:
@@ -195,6 +199,7 @@ class AuthStore:
             id=row["id"], email=row["email"], display_name=row["display_name"], created_at=row["created_at"],
             last_login_at=row["last_login_at"], privacy_consent_version=row["privacy_consent_version"],
             privacy_consent_at=row["privacy_consent_at"], is_admin=bool(row["is_admin"]), status=row["status"],
+            auto_accept_untagged=bool(row["auto_accept_untagged"]),
         )
 
     def create_user(self, email: str, password: str, display_name: Optional[str] = None,
@@ -321,6 +326,10 @@ class AuthStore:
         with self._lock, self._conn() as conn:
             conn.execute("UPDATE users SET display_name = ? WHERE id = ?", (name, user_id))
         return self.get_user(user_id)
+
+    def set_auto_accept_untagged(self, user_id: str, enabled: bool) -> None:
+        with self._lock, self._conn() as conn:
+            conn.execute("UPDATE users SET auto_accept_untagged = ? WHERE id = ?", (int(bool(enabled)), user_id))
 
     def record_consent(self, user_id: str, version: str) -> None:
         with self._lock, self._conn() as conn:

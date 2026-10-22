@@ -346,6 +346,10 @@ class _SpeakerView:
                    f"someone else. If the statement addresses the owner by name or asks them to do something "
                    f"('{owner}, remember to ...'), it is a request from another person: for_owner=true, "
                    f"requested_by = the asker's name if it is said, else null.")
+        if self.role != "contact":
+            # speaker_review/02 §7: the owner telling a named person what to do is that person's task
+            who += (" If the speaker tells another named person to do something ('Marco, push tonight'), it is "
+                    "that person's task: for_owner=false.")
         return f"\n\nSPEAKER:\n{who}\nThe title is always what the owner has to do (e.g. 'Start the washing machine').\n"
 
     def as_request(self, requested_by: Optional[str] = None):

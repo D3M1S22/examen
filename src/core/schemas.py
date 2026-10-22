@@ -63,9 +63,10 @@ class SpeakerAttribution(BaseModel):
     )
     name: Optional[str] = Field(default=None, description="First name Bee reported, when tagged.")
     score: Optional[float] = Field(default=None, ge=0.0, le=1.0, description="Bee speaker_score (0-1).")
-    source: Literal["bee_voice_id", "bee_name", "history_name", "untagged", "internal"] = Field(
+    source: Literal["bee_voice_id", "bee_name", "history_name", "untagged", "internal", "user_confirmed"] = Field(
         default="untagged",
-        description="bee_voice_id = matched by Bee person id, bee_name = by first name, history_name = REST speaker.",
+        description="bee_voice_id = matched by Bee person id, bee_name = by first name, history_name = REST speaker, "
+                    "user_confirmed = the owner accepted it by hand (docs/next_steps/speaker_review/).",
     )
     addressed_to_user: bool = Field(
         default=False,
@@ -440,6 +441,10 @@ class VerifiedAction(BaseModel):
     speaker: SkipJsonSchema[Optional[SpeakerAttribution]] = Field(
         default=None, description="Who said the confirming utterance (None = not recorded)."
     )
+    # Speaker review (docs/next_steps/speaker_review/02): untagged speech waits for the owner's confirmation
+    needs_review: SkipJsonSchema[bool] = Field(
+        default=False, description="True until the owner confirms an action Bee did not attribute to anyone."
+    )
 
 
 class PlannedTask(BaseModel):
@@ -457,9 +462,10 @@ class PlannedTask(BaseModel):
         default="none",
         description="Recurrence schedule pattern."
     )
-    status: Literal["pending", "completed", "overdue", "skipped", "cancelled"] = Field(
+    status: Literal["pending", "completed", "overdue", "skipped", "cancelled", "review", "dismissed"] = Field(
         default="pending",
-        description="Current task status."
+        description="Current task status: review = waiting for the owner's confirmation (untagged speech), "
+                    "dismissed = discarded by the owner or by a contact's voice tag (hidden tombstone)."
     )
     completed_at: Optional[str] = Field(
         default=None,
@@ -787,6 +793,7 @@ class ExamenState(TypedDict, total=False):
     speaker_role: Optional[str]
     speaker_score: Optional[float]
     speaker_source: Optional[str]
+    auto_accept_untagged: Optional[bool]  # user preference: untagged speech skips review (speaker_review/02 §5)
     wearer_name: Optional[str]  # the owner's first name (`bee me`), to recognise requests addressed to them
     utterance_id: Optional[str]
     # Historical Transcript Backfill

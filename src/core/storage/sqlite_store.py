@@ -331,6 +331,8 @@ class SQLiteContextStore(AbstractContextStore):
                 # Speaker identity (docs/next_steps/08_speaker_identity.md)
                 "ALTER TABLE verified_actions ADD COLUMN speaker_json TEXT;",
                 "ALTER TABLE planned_tasks ADD COLUMN speaker_json TEXT;",
+                # Speaker review (docs/next_steps/speaker_review/02)
+                "ALTER TABLE verified_actions ADD COLUMN needs_review INTEGER NOT NULL DEFAULT 0;",
                 "ALTER TABLE session_dossiers ADD COLUMN ingest_source TEXT NOT NULL DEFAULT 'live';",
                 "ALTER TABLE session_dossiers ADD COLUMN ingest_run_id TEXT;",
             ):
@@ -500,6 +502,8 @@ class SQLiteContextStore(AbstractContextStore):
         if status:
             sql += " AND status = ?"
             params.append(status)
+        else:
+            sql += " AND status <> 'dismissed'"  # tombstones of discarded tasks stay hidden
         if domain:
             sql += " AND domain = ?"
             params.append(domain)
@@ -626,8 +630,11 @@ class SQLiteContextStore(AbstractContextStore):
         rec_id = action.id or str(uuid.uuid4())
         action.id = rec_id
 
-        # Auto-match with pending planned tasks if not already linked
-        if not action.matched_task_id:
+        # Auto-match with pending planned tasks if not already linked. An action waiting for the owner's
+        # confirmation completes nothing until it is accepted (accept_action)
+        if action.needs_review:
+            action.matched_task_id = None
+        elif not action.matched_task_id:
             resolved_task = self.match_and_resolve_task(action)
             if resolved_task:
                 action.matched_task_id = resolved_task.id
@@ -645,8 +652,8 @@ class SQLiteContextStore(AbstractContextStore):
             cursor.execute("""
                 INSERT OR REPLACE INTO verified_actions
                 (id, action_type, domain, raw_statement, confidence, timestamp, is_revoked, matched_task_id, location_json,
-                 session_id, ingest_source, ingest_run_id, source_key, speaker_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 session_id, ingest_source, ingest_run_id, source_key, speaker_json, needs_review)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 rec_id,
                 action.action_type.lower(),
@@ -662,6 +669,7 @@ class SQLiteContextStore(AbstractContextStore):
                 action.ingest_run_id,
                 action.source_key,
                 rules.speaker_to_json(action.speaker),
+                1 if action.needs_review else 0,
             ))
             if self._has_fts:
                 cursor.execute("""
@@ -698,7 +706,7 @@ class SQLiteContextStore(AbstractContextStore):
         sql = """
             SELECT * FROM verified_actions 
             WHERE (id = ? OR action_type LIKE ? OR raw_statement LIKE ?)
-              AND is_revoked = 0
+              AND is_revoked = 0 AND needs_review = 0
         """
         params = [action_query.strip(), clean_query, clean_query]
 
@@ -718,7 +726,7 @@ class SQLiteContextStore(AbstractContextStore):
     def list_recent_actions(
         self, limit: int = 10, domain: Optional[str] = None, ingest_source: Optional[str] = None
     ) -> List[VerifiedAction]:
-        sql = "SELECT * FROM verified_actions WHERE is_revoked = 0"
+        sql = "SELECT * FROM verified_actions WHERE is_revoked = 0 AND needs_review = 0"
         params = []
         if domain and domain != "all":
             sql += " AND domain = ?"
@@ -776,6 +784,36 @@ class SQLiteContextStore(AbstractContextStore):
                 self._fts_sync(conn, "fts_actions", self._ACTION_FTS, "verified_actions", action_id, remove=False)
                 conn.commit()
         return self.get_verified_action(action_id)
+
+    def list_review_actions(self, limit: int = 50) -> List[VerifiedAction]:
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM verified_actions WHERE needs_review = 1 AND is_revoked = 0 "
+                "ORDER BY timestamp DESC LIMIT ?", (max(0, limit),)
+            ).fetchall()
+        return [self._row_to_action(r) for r in rows]
+
+    def accept_action(self, action_id: str, speaker: SpeakerAttribution) -> Optional[VerifiedAction]:
+        action = self.get_verified_action(action_id)
+        if action is None or action.is_revoked or not action.needs_review:
+            return None
+        with self._get_connection() as conn:
+            cur = conn.execute("UPDATE verified_actions SET needs_review = 0, speaker_json = ? "
+                               "WHERE id = ? AND needs_review = 1 AND is_revoked = 0",
+                               (rules.speaker_to_json(speaker), action_id))
+            conn.commit()
+            if cur.rowcount == 0:
+                return None
+        action.needs_review = False
+        action.speaker = speaker
+        # The routine matching skipped while the action waited for confirmation
+        resolved = self.match_and_resolve_task(action)
+        if resolved is not None:
+            with self._get_connection() as conn:
+                conn.execute("UPDATE verified_actions SET matched_task_id = ? WHERE id = ?", (resolved.id, action_id))
+                conn.commit()
+            action.matched_task_id = resolved.id
+        return action
 
     def revoke_action(self, action_id: str) -> Optional[RevokeResult]:
         action = self.get_verified_action(action_id)

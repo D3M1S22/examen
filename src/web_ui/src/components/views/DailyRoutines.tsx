@@ -7,6 +7,7 @@ import { CreateTaskModal } from "../ui/CreateTaskModal";
 import { CardActions } from "../ui/CardActions";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { TranscriptExcerpt } from "../ui/TranscriptExcerpt";
+import { ReviewTray } from "../ui/ReviewTray";
 import { excerptLabels } from "@/utils/curation";
 
 interface DailyRoutinesProps {
@@ -16,6 +17,10 @@ interface DailyRoutinesProps {
   handleAddRoutine: (title: string, domain: string, scheduled_time: string, recurrence?: string) => Promise<void>;
   handleDeleteRoutine?: (taskId: string) => Promise<void>;
   handleEditRoutine?: (taskId: string, changes: TaskChanges) => Promise<void>;
+  /** Speaker review: routines from speech Bee did not attribute to anyone */
+  reviewTasks?: PlannedTask[];
+  onAcceptReview?: (kind: "action" | "task", id: string) => Promise<void>;
+  onDismissReview?: (kind: "action" | "task", id: string) => Promise<void>;
 }
 
 export function DailyRoutines({
@@ -25,6 +30,9 @@ export function DailyRoutines({
   handleAddRoutine,
   handleDeleteRoutine,
   handleEditRoutine,
+  reviewTasks = [],
+  onAcceptReview,
+  onDismissReview,
 }: DailyRoutinesProps) {
   const [statusFilter, setStatusFilter] = useState<"ALL" | "PENDING" | "COMPLETED">("ALL");
   const [domainFilter, setDomainFilter] = useState<string>("ALL");
@@ -40,7 +48,8 @@ export function DailyRoutines({
     ? `${latencyMetrics.average_ms}MS (AVG)`
     : "PASSIVE (STANDBY)";
 
-  const tasks = routinesData?.tasks || [];
+  // Routines waiting for confirmation live in the review tray, not in the checklist
+  const tasks = (routinesData?.tasks || []).filter((t) => t.status !== "review" && t.status !== "dismissed");
 
   const completedCount = tasks.filter((t) => t.status === "completed").length;
   const pendingCount = tasks.filter((t) => t.status === "pending").length;
@@ -238,6 +247,10 @@ export function DailyRoutines({
           </button>
         </div>
       </div>
+
+      {onAcceptReview && onDismissReview && (
+        <ReviewTray kind="task" items={reviewTasks} onAccept={onAcceptReview} onDismiss={onDismissReview} />
+      )}
 
       {/* Search & Filter Row */}
       <div className="flex flex-col gap-4 mb-space-lg border-b border-surface-container-highest pb-6">

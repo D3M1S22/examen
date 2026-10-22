@@ -18,6 +18,8 @@ export interface AccountUser {
   privacy_consent_at?: string | null;
   is_admin?: boolean;
   status?: "active" | "disabled" | string;
+  /** Speaker review: untagged speech is accepted as the owner's without confirmation */
+  auto_accept_untagged?: boolean;
 }
 
 /** Server-side link between the account and its Bee account (one Bee account per user). */
@@ -159,6 +161,9 @@ export const fetchAccount = () =>
 
 export const updateDisplayName = (display_name: string) =>
   call<{ user: AccountUser }>("/api/account", { method: "PATCH", body: JSON.stringify({ display_name }) });
+
+export const updateAutoAcceptUntagged = (auto_accept_untagged: boolean) =>
+  call<{ user: AccountUser }>("/api/account", { method: "PATCH", body: JSON.stringify({ auto_accept_untagged }) });
 
 export const changePassword = (current_password: string, new_password: string) =>
   post<{ success: boolean; other_sessions_signed_out: number }>("/api/account/password", {

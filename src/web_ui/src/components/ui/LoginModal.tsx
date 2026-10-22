@@ -19,8 +19,11 @@ import {
   revokeApiToken,
   signOutEverywhere,
   startBeePairing,
+  updateAutoAcceptUntagged,
   updateDisplayName,
+  fetchAccount,
 } from "@/utils/auth";
+import { getApiBaseUrl } from "@/utils/api";
 import { PrivacyNotice } from "@/components/ui/PrivacyNotice";
 import { AdminSection } from "@/components/ui/AdminSection";
 
@@ -363,6 +366,30 @@ function AccountSection({ currentUser, onChanged, setMessage }: {
   }, []);
   useEffect(loadTokens, [loadTokens]);
 
+  // Speaker review (docs/next_steps/speaker_review/03 §4): accept untagged speech without confirmation
+  const [autoAccept, setAutoAccept] = useState(false);
+  const [waiting, setWaiting] = useState(0);
+  useEffect(() => {
+    fetchAccount().then((r) => setAutoAccept(!!r.user.auto_accept_untagged)).catch(() => undefined);
+  }, []);
+  const toggleAutoAccept = (enabled: boolean) => run(async () => {
+    await updateAutoAcceptUntagged(enabled);
+    setAutoAccept(enabled);
+    setWaiting(0);
+    if (enabled) {
+      const queue = await fetch(`${getApiBaseUrl()}/api/review`).then((r) => r.json()).catch(() => null);
+      setWaiting(queue?.count || 0);
+    }
+    setMessage({ kind: "ok", text: enabled ? "Untagged speech is now accepted automatically." : "Untagged speech now waits for your confirmation." });
+  });
+  const acceptWaiting = () => run(async () => {
+    const res = await fetch(`${getApiBaseUrl()}/api/review/accept-all`, { method: "POST" });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.success === false) throw new Error(data.error || "Could not accept the waiting items.");
+    setWaiting(0);
+    setMessage({ kind: "ok", text: `${data.accepted || 0} waiting item(s) accepted.` });
+  });
+
   const run = async (fn: () => Promise<void>) => {
     setBusy(true);
     setMessage(null);
@@ -388,6 +415,35 @@ function AccountSection({ currentUser, onChanged, setMessage }: {
           <button className={btnGhost} disabled={busy}>Save</button>
         </div>
       </form>
+
+      <div className="space-y-2">
+        <div className="text-[11px] font-mono uppercase tracking-wider text-zinc-300">Speaker recognition</div>
+        <label className="flex items-start gap-3 p-3 rounded-xl bg-white/[0.03] border border-white/10 cursor-pointer">
+          <input
+            type="checkbox"
+            className="mt-0.5 accent-amber-400"
+            checked={autoAccept}
+            disabled={busy}
+            onChange={(e) => toggleAutoAccept(e.target.checked)}
+          />
+          <span className="space-y-1">
+            <span className="block text-[13px] text-zinc-100">Accept untagged speech automatically</span>
+            <span className="block text-[11px] text-zinc-400">
+              When Bee does not recognise who is speaking, EXAMEN asks you to confirm each action and routine.
+              Turn this on to accept them as yours straight away.
+            </span>
+            <span className="block text-[11px] text-amber-300">
+              Other people&apos;s sentences may then become your tasks or close your routines.
+            </span>
+          </span>
+        </label>
+        {waiting > 0 && (
+          <div className="flex items-center justify-between gap-3 p-3 rounded-xl bg-amber-950/30 border border-amber-500/30">
+            <span className="text-[11px] text-amber-200">{waiting} item(s) are still waiting for confirmation.</span>
+            <button type="button" className={btnGhost} disabled={busy} onClick={acceptWaiting}>Accept them too</button>
+          </div>
+        )}
+      </div>
 
       <form className="space-y-2" onSubmit={(e) => { e.preventDefault(); run(async () => {
         const r = await changePassword(currentPw, newPw);

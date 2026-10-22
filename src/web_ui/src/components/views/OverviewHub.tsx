@@ -68,7 +68,7 @@ export function OverviewHub({
   const topics = topicsData?.topics || [];
 
   const completedTasks = statusData?.stats?.planned_tasks_completed ?? tasks.filter((t) => t.status === "completed").length;
-  const pendingTasks = statusData?.stats?.planned_tasks_pending ?? tasks.filter((t) => t.status !== "completed").length;
+  const pendingTasks = statusData?.stats?.planned_tasks_pending ?? tasks.filter((t) => t.status === "pending").length;
   const totalActionsCount = statusData?.stats?.total_actions ?? actions.length;
   const totalContactsCount = statusData?.stats?.total_contacts ?? contacts.length;
   const totalTopicsCount = statusData?.stats?.total_topics ?? topics.length;

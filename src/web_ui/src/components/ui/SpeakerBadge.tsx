@@ -9,6 +9,7 @@ const CHIP = "inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full border f
  * - blue   "Asked by …":       someone asked the owner to do it ("Damiano, remember to …")
  * - grey   "Voice not verified": no Bee tag, probably the owner
  * - amber  name:               said by another person
+ * - green  "Confirmed by you":  the owner accepted it after Bee recognised nobody (speaker review)
  * Manual entries and simulator data (no attribution, or source "internal") show nothing.
  */
 export function SpeakerBadge({ speaker }: { speaker?: SpeakerAttribution | null }) {
@@ -30,6 +31,13 @@ export function SpeakerBadge({ speaker }: { speaker?: SpeakerAttribution | null 
     );
   }
   if (speaker.role === "user") {
+    if (speaker.source === "user_confirmed") {
+      return (
+        <span className={`${CHIP} bg-emerald-950/40 border-emerald-500/25 text-emerald-300/80`} title="Bee did not recognise the speaker; you confirmed it was you">
+          ✔ Confirmed by you
+        </span>
+      );
+    }
     if (speaker.source === "history_name") {
       return (
         <span className={`${CHIP} bg-emerald-950/40 border-emerald-500/25 text-emerald-300/80`} title="Bee history names you as the speaker (no voice score)">

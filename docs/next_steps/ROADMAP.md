@@ -53,6 +53,7 @@
 │    ├─ M11.2: Curation service, REST & SSE          │ P1       │ Medium │ MC 03       │ ✅ DONE   │
 │    ├─ M11.3: MCP edit/delete (two-step confirm)    │ P1       │ Low    │ MC 03 §5    │ ✅ DONE   │
 │    └─ M11.4: Dashboard edit/delete & excerpts      │ P1       │ Medium │ MC 04       │ ✅ DONE   │
+│  Phase 12: Speaker Review (confirm untagged)       │ High     │ Medium │ SR 00-04    │ ✅ IMPLEMENTED│
 └──────────────────────────────────────────────────────────────────────────────────────────────────┘
 
 > **DTEE** = [docs/next_steps/deep_topic_event_engine/](deep_topic_event_engine/00_overview.md)
@@ -60,6 +61,7 @@
 > **ADM** = [docs/next_steps/admin_console/](admin_console/00_overview.md)
 > **DDB** = [docs/next_steps/dynamodb_storage/](dynamodb_storage/00_overview.md)
 > **MC** = [docs/next_steps/manual_curation/](manual_curation/00_overview.md)
+> **SR** = [docs/next_steps/speaker_review/](speaker_review/00_overview.md)
 ```
 
 ---
@@ -343,6 +345,10 @@
 > **Goal:** let the user correct what EXAMEN extracted, in the dashboard and over MCP. Actions, routines and contacts can be edited; actions, routines, contacts and topic events can be deleted, with cascades and a two-step MCP confirmation. A corrected contact name re-runs the web search. Routine cards show the transcript excerpt they came from, and the acoustic placeholder graphics are removed.
 > **Spec & status:** [manual_curation/](manual_curation/00_overview.md) (decisions D1–D8, implemented 2026-10-22; status, tests and deviations in [05 §0](manual_curation/05_implementation_plan_and_testing.md)).
 
+
+### Phase 12: Speaker Review (IMPLEMENTED)
+> **Goal:** actions and tasks from speech Bee did not attribute to anyone wait for the owner's confirmation instead of counting at once; another recognised person's own plans are dropped; requests naming the owner stay the owner's tasks. A per-user setting (off by default) accepts untagged speech automatically.
+> **Spec:** [speaker_review/](speaker_review/00_overview.md) (decisions R1–R9, implemented 2026-10-23; status and deviations in [04 §0](speaker_review/04_implementation_plan_and_testing.md)).
 ---
 
 ## 📈 Dependency Graph & Recommended Execution Sequence

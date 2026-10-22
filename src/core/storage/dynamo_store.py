@@ -61,7 +61,7 @@ COLUMNS: Dict[str, Tuple[str, ...]] = {
                       "source_key", "recovered", "speaker_json"),
     "verified_actions": ("id", "action_type", "domain", "raw_statement", "confidence", "timestamp", "is_revoked",
                          "matched_task_id", "location_json", "session_id", "ingest_source", "ingest_run_id",
-                         "source_key", "speaker_json"),
+                         "source_key", "speaker_json", "needs_review"),
     "social_contacts": ("id", "person_name", "company_or_role", "contact_info", "commitments_json",
                         "key_topics_json", "timestamp", "web_profile_json", "location_encountered", "session_id",
                         "website_url"),
@@ -198,7 +198,7 @@ class DynamoContextStore(AbstractContextStore):
         rows = [
             r for r in self._prefix("TASK#")
             if (not ingest_source or r.get("ingest_source") == ingest_source)
-            and (not status or r.get("status") == status)
+            and (r.get("status") == status if status else r.get("status") != "dismissed")
             and (not domain or r.get("domain") == domain)
             and (not origin or r.get("origin") == origin)
         ]
@@ -281,7 +281,9 @@ class DynamoContextStore(AbstractContextStore):
     def save_action(self, action: VerifiedAction) -> str:
         rec_id = action.id or str(uuid.uuid4())
         action.id = rec_id
-        if not action.matched_task_id:
+        if action.needs_review:
+            action.matched_task_id = None  # completes nothing until the owner accepts it
+        elif not action.matched_task_id:
             resolved_task = self.match_and_resolve_task(action)
             if resolved_task:
                 action.matched_task_id = resolved_task.id
@@ -296,6 +298,7 @@ class DynamoContextStore(AbstractContextStore):
             "session_id": action.session_id, "ingest_source": action.ingest_source,
             "ingest_run_id": action.ingest_run_id, "source_key": action.source_key,
             "speaker_json": rules.speaker_to_json(action.speaker),
+            "needs_review": 1 if action.needs_review else 0,
         }
         self.table.put(self._item(f"ACTION#{rec_id}", row, g1pk=self._gpk("ACTION"),
                                   g1sk=f"{action.timestamp}#{rec_id}"), what="action")
@@ -319,7 +322,7 @@ class DynamoContextStore(AbstractContextStore):
         date_pattern = f"{target_date}%" if target_date else None
 
         def eligible(row: Dict[str, Any]) -> bool:
-            return not row.get("is_revoked") and (date_pattern is None or rules.sql_like(row.get("timestamp"), date_pattern))
+            return not row.get("is_revoked") and not row.get("needs_review") and (date_pattern is None or rules.sql_like(row.get("timestamp"), date_pattern))
 
         candidates = []
         by_id = self._get(f"ACTION#{target}") if target else None
@@ -341,7 +344,8 @@ class DynamoContextStore(AbstractContextStore):
         self, limit: int = 10, domain: Optional[str] = None, ingest_source: Optional[str] = None
     ) -> List[VerifiedAction]:
         e = Expr()
-        clauses = [f"{e.name('is_revoked')} = {e.value(0)}"]
+        clauses = [f"{e.name('is_revoked')} = {e.value(0)}",
+                   f"(attribute_not_exists({e.name('needs_review')}) OR {e.name('needs_review')} = {e.value(0)})"]
         if domain and domain != "all":
             clauses.append(f"{e.name('domain')} = {e.value(domain)}")
         if ingest_source:
@@ -355,6 +359,41 @@ class DynamoContextStore(AbstractContextStore):
             if len(out) >= limit:
                 break
         return out
+
+    def list_review_actions(self, limit: int = 50) -> List[VerifiedAction]:
+        e = Expr()
+        out: List[VerifiedAction] = []
+        if limit <= 0:
+            return out
+        for row in self._index(self._g1, self._gpk("ACTION"), forward=False, expr=e,
+                               filter_expr=f"{e.name('needs_review')} = {e.value(1)} AND "
+                                           f"{e.name('is_revoked')} = {e.value(0)}"):
+            item = self._get(row["sk"])  # confirm-on-read: the index may lag behind an accept
+            if item and item.get("needs_review") and not item.get("is_revoked"):
+                out.append(rules.row_to_action(item))
+            if len(out) >= limit:
+                break
+        return out
+
+    def accept_action(self, action_id: str, speaker: SpeakerAttribution) -> Optional[VerifiedAction]:
+        e = Expr()
+        try:
+            self.table.update(self._key(f"ACTION#{action_id}"),
+                              set_={"speaker_json": rules.speaker_to_json(speaker), "needs_review": 0}, expr=e,
+                              condition=f"{e.name('needs_review')} = {e.value(1)} AND {e.name('is_revoked')} = {e.value(0)}")
+        except Exception as err:
+            if is_conditional_failure(err):
+                return None
+            raise
+        action = self.get_verified_action(action_id)
+        if action is None:
+            return None
+        # The routine matching skipped while the action waited for confirmation
+        resolved = self.match_and_resolve_task(action)
+        if resolved is not None:
+            self._update_existing(f"ACTION#{action_id}", {"matched_task_id": resolved.id})
+            action.matched_task_id = resolved.id
+        return action
 
     def update_action(self, action_id: str, changes: ActionChanges) -> Optional[VerifiedAction]:
         fields: Dict[str, Any] = {}

@@ -16,6 +16,7 @@ import {
   TaskChanges,
   ContactChanges,
   ContactCascade,
+  ReviewQueue,
 } from "@/types/schemas";
 import { EventAction } from "@/components/ui/EventCard";
 
@@ -164,6 +165,10 @@ function Dashboard({
     "/api/routines",
     fetcher
   );
+  // Speaker review: live results arrive without an SSE event, so the queue is polled
+  const { data: reviewData, mutate: mutateReview } = useSWR<ReviewQueue>("/api/review", fetcher, {
+    refreshInterval: 15000,
+  });
   const { data: actionsData, mutate: mutateActions } = useSWR<{ actions: VerifiedAction[] }>(
     "/api/actions?limit=50",
     fetcher
@@ -282,6 +287,10 @@ function Dashboard({
 
           // Manual curation (docs/next_steps/manual_curation/03 §4): handled here, the substring routing
           // below would announce a deletion as a new verified action
+          if (eventType === "review_resolved") {
+            mutateReview();
+            return;
+          }
           if (eventType === "action_updated" || eventType === "action_deleted") {
             mutateActions();
             if (eventPayload.reopened_task_id) mutateRoutines();
@@ -468,7 +477,7 @@ function Dashboard({
     } catch (err) {
       console.warn("SSE connection error:", err);
     }
-  }, [mutateActions, mutateRoutines, mutateSocial, mutateTopics, mutateStatus, refreshEvents, markTabUpdated, notifyEcho, showToast]);
+  }, [mutateActions, mutateRoutines, mutateSocial, mutateTopics, mutateStatus, mutateReview, refreshEvents, markTabUpdated, notifyEcho, showToast]);
 
   // Auth & GDPR Handlers
   // Account & Bee modal changed something (Bee paired, name changed...): reload the session
@@ -682,7 +691,7 @@ function Dashboard({
   };
 
   // Manual curation (docs/next_steps/manual_curation/04 §6)
-  const curationRequest = async (path: string, method: "GET" | "PUT" | "DELETE", body?: unknown) => {
+  const curationRequest = async (path: string, method: "GET" | "PUT" | "POST" | "DELETE", body?: unknown) => {
     const res = await fetch(`${getApiBaseUrl()}${path}`, {
       method,
       headers: body ? { "Content-Type": "application/json" } : undefined,
@@ -691,6 +700,58 @@ function Dashboard({
     const data = await res.json().catch(() => ({}));
     if (!res.ok || data.success === false) throw new Error(data.error || `HTTP ${res.status}`);
     return data;
+  };
+
+  // Speaker review (docs/next_steps/speaker_review/03 §4)
+  const handleAcceptReview = async (kind: "action" | "task", id: string) => {
+    const previous = reviewData;
+    if (previous) {
+      await mutateReview(
+        {
+          ...previous,
+          actions: kind === "action" ? previous.actions.filter((a) => a.id !== id) : previous.actions,
+          tasks: kind === "task" ? previous.tasks.filter((t) => t.id !== id) : previous.tasks,
+          count: Math.max(0, previous.count - 1),
+        },
+        false
+      );
+    }
+    try {
+      await curationRequest(`/api/review/${kind}/${id}/accept`, "POST");
+      mutateReview();
+      if (kind === "action") mutateActions();
+      mutateRoutines();
+      mutateStatus();
+      markTabUpdated(kind === "action" ? "peace" : "routines");
+      showToast(kind === "action" ? "Confirmed: the action is yours." : "Confirmed: added to your routines.");
+    } catch (err: any) {
+      mutateReview(previous, false);
+      showToast(`Could not confirm: ${err.message}`);
+    }
+  };
+
+  const handleDismissReview = async (kind: "action" | "task", id: string) => {
+    const previous = reviewData;
+    if (previous) {
+      await mutateReview(
+        {
+          ...previous,
+          actions: kind === "action" ? previous.actions.filter((a) => a.id !== id) : previous.actions,
+          tasks: kind === "task" ? previous.tasks.filter((t) => t.id !== id) : previous.tasks,
+          count: Math.max(0, previous.count - 1),
+        },
+        false
+      );
+    }
+    try {
+      await curationRequest(`/api/review/${kind}/${id}/dismiss`, "POST");
+      mutateReview();
+      mutateStatus();
+      showToast("Discarded.");
+    } catch (err: any) {
+      mutateReview(previous, false);
+      showToast(`Could not discard: ${err.message}`);
+    }
   };
 
   const handleEditAction = async (actionId: string, changes: ActionChanges) => {
@@ -993,6 +1054,9 @@ function Dashboard({
               onAddAction={handleAddAction}
               onEditAction={handleEditAction}
               onDeleteAction={handleDeleteAction}
+              reviewActions={reviewData?.actions || []}
+              onAcceptReview={handleAcceptReview}
+              onDismissReview={handleDismissReview}
             />
           )}
 
@@ -1004,6 +1068,9 @@ function Dashboard({
               handleAddRoutine={handleAddRoutine}
               handleDeleteRoutine={handleDeleteRoutine}
               handleEditRoutine={handleEditRoutine}
+              reviewTasks={reviewData?.tasks || []}
+              onAcceptReview={handleAcceptReview}
+              onDismissReview={handleDismissReview}
             />
           )}
 

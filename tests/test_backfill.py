@@ -308,8 +308,11 @@ async def test_backfill_engine_is_isolated_from_the_live_engine(store):
 
 
 @pytest.mark.asyncio
-async def test_rerunning_a_window_produces_no_duplicates(store):
+async def test_rerunning_a_window_produces_no_duplicates(store, monkeypatch):
     from src.pipeline.app import agent_invocation
+
+    # Temporal guards, not speakers: the fixture's history is untagged ("Unknown"), which waits for review
+    monkeypatch.setattr(settings, "speaker_auto_accept_untagged", True)
 
     start = NOW - timedelta(hours=3)
     conv = make_conv(11, start, [(0, "I unplugged the iron before leaving"), (30, "nice weather today")])
@@ -331,8 +334,11 @@ async def test_rerunning_a_window_produces_no_duplicates(store):
 
 
 @pytest.mark.asyncio
-async def test_historical_action_never_completes_todays_routine(store):
+async def test_historical_action_never_completes_todays_routine(store, monkeypatch):
     from src.pipeline.app import agent_invocation
+
+    # Temporal guards, not speakers: the fixture's history is untagged ("Unknown"), which waits for review
+    monkeypatch.setattr(settings, "speaker_auto_accept_untagged", True)
 
     store.save_planned_task(PlannedTask(id="daily-iron", title="unplug the iron", domain="safety",
                                         recurrence="daily"))
@@ -352,8 +358,11 @@ async def test_historical_action_never_completes_todays_routine(store):
 
 
 @pytest.mark.asyncio
-async def test_recovered_scheduled_task_is_anchored_on_spoken_time(store):
+async def test_recovered_scheduled_task_is_anchored_on_spoken_time(store, monkeypatch):
     from src.pipeline.app import agent_invocation
+
+    # Temporal guards, not speakers: the fixture's history is untagged ("Unknown"), which waits for review
+    monkeypatch.setattr(settings, "speaker_auto_accept_untagged", True)
 
     start = (NOW - timedelta(days=3)).replace(hour=9, minute=0, second=0)
     conv = make_conv(13, start, [(0, "Remind me to call the dentist tomorrow at 3 pm")])
@@ -366,6 +375,24 @@ async def test_recovered_scheduled_task_is_anchored_on_spoken_time(store):
     assert due.date() == (start + timedelta(days=1)).date() and due.hour == 15
     assert task.status == "overdue" and task.recovered
     assert to_epoch(task.created_at) == pytest.approx(start.timestamp(), abs=1)
+
+
+@pytest.mark.asyncio
+async def test_untagged_history_waits_for_confirmation(store):
+    """speaker_review R8: REST "Unknown" is untagged speech, so recovered results wait for the owner."""
+    from src.pipeline.app import agent_invocation
+
+    store.save_planned_task(PlannedTask(id="door-once", title="lock the front door", domain="safety",
+                                        created_at=(NOW - timedelta(days=4)).isoformat()))
+    start = NOW - timedelta(days=3)
+    conv = make_conv(14, start, [(0, "I locked the front door"), (30, "Remind me to call the dentist tomorrow at 3 pm")])
+    service = make_service(store, FixtureBeeHistorySource([conv]), dispatch=agent_invocation)
+    await service.create_run((start - timedelta(minutes=5)).isoformat(), (start + timedelta(minutes=30)).isoformat())
+    await service.run_next()
+
+    assert store.list_recent_actions(limit=10) == [] and len(store.list_review_actions()) == 1
+    assert store.get_planned_task("door-once").status == "pending"
+    assert [t.status for t in store.list_planned_tasks(ingest_source="backfill")] == ["review"]
 
 
 def test_temporal_guard_rules():

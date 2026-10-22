@@ -29,6 +29,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, Set, Tuple
 from src.core.config import settings
 from src.core.limits import llm_slot
 from src.core.metrics import metrics
+from src.core.speaker_prefs import auto_accept_untagged
 from src.core.tenancy import get_tenant_id
 from src.core.schemas import (
     BackfillEstimate,
@@ -735,6 +736,7 @@ class ReplayExecutor:
                     # REST transcripts name the speaker (Bee diarization), with no voice-match score
                     "speaker_source": "history_name" if chunk.speaker_role != "unknown" else "untagged",
                     "wearer_name": get_wearer_identity().first_name,
+                    "auto_accept_untagged": auto_accept_untagged(),
                     "utterance_id": chunk.chunk_id,
                     "session_id": outcome.event_id or chunk.conversation_uuid,
                     "timestamp": chunk.timestamp,

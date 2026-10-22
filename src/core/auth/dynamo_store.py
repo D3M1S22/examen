@@ -36,7 +36,7 @@ from src.core.storage.dynamo_schema import AUTH, INDEX, table_name
 from src.core.storage.errors import UniqueConflict
 
 _USER_FIELDS = ("id", "email", "display_name", "created_at", "last_login_at", "privacy_consent_version",
-                "privacy_consent_at", "is_admin", "status")
+                "privacy_consent_at", "is_admin", "status", "auto_accept_untagged")
 _LINK_FIELDS = ("user_id", "bee_user_id", "bee_first_name", "state", "last_error", "linked_at", "updated_at")
 
 
@@ -66,8 +66,10 @@ class DynamoAuthStore(AuthStore):
     # ------------------------------------------------------------------
     @staticmethod
     def _to_user(item: Dict[str, Any]) -> User:
-        fields = {f: item.get(f) for f in _USER_FIELDS if f != "is_admin" and item.get(f) is not None}
-        return User(**fields, is_admin=bool(item.get("is_admin")))
+        fields = {f: item.get(f) for f in _USER_FIELDS
+                  if f not in ("is_admin", "auto_accept_untagged") and item.get(f) is not None}
+        return User(**fields, is_admin=bool(item.get("is_admin")),
+                    auto_accept_untagged=bool(item.get("auto_accept_untagged")))
 
     def _user_item(self, user_id: str) -> Optional[Dict[str, Any]]:
         return self.table.get({"pk": f"USER#{user_id}", "sk": "PROFILE"})
@@ -135,6 +137,9 @@ class DynamoAuthStore(AuthStore):
         except Exception as err:
             if not is_conditional_failure(err):  # UPDATE of a missing row is a no-op in SQLite
                 raise
+
+    def set_auto_accept_untagged(self, user_id: str, enabled: bool) -> None:
+        self._update_user(user_id, auto_accept_untagged=int(bool(enabled)))
 
     def set_admin(self, user_id: str, is_admin: bool) -> None:
         self._update_user(user_id, is_admin=int(is_admin))

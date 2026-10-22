@@ -202,6 +202,7 @@ def row_to_action(row: Any) -> VerifiedAction:
         ingest_run_id=_get(row, "ingest_run_id"),
         source_key=_get(row, "source_key"),
         speaker=speaker_from_row(row),
+        needs_review=bool(_get(row, "needs_review", 0)),
     )
 
 

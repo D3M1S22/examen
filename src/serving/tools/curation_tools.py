@@ -17,7 +17,15 @@ from typing import Any, Callable, Dict, Optional, Union
 
 from pydantic import BaseModel, ValidationError
 
-from src.core.schemas import ActionChanges, ContactChanges, PlannedTask, SocialEntity, TaskChanges, VerifiedAction
+from src.core.schemas import (
+    ActionChanges,
+    ContactChanges,
+    PlannedTask,
+    SocialEntity,
+    SpeakerAttribution,
+    TaskChanges,
+    VerifiedAction,
+)
 from src.core.storage import get_storage_store, rules
 from src.core.storage.base import AbstractContextStore
 from src.core.storage.errors import UniqueConflict
@@ -212,8 +220,11 @@ def execute_update_task(task_id: str, changes: Any, store: Optional[AbstractCont
     ctx = _store(store)
     parsed: TaskChanges = _validate(TaskChanges, changes)
     task = ctx.get_planned_task(task_id)
-    if task is None:
+    if task is None or task.status == "dismissed":
         raise _not_found("Routine")
+    if task.status == "review" and parsed.status is not None:
+        raise CurationError("A routine waiting for confirmation is accepted or discarded, not given a status",
+                            status=409, code="in_review")
     data = parsed.model_dump(exclude_unset=True)
     if "title" in data:
         title = (data["title"] or "").strip()
@@ -246,12 +257,15 @@ def execute_delete_task(task_id: str, confirm: bool = False, store: Optional[Abs
                         engine: Any = None) -> Dict[str, Any]:
     ctx = _store(store)
     task = ctx.get_planned_task(task_id)
-    if task is None:
+    if task is None or task.status == "dismissed":
         raise _not_found("Routine")
     if not confirm:
         return _preview("routine", {"id": task_id, "title": task.title, "scheduled_time": task.scheduled_time,
                                     "recurrence": task.recurrence},
                         f"This deletes the routine '{task.title}'.")
+    if task.status == "review":
+        # An unconfirmed task is discarded, not deleted: the tombstone keeps a re-analysis from recreating it
+        return execute_dismiss("task", task_id, store=ctx, engine=engine)
     if not ctx.delete_planned_task(task_id):
         raise _not_found("Routine")
     _unlink(engine, ctx, task.session_id, "task_scheduled", task_id)
@@ -416,6 +430,119 @@ def execute_delete_event(session_id: str, confirm: bool = False, store: Optional
 
 
 # ---------------------------------------------------------------------------
+# Speaker review: results of untagged speech wait for the owner (docs/next_steps/speaker_review/03 §1)
+# ---------------------------------------------------------------------------
+
+REVIEW_KINDS = ("action", "task")
+CONFIRMED_BY_OWNER = SpeakerAttribution(role="user", source="user_confirmed")
+
+
+def _kind(kind: str) -> str:
+    if kind not in REVIEW_KINDS:
+        raise CurationError("kind must be 'action' or 'task'")
+    return kind
+
+
+def execute_list_review(store: Optional[AbstractContextStore] = None) -> Dict[str, Any]:
+    ctx = _store(store)
+    actions = [action_dict(a) for a in ctx.list_review_actions()]
+    tasks = [task_dict(t) for t in ctx.list_planned_tasks(status="review")]
+    count = len(actions) + len(tasks)
+    items = [f"'{a['action_type'].replace('_', ' ')}'" for a in actions] + [f"'{t['title']}'" for t in tasks]
+    spoken = (f"You have {count} thing{'s' if count != 1 else ''} to confirm: {', '.join(items[:5])}."
+              if count else "Nothing to confirm.")
+    return {"actions": actions, "tasks": tasks, "count": count, "spoken_summary": spoken}
+
+
+def execute_accept(kind: str, item_id: str, store: Optional[AbstractContextStore] = None,
+                   speaker: Optional[SpeakerAttribution] = None) -> Dict[str, Any]:
+    """The owner (or a late Bee tag with the owner's voice, ``speaker``) confirms an item in review."""
+    ctx = _store(store)
+    speaker = speaker or CONFIRMED_BY_OWNER
+    if _kind(kind) == "action":
+        current = ctx.get_verified_action(item_id)
+        if current is None or current.is_revoked:
+            raise _not_found("Action")
+        accepted = ctx.accept_action(item_id, speaker)
+        if accepted is None:
+            raise CurationError("The action is no longer waiting for confirmation", status=409, code="not_in_review")
+        logger.info(f"Action {item_id[:8]} accepted (routine completed: {bool(accepted.matched_task_id)})")
+        _notify("review_resolved", {"kind": "action", "id": item_id, "outcome": "accepted"})
+        _notify("action_updated", {"action_id": item_id, "reopened_task_id": None})
+        if accepted.matched_task_id:
+            _notify("routine_updated", {"id": accepted.matched_task_id, "status": "completed"})
+        return {"status": "accepted", "action": action_dict(accepted),
+                "spoken_summary": f"Confirmed: '{_title(accepted)}' is yours."}
+    task = ctx.get_planned_task(item_id)
+    if task is None or task.status == "dismissed":
+        raise _not_found("Routine")
+    if task.status != "review":
+        raise CurationError("The routine is no longer waiting for confirmation", status=409, code="not_in_review")
+    task.status = "pending"
+    task.speaker = speaker
+    ctx.update_planned_task(task)
+    payload = task_dict(task)
+    logger.info(f"Routine {item_id[:8]} accepted")
+    _notify("review_resolved", {"kind": "task", "id": item_id, "outcome": "accepted"})
+    _notify("routine_updated", payload)
+    return {"status": "accepted", "task": payload, "spoken_summary": f"Added '{task.title}' to your routines."}
+
+
+def execute_dismiss(kind: str, item_id: str, store: Optional[AbstractContextStore] = None, engine: Any = None,
+                    speaker: Optional[SpeakerAttribution] = None) -> Dict[str, Any]:
+    """Discards an item as not the owner's (tombstone: a re-analysis never recreates it). Works on items in
+    review and, for late contact tags, on active ones; ``speaker`` records who Bee says spoke."""
+    ctx = _store(store)
+    if _kind(kind) == "action":
+        action = ctx.get_verified_action(item_id)
+        if action is None or action.is_revoked:
+            raise _not_found("Action")
+        if speaker is not None:
+            ctx.set_action_speaker(item_id, speaker)
+        result = ctx.revoke_action(item_id)
+        if result is None:
+            raise _not_found("Action")
+        _unlink(engine, ctx, action.session_id, "action", item_id)
+        logger.info(f"Action {item_id[:8]} dismissed (routine reopened: {bool(result.reopened_task_id)})")
+        _notify("review_resolved", {"kind": "action", "id": item_id, "outcome": "dismissed"})
+        _notify("action_deleted", {"action_id": item_id, "reopened_task_id": result.reopened_task_id})
+        if result.reopened_task_id:
+            _notify("routine_updated", {"id": result.reopened_task_id, "status": "pending"})
+        return {"status": "dismissed", "dismissed_id": item_id, "reopened_task_id": result.reopened_task_id,
+                "spoken_summary": f"Discarded '{_title(action)}'."}
+    task = ctx.get_planned_task(item_id)
+    if task is None or task.status == "dismissed":
+        raise _not_found("Routine")
+    task.status = "dismissed"
+    if speaker is not None:
+        task.speaker = speaker
+    ctx.update_planned_task(task)
+    _unlink(engine, ctx, task.session_id, "task_scheduled", item_id)
+    logger.info(f"Routine {item_id[:8]} dismissed")
+    _notify("review_resolved", {"kind": "task", "id": item_id, "outcome": "dismissed"})
+    _notify("routine_deleted", {"task_id": item_id})
+    return {"status": "dismissed", "dismissed_id": item_id, "spoken_summary": f"Discarded '{task.title}'."}
+
+
+def execute_accept_all(store: Optional[AbstractContextStore] = None) -> Dict[str, Any]:
+    ctx = _store(store)
+    accepted = 0
+    for action in ctx.list_review_actions(limit=10_000):
+        if ctx.accept_action(action.id, CONFIRMED_BY_OWNER) is not None:
+            accepted += 1
+    for task in ctx.list_planned_tasks(status="review"):
+        task.status = "pending"
+        task.speaker = CONFIRMED_BY_OWNER
+        ctx.update_planned_task(task)
+        accepted += 1
+    logger.info(f"Review: {accepted} item(s) accepted at once")
+    if accepted:
+        _notify("review_resolved", {"kind": "all", "outcome": "accepted_all", "count": accepted})
+    return {"status": "accepted", "accepted": accepted,
+            "spoken_summary": f"Confirmed {accepted} item{'s' if accepted != 1 else ''}."}
+
+
+# ---------------------------------------------------------------------------
 # MCP tools (registered in mcp_server.py with ToolAnnotations, under tenant_tool)
 # ---------------------------------------------------------------------------
 
@@ -529,3 +656,30 @@ def delete_session_dossier(session_id: str, confirm: bool = False) -> Dict[str, 
         confirm: True only after the user confirmed the preview.
     """
     return _tool(lambda: execute_delete_event(session_id, confirm=confirm))
+
+
+def list_items_to_review() -> Dict[str, Any]:
+    """List the actions and routines EXAMEN heard but could not attribute to the user's voice (Bee did not
+    recognise the speaker). They do not count until the user confirms them.
+    """
+    return execute_list_review()
+
+
+def accept_item(kind: str, item_id: str) -> Dict[str, Any]:
+    """Confirm that an item waiting for confirmation is the user's ("yes, that was me").
+
+    Args:
+        kind: 'action' (Peace of Mind note) or 'task' (routine).
+        item_id: Exact id from list_items_to_review. Never guess it.
+    """
+    return _tool(lambda: execute_accept(kind, item_id))
+
+
+def dismiss_item(kind: str, item_id: str) -> Dict[str, Any]:
+    """Discard an item waiting for confirmation that is not the user's ("no, someone else said it").
+
+    Args:
+        kind: 'action' (Peace of Mind note) or 'task' (routine).
+        item_id: Exact id from list_items_to_review. Never guess it.
+    """
+    return _tool(lambda: execute_dismiss(kind, item_id))

@@ -35,6 +35,7 @@ from src.core.config import settings
 from src.core.storage import get_storage_store
 from src.core.limits import llm_slot
 from src.core.metrics import metrics
+from src.core.speaker_prefs import auto_accept_untagged
 from src.core.tenancy import get_tenant_id
 from src.core.schemas import CoverageGap, CoverageInterval, LocationTelemetry, SpeakerAttribution, UtteranceChunk
 
@@ -340,6 +341,7 @@ class BeeStreamOrchestrator(Debug):
             "speaker_score": chunk.speaker_score,
             "speaker_source": chunk.speaker_source,
             "wearer_name": self.identity.first_name,
+            "auto_accept_untagged": auto_accept_untagged(),
             "utterance_id": chunk.chunk_id,
             "session_id": event_id or chunk.conversation_uuid,
             "timestamp": chunk.timestamp,
@@ -455,32 +457,35 @@ class BeeStreamOrchestrator(Debug):
         task.add_done_callback(self._side_tasks.discard)
 
     def reconcile_speaker(self, source_key: Optional[str], match: SpeakerMatch) -> Dict[str, int]:
-        """Applies a late speaker tag to the action and task extracted from that utterance.
+        """Applies a late speaker tag to the action and task extracted from that utterance
+        (docs/next_steps/speaker_review/02 §4). Ids are derived from the source key.
 
-        A contact's completed action no longer counts as the user's (revoked, and a task it completed is
-        reopened); a task a contact voiced is cancelled. Entities ids are derived from the source key."""
+        The owner's voice accepts an item waiting for confirmation. A contact's voice discards the action
+        (a routine it completed is reopened) and the contact's own plan; a request to the owner stays the
+        owner's task, now "asked by" that contact. Accept / discard go through curation_tools, so the event
+        link and the dashboard follow as for the owner's own decisions."""
         out = {"actions": 0, "tasks": 0}
         if not source_key:
             return out
         from src.pipeline.nodes.persist import derived_entity_id
+        from src.serving.tools import curation_tools
 
         speaker = SpeakerAttribution(role=match.role, name=match.name, score=match.score, source=match.source)
         try:
             store = self.store or get_storage_store()
             action_id = derived_entity_id(source_key, "action")
             action = store.get_verified_action(action_id) if action_id else None
-            if action is not None:
-                revoke = match.role == "contact" and not action.is_revoked
-                store.set_action_speaker(action_id, speaker, revoke=revoke)
+            if action is not None and not action.is_revoked:
+                if match.role == "contact":
+                    curation_tools.execute_dismiss("action", action_id, store=store, speaker=speaker)
+                elif match.role == "user" and action.needs_review:
+                    curation_tools.execute_accept("action", action_id, store=store, speaker=speaker)
+                else:
+                    store.set_action_speaker(action_id, speaker)
                 out["actions"] = 1
-                if revoke and action.matched_task_id:
-                    task = store.get_planned_task(action.matched_task_id)
-                    if task is not None and task.verified_action_id == action_id and task.status == "completed":
-                        task.status, task.completed_at, task.verified_action_id = "pending", None, None
-                        store.update_planned_task(task)
             task_id = derived_entity_id(source_key, "task")
             task = store.get_planned_task(task_id) if task_id else None
-            if task is not None:
+            if task is not None and task.status != "dismissed":
                 from src.pipeline.nodes.scheduler import is_request_to_owner
 
                 requested = bool(task.speaker and task.speaker.addressed_to_user) or (
@@ -488,10 +493,14 @@ class BeeStreamOrchestrator(Debug):
                 if requested and match.role == "contact":
                     # "Damiano, remember to ...": now we also know who asked; still the owner's task
                     speaker = speaker.model_copy(update={"addressed_to_user": True})
-                elif match.role == "contact" and task.status == "pending" and task.origin == "ambient_voice":
-                    task.status = "cancelled"  # another person's own plan, not the owner's task
-                task.speaker = speaker
-                store.update_planned_task(task)
+                own_plan_of_contact = match.role == "contact" and not requested and task.origin == "ambient_voice"
+                if own_plan_of_contact and task.status in ("pending", "review"):
+                    curation_tools.execute_dismiss("task", task_id, store=store, speaker=speaker)
+                elif task.status == "review" and (match.role == "user" or requested):
+                    curation_tools.execute_accept("task", task_id, store=store, speaker=speaker)
+                else:
+                    task.speaker = speaker
+                    store.update_planned_task(task)
                 out["tasks"] = 1
         except Exception as e:
             self.warn(f"Speaker reconcile error: {type(e).__name__}: {e}", "storage.write_failed", error=e)

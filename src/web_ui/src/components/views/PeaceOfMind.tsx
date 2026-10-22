@@ -9,6 +9,7 @@ import { EditActionModal } from "../ui/EditActionModal";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { CardActions } from "../ui/CardActions";
 import { TranscriptExcerpt } from "../ui/TranscriptExcerpt";
+import { ReviewTray } from "../ui/ReviewTray";
 import { speakAlexaReassurance } from "@/utils/audioEffects";
 import { displayActionTitle } from "@/utils/curation";
 
@@ -18,9 +19,22 @@ interface PeaceOfMindProps {
   onAddAction?: (statement: string) => Promise<void>;
   onEditAction?: (actionId: string, changes: ActionChanges) => Promise<void>;
   onDeleteAction?: (action: VerifiedAction) => Promise<void>;
+  /** Speaker review: actions from speech Bee did not attribute to anyone */
+  reviewActions?: VerifiedAction[];
+  onAcceptReview?: (kind: "action" | "task", id: string) => Promise<void>;
+  onDismissReview?: (kind: "action" | "task", id: string) => Promise<void>;
 }
 
-export function PeaceOfMind({ actionsData, statusData, onAddAction, onEditAction, onDeleteAction }: PeaceOfMindProps) {
+export function PeaceOfMind({
+  actionsData,
+  statusData,
+  onAddAction,
+  onEditAction,
+  onDeleteAction,
+  reviewActions = [],
+  onAcceptReview,
+  onDismissReview,
+}: PeaceOfMindProps) {
   const [confidenceFilter, setConfidenceFilter] = useState<"ALL" | "HIGH">("ALL");
   const [domainFilter, setDomainFilter] = useState<string>("ALL");
   const [searchQuery, setSearchQuery] = useState("");
@@ -179,6 +193,10 @@ export function PeaceOfMind({ actionsData, statusData, onAddAction, onEditAction
           )}
         </div>
       </div>
+
+      {onAcceptReview && onDismissReview && (
+        <ReviewTray kind="action" items={reviewActions} onAccept={onAcceptReview} onDismiss={onDismissReview} />
+      )}
 
       {/* Search & Filter Row */}
       <div className="flex flex-col gap-4 mb-space-xl border-b border-surface-container-highest pb-6">

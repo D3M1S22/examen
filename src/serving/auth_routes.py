@@ -338,6 +338,12 @@ def register_auth_routes(mcp: Any, hooks: TenantHooks) -> None:
                 store.record_consent(user.id, settings.privacy_notice_version)
             if "display_name" in body:
                 store.update_profile(user.id, body.get("display_name"))
+            if "auto_accept_untagged" in body:
+                if not isinstance(body["auto_accept_untagged"], bool):
+                    return JSONResponse({"error": "invalid_value", "message": "auto_accept_untagged must be true or false."},
+                                        status_code=400)
+                # Read by the next pipeline payload (src/core/speaker_prefs.py): no runtime to restart
+                store.set_auto_accept_untagged(user.id, body["auto_accept_untagged"])
             return JSONResponse({"user": store.get_user(user.id).public()})
 
         if request.method == "DELETE":

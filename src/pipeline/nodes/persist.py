@@ -47,6 +47,16 @@ def speaker_from_state(state: ExamenState) -> Optional[SpeakerAttribution]:
                               score=score, source=source)
 
 
+def needs_review(speaker: Optional[SpeakerAttribution], auto_accept_untagged: bool) -> bool:
+    """Speaker review (docs/next_steps/speaker_review/00 R1, R2, R6, R7): only untagged speech that is not a
+    request to the owner waits for the owner's confirmation, unless the owner opted in to accept it."""
+    if speaker is None:  # dashboard, simulator, MCP entries
+        return False
+    if speaker.addressed_to_user:  # "Damiano, push tonight": the owner has to do it, whoever spoke
+        return False
+    return speaker.role == "unknown" and speaker.source == "untagged" and not auto_accept_untagged
+
+
 def node_persist(state: ExamenState) -> Dict[str, Any]:
     """LangGraph node: Persistence Node.
 
@@ -61,6 +71,7 @@ def node_persist(state: ExamenState) -> Dict[str, Any]:
     historical = ingest_source == "backfill"
     spoken_at = state.get("timestamp")
     speaker = speaker_from_state(state)
+    auto_accept = bool(state.get("auto_accept_untagged"))
 
     # 1. Persist Verified Action & Auto-Resolve Planned Tasks
     action_data = state.get("action_data")
@@ -72,6 +83,7 @@ def node_persist(state: ExamenState) -> Dict[str, Any]:
             action_data.ingest_run_id = run_id
             action_data.source_key = source_key
             action_data.speaker = action_data.speaker or speaker
+            action_data.needs_review = needs_review(action_data.speaker, auto_accept)
             action_data.id = action_data.id or derived_entity_id(source_key, "action")
             if historical:
                 # Heuristic extractors stamp "now": a recovered action happened when it was spoken
@@ -160,6 +172,8 @@ def node_persist(state: ExamenState) -> Dict[str, Any]:
                 if due is not None and due < datetime.now() and scheduled_task.status == "pending":
                     scheduled_task.status = "overdue"
                     scheduled_task.recovered = True
+            if needs_review(scheduled_task.speaker, auto_accept):
+                scheduled_task.status = "review"
             existing_task = store.get_planned_task(scheduled_task.id) if source_key else None
             if existing_task is not None:
                 # Keep any status the user changed meanwhile

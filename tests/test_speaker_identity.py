@@ -186,14 +186,16 @@ async def test_late_wearer_tag_marks_the_action_as_voice_verified(orchestrator, 
     assert card["spoken_by"] == "you (voice match)" and card["voice_verified"] is True
 
 
-def test_reconcile_cancels_a_task_voiced_by_a_contact(orchestrator, store):
+def test_reconcile_dismisses_a_task_voiced_by_a_contact(orchestrator, store):
+    # speaker_review R3: a contact's own plan is discarded (hidden tombstone), not left visible as cancelled
     key = live_source_key("uuid-1", "u7")
     store.save_planned_task(PlannedTask(id=derived_entity_id(key, "task"), title="call the dentist",
                                         origin="ambient_voice", source_key=key))
     match = orchestrator.identity.match_tag(person_id=77, name="Marco")
     assert orchestrator.reconcile_speaker(key, match) == {"actions": 0, "tasks": 1}
     task = store.get_planned_task(derived_entity_id(key, "task"))
-    assert task.status == "cancelled" and task.speaker.name == "Marco"
+    assert task.status == "dismissed" and task.speaker.name == "Marco"
+    assert [t.id for t in store.list_planned_tasks()] == []
 
 
 @pytest.mark.asyncio

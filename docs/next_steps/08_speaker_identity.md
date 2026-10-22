@@ -60,7 +60,7 @@ Bindings live in memory per runtime and are re-learned from the first tag after 
 
 ## 5. Rules
 
-- **Untagged speech is still the user's.** About four in five utterances carry no tag, and most of them are the wearer's. Treating "unknown" as "not the user" would lose most actions. Only a positive `contact` changes behaviour.
+- **Untagged speech waits for confirmation** ([speaker_review/](speaker_review/00_overview.md), 2026-10-23). About four in five utterances carry no tag. Actions and tasks from them are saved "to confirm": they complete nothing and are not due until the owner accepts them (dashboard ✔ / ✕, MCP `accept_item` / `dismiss_item`). A later tag with the owner's voice accepts them, a contact's tag discards them. Requests naming the owner skip the review. The account setting "Accept untagged speech automatically" (off by default) restores the old behaviour, where untagged speech counted as the user's at once.
 - **Contact speech** never verifies an action (the action node returns nothing). The social node keeps its existing rule: a contact's promise has the contact as debtor.
 - **Tasks follow who has to do them, not who spoke.** The scheduler prompt says who the speaker is (owner with voice match, another person, or not identified) and the owner's first name; the model returns `for_owner` and `requested_by`:
 
@@ -75,7 +75,7 @@ Bindings live in memory per runtime and are re-learned from the first tag after 
 - **Late tags** (after the bounded wait):
   - arriving while the pipeline runs: applied right after it returns;
   - arriving after the utterance was analysed: applied at once (in a thread, tenant context copied);
-  - effect: the action and the task derived from that utterance (ids from the source key) get the speaker. If it is a contact, the action is revoked and a task it completed is reopened. A task becomes "asked by" that contact when it was a request to the owner (flagged, or the sentence reads as one); only another person's own plan is cancelled.
+  - effect: the action and the task derived from that utterance (ids from the source key) get the speaker. If it is the owner, items waiting for confirmation are accepted. If it is a contact, the action is discarded (a task it completed is reopened) and the contact's own plan is discarded (`dismissed`, hidden); a request to the owner stays the owner's task, "asked by" that contact. Accept / discard go through `curation_tools` (event unlink, SSE).
   - noop utterances only get the ring-buffer and diarization patch (no entity exists).
 - **Dashboard** (actions and routines):
 
@@ -122,6 +122,7 @@ Script: three short wearer sentences (an action, a reminder, a routine), two sen
 Matching over the capture: 2/2 tags → `user`, the wearer's person id bound from the first one. 2 of 3 short sentences were tagged; the untagged one ("I just locked the front door") stays `unknown` and still counts as the user's (§5).
 
 ## 8. Next
+
 
 - Persist the bound person ids per user (today they are re-learned after a restart).
 - Pass the speaker to the gatekeeper once tags arrive before screening (they arrive about 1 s after the utterance, screening starts at once).

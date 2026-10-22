@@ -151,6 +151,8 @@ class Settings(BaseSettings):
     bee_stream_ping_timeout_seconds: float = Field(default=90.0, alias="BEE_STREAM_PING_TIMEOUT_SECONDS")
     # Max wait after receipt for a `tagged-utterance` (speaker identity, ~1 s after the utterance)
     bee_speaker_tag_wait_seconds: float = Field(default=1.5, alias="BEE_SPEAKER_TAG_WAIT_SECONDS")
+    # Speaker review (docs/next_steps/speaker_review/): single-user default; accounts store it per user
+    speaker_auto_accept_untagged: bool = Field(default=False, alias="SPEAKER_AUTO_ACCEPT_UNTAGGED")
     # Wearer first name (default: `bee me` first_name)
     bee_wearer_name: Optional[str] = Field(default=None, alias="BEE_WEARER_NAME")
     # `bee locations current` polling period while streaming (0 disables)

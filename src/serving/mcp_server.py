@@ -190,6 +190,10 @@ for _fn in (update_action, update_planned_task, update_contact):
     mcp.tool(annotations=_EDIT_TOOL)(tenant_tool(_fn))
 for _fn in (delete_action, delete_planned_task, delete_contact, delete_session_dossier):
     mcp.tool(annotations=_DELETE_TOOL)(tenant_tool(_fn))
+# Speaker review (docs/next_steps/speaker_review/03 §3): items Bee did not attribute wait for the owner
+mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))(tenant_tool(curation_tools.list_items_to_review))
+for _fn in (curation_tools.accept_item, curation_tools.dismiss_item):
+    mcp.tool(annotations=_EDIT_TOOL)(tenant_tool(_fn))
 
 
 # ---------------------------------------------------------------------------
@@ -710,7 +714,10 @@ async def api_status(request: Request) -> JSONResponse:
     all_commitments = store.list_social_commitments(limit=100)
 
     completed_tasks = sum(1 for t in planned_tasks if t.status == "completed")
-    pending_tasks = sum(1 for t in planned_tasks if t.status != "completed")
+    # "Pending" means pending: review, cancelled and dismissed are not due (speaker_review R9)
+    pending_tasks = sum(1 for t in planned_tasks if t.status == "pending")
+    review_tasks = sum(1 for t in planned_tasks if t.status == "review")
+    review_actions = len(store.list_review_actions())
     open_commitments = sum(1 for c in all_commitments if c.status == "open")
 
     latency_metrics = store.get_latency_metrics()
@@ -761,6 +768,8 @@ async def api_status(request: Request) -> JSONResponse:
             "planned_tasks_total": len(planned_tasks),
             "planned_tasks_completed": completed_tasks,
             "planned_tasks_pending": pending_tasks,
+            "planned_tasks_review": review_tasks,
+            "actions_review": review_actions,
             "total_contacts": len(all_contacts),
             "total_topics": len(all_topics),
             "total_commitments": len(all_commitments),
@@ -939,6 +948,29 @@ async def api_routine_detail(request: Request) -> JSONResponse:
     if body is None:
         return _BAD_JSON
     return await _curation(lambda: curation_tools.execute_update_task(task_id, body))
+
+
+@mcp.custom_route("/api/review", methods=["GET"])
+async def api_review(request: Request) -> JSONResponse:
+    """Actions and routines from speech Bee did not attribute to anyone, waiting for the owner."""
+    return await _curation(lambda: curation_tools.execute_list_review())
+
+
+@mcp.custom_route("/api/review/accept-all", methods=["POST"])
+async def api_review_accept_all(request: Request) -> JSONResponse:
+    return await _curation(lambda: curation_tools.execute_accept_all())
+
+
+@mcp.custom_route("/api/review/{kind}/{item_id}/{decision}", methods=["POST"])
+async def api_review_decide(request: Request) -> JSONResponse:
+    """decision = accept (the owner's) | dismiss (not the owner's; a tombstone keeps it from coming back)."""
+    kind, item_id, decision = (request.path_params[k] for k in ("kind", "item_id", "decision"))
+    if decision == "accept":
+        return await _curation(lambda: curation_tools.execute_accept(kind, item_id))
+    if decision == "dismiss":
+        return await _curation(lambda: curation_tools.execute_dismiss(kind, item_id))
+    return JSONResponse({"success": False, "error": "decision must be accept or dismiss", "code": "invalid"},
+                        status_code=400)
 
 
 @mcp.custom_route("/api/actions/{action_id}", methods=["PUT", "DELETE"])

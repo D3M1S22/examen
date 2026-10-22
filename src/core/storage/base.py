@@ -99,6 +99,15 @@ class AbstractContextStore(ABC):
         """User edit of an action's title (normalised) or domain. None if missing or revoked."""
 
     @abstractmethod
+    def list_review_actions(self, limit: int = 50) -> List[VerifiedAction]:
+        """Actions waiting for the owner's confirmation (untagged speech), newest first."""
+
+    @abstractmethod
+    def accept_action(self, action_id: str, speaker: SpeakerAttribution) -> Optional[VerifiedAction]:
+        """Confirms an action in review: records the speaker and runs the routine matching it skipped.
+        None if missing, revoked or not in review."""
+
+    @abstractmethod
     def revoke_action(self, action_id: str) -> Optional[RevokeResult]:
         """User delete: the action becomes a tombstone (``is_revoked``) so a re-analysis of its chunk
         cannot recreate it; a routine it had completed goes back to pending. None if missing or revoked."""

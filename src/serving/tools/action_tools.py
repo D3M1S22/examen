@@ -225,11 +225,14 @@ def execute_get_daily_actions_recap(
     ctx_store = store or get_storage_store()
     filter_domain = None if (domain is None or domain.lower() == "all") else domain.lower()
 
-    planned_tasks = ctx_store.list_planned_tasks(domain=filter_domain)
+    all_tasks = ctx_store.list_planned_tasks(domain=filter_domain)
+    # Items waiting for the owner's confirmation are counted apart (docs/next_steps/speaker_review/02 §8)
+    planned_tasks = [t for t in all_tasks if t.status != "review"]
+    to_confirm = len(all_tasks) - len(planned_tasks) + len(ctx_store.list_review_actions())
     recent_actions = ctx_store.list_recent_actions(limit=limit, domain=filter_domain)
 
     completed_tasks = [t for t in planned_tasks if t.status == "completed"]
-    pending_tasks = [t for t in planned_tasks if t.status != "completed"]
+    pending_tasks = [t for t in planned_tasks if t.status == "pending"]
 
     spontaneous = [a for a in recent_actions if not a.matched_task_id]
 
@@ -269,6 +272,8 @@ def execute_get_daily_actions_recap(
         f"Today you have {len(completed_tasks)} of {len(planned_tasks)} planned routine(s) completed, "
         f"and {len(spontaneous_formatted)} spontaneous action(s) recorded."
     )
+    if to_confirm:
+        spoken += f" {to_confirm} item(s) are waiting for you to confirm they were yours."
     card_payload = {
         "template": "DAILY_ACTIONS_RECAP",
         "date": today_str,
@@ -277,6 +282,7 @@ def execute_get_daily_actions_recap(
             "planned_completed": len(completed_tasks),
             "planned_pending": len(pending_tasks),
             "spontaneous_actions": len(spontaneous_formatted),
+            "to_confirm": to_confirm,
         },
         "total_actions": len(spontaneous_formatted) + len(completed_tasks),
         "tasks_count": len(planned_tasks),
@@ -294,6 +300,7 @@ def execute_get_daily_actions_recap(
             "planned_completed": len(completed_tasks),
             "planned_pending": len(pending_tasks),
             "spontaneous_actions": len(spontaneous_formatted),
+            "to_confirm": to_confirm,
         },
         "planned_routines": planned_formatted,
         "spontaneous_actions": spontaneous_formatted,
