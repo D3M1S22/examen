@@ -1,10 +1,10 @@
 # 🚀 17 — AWS Deployment Runbook (readiness and plan)
 
 > **Document Status:** **Phase 1 deployed** on 2026-10-21, 23:25 CEST.
-> - URL: **https://dxovk55s504hk.cloudfront.net**
+> - URL: **https://examen.devgiov.com**, served by CloudFront with an ACM certificate (us-east-1), DNS-only CNAME at Cloudflare. The distribution's own URL https://dxovk55s504hk.cloudfront.net keeps working.
 > - Stacks: `examen-compute` (instance `i-0d044dbe01e1e85a4`, EIP 52.59.154.82, distribution `E36UWEYZRX6X14`) and `examen-data`, both in eu-central-1.
 > - Bundle `841b14d120c2`.
-> - Admin `admin@examen.cloud`; the password is the SecureString `/examen/bootstrap-admin-password` in SSM Parameter Store.
+> - Admin `admin@examen.cloud`. The password was changed from the dashboard on 2026-10-21 23:04 UTC, so the SSM parameter `/examen/bootstrap-admin-password` only holds the first, now invalid, value.
 > - **Phase 2 live** (23:45 CEST): the pipeline runs on **AgentCore Runtime** `arn:aws:bedrock-agentcore:eu-central-1:301356686376:runtime/examen_pipeline-Vhjiwg2S4f` (direct code deployment, Python 3.12 ARM64). The host has `PIPELINE_MODE=agentcore`, with in-process fallback.
 > - Smoke results: §6.1 and §6.2.
 > **Related:** [06](06_aws_cloud_deployment_architecture.md) (hosting options and costs, option A chosen), [15](15_aws_split_architecture_report.md) (AgentCore split), [16](16_aws_data_layer_k3.md) and [next_steps/dynamodb_storage/](next_steps/dynamodb_storage/00_overview.md) (data layer, deployed), [11](11_homelab_test_deployment.md) (homelab scripts reused here), [14](14_aws_and_hackathon_reference.md) (hackathon rules)
@@ -224,6 +224,23 @@ The equivalent is also available from the console (*Systems Manager → Run Comm
 | Change boot-only `.env` keys | `scripts/aws_deploy.py env KEY=VALUE [KEY=]` (empty value removes the key; restart + health check). Runtime settings, such as self-registration, are changed from the admin console instead |
 | Admin password | SSM Parameter Store `/examen/bootstrap-admin-password` (eu-central-1) |
 | Re-create the compute stack in AgentCore mode | `scripts/aws_deploy.py stack --param PipelineMode=agentcore --param AgentCoreRuntimeArn=<arn>` |
+
+### 6.4 Custom domain (2026-10-22)
+1. ACM certificate `b8a993a7-…` for `examen.devgiov.com` in us-east-1, DNS-validated with a CNAME at Cloudflare.
+2. Stack update with `DomainName` and `CertificateArn`. `aws_deploy.py stack` then set `CORS_ALLOWED_ORIGINS` to both URLs.
+3. Cloudflare: `examen` CNAME `dxovk55s504hk.cloudfront.net`, **DNS only**. A proxied record would put a second CDN in front, which buffers SSE.
+
+Smoke on `https://examen.devgiov.com`: 10/10.
+- Browser-style login, with `Secure` + `HttpOnly` cookie.
+- `/api/simulate` through AgentCore (8.6 s cold); the routine was completed.
+- SSE stayed open more than 60 s.
+- MCP worked.
+- A foreign `Origin` was refused.
+- No remote fallback was logged.
+- The test account was erased.
+- The CloudFront URL still works.
+
+The first update attempt ended in `UPDATE_ROLLBACK_FAILED`, because the broad managed policies had been removed while the stack needed EC2 rights. The fix was to attach `examen-admin` (Appendix C) and then run `ContinueUpdateRollback`.
 
 ## 7. Rollback and teardown
 - **Bad update:** `update.sh` keeps the previous release and rolls back when the health check fails.
