@@ -47,12 +47,18 @@
 │    ├─ M8.2: IAM tenant isolation & infra (P2)      │ P1       │ Medium │ DDB 04, 05  │ ✅ DONE   │
 │    ├─ M8.3: Auth & ops on DynamoDB (P3)            │ P2       │ Medium │ DDB 03      │ ✅ DONE   │
 │    └─ M8.4: Migration & cutover (P4)               │ P2       │ Low    │ DDB 06      │ 🔶 cutover │
+│  Phase 10: Manual Curation                         │ High     │ Medium │ MC 00-05    │ ⏳ PLANNED │
+│    ├─ M10.1: Store & engine (edit/revoke/cascade)  │ P1       │ Medium │ MC 02       │ ⏳ PLANNED │
+│    ├─ M10.2: Curation service, REST & SSE          │ P1       │ Medium │ MC 03       │ ⏳ PLANNED │
+│    ├─ M10.3: MCP edit/delete (two-step confirm)    │ P1       │ Low    │ MC 03 §5    │ ⏳ PLANNED │
+│    └─ M10.4: Dashboard edit/delete & excerpts      │ P1       │ Medium │ MC 04       │ ⏳ PLANNED │
 └──────────────────────────────────────────────────────────────────────────────────────────────────┘
 
 > **DTEE** = [docs/next_steps/deep_topic_event_engine/](deep_topic_event_engine/00_overview.md)
 > **HTB** = [docs/next_steps/historical_backfill/](historical_backfill/00_overview.md)
 > **ADM** = [docs/next_steps/admin_console/](admin_console/00_overview.md)
 > **DDB** = [docs/next_steps/dynamodb_storage/](dynamodb_storage/00_overview.md)
+> **MC** = [docs/next_steps/manual_curation/](manual_curation/00_overview.md)
 ```
 
 ---
@@ -327,6 +333,10 @@
 ### Phase 9: AWS Deployment (LIVE: https://examen.devgiov.com, pipeline on AgentCore Runtime)
 > **Goal:** EXAMEN on AWS for the submission: EC2 + CloudFront in eu-central-1 on the deployed DynamoDB stack (live since 2026-10-21), then the pipeline on AgentCore Runtime (phase 2).
 > **Runbook:** [17_aws_deployment_runbook.md](../17_aws_deployment_runbook.md) (readiness, blockers B1–B2, artifacts M1–M7, smoke list, timeline).
+
+### Phase 10: Manual Curation (PLANNED)
+> **Goal:** let the user correct what EXAMEN extracted, in the dashboard and over MCP. Actions, routines and contacts can be edited; actions, routines, contacts and topic events can be deleted, with cascades and a two-step MCP confirmation. A corrected contact name re-runs the web search. Routine cards show the transcript excerpt they came from, and the acoustic placeholder graphics are removed.
+> **Spec & status:** [manual_curation/](manual_curation/00_overview.md) (decisions D1–D4 confirmed 2026-10-22, D5–D8 proposed; plan and tests in [05](manual_curation/05_implementation_plan_and_testing.md)).
 
 ---
 

@@ -139,6 +139,7 @@ Whenever you inspect, modify, or extend this codebase, you **must adhere strictl
 * New tunables that admins may change at runtime: add a `SettingSpec` to `REGISTRY` in `src/core/runtime_settings.py` (type, limits, apply mode). Read settings at use time, or mark the key `runtime` if a component copies it at construction.
 * Every `bee` subprocess must pass `env=bee_subprocess_env()` (per-user `BEE_CONFIG_DIR` + file store). Never call `bee logout` for the host.
 * `broadcast_event` targets the current tenant; pass `tenant=` explicitly from callbacks that may run elsewhere.
+* User edits and deletes of extracted results (actions, routines, contacts, events) go through `src/serving/tools/curation_tools.py` from both REST and MCP. It owns the cascades, the event-engine calls and the SSE events: never call the store's write methods for these directly from a route or a tool (`docs/next_steps/manual_curation/`).
 
 ### F. FastMCP Version Constraint
 * Always ensure `mcp>=1.10.0,<2.0.0` is respected. Version `2.0.0` introduces breaking changes to `mcp.server.fastmcp` which breaks AWS Bedrock AgentCore Runtime compatibility.
