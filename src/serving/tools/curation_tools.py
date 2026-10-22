@@ -112,6 +112,7 @@ def action_dict(a: VerifiedAction) -> Dict[str, Any]:
         "id": a.id, "action_type": a.action_type, "domain": a.domain, "timestamp": a.timestamp,
         "raw_statement": a.raw_statement, "confidence": round(a.confidence, 2), "matched_task_id": a.matched_task_id,
         "session_id": a.session_id, "ingest_source": a.ingest_source, "ingest_run_id": a.ingest_run_id,
+        "speaker": a.speaker.model_dump() if a.speaker else None,
     }
 
 
@@ -122,7 +123,8 @@ def task_dict(t: PlannedTask, completion_statement: Optional[str] = None) -> Dic
         "confidence": t.confidence, "relative_time_anchor": t.relative_time_anchor, "session_id": t.session_id,
         "status": t.status, "completed_at": t.completed_at, "verified_action_id": t.verified_action_id,
         "created_at": t.created_at, "ingest_source": t.ingest_source, "ingest_run_id": t.ingest_run_id,
-        "recovered": t.recovered, "completion_statement": completion_statement,
+        "recovered": t.recovered, "speaker": t.speaker.model_dump() if t.speaker else None,
+        "completion_statement": completion_statement,
     }
 
 

@@ -12,6 +12,7 @@ import {
 import useSWR from "swr";
 import { StatusBadge, DomainBadge } from "../ui/StatusBadge";
 import { RecoveredBadge } from "../ui/RecoveredBadge";
+import { SpeakerBadge } from "../ui/SpeakerBadge";
 import { BackfillStopButton } from "../ui/BackfillStopButton";
 import { speakAlexaReassurance } from "@/utils/audioEffects";
 import { getApiBaseUrl } from "@/utils/api";
@@ -243,6 +244,7 @@ export function OverviewHub({
                       <DomainBadge domain={action.domain} />
                       <div className="flex items-center gap-1.5">
                         <RecoveredBadge entity={action} />
+                        <SpeakerBadge speaker={action.speaker} />
                         <StatusBadge status="verified" size="sm" />
                       </div>
                     </div>

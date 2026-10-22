@@ -4,6 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Annotated, Any, Dict, List, Literal, Optional, Union
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator
+from pydantic.json_schema import SkipJsonSchema
 from typing_extensions import TypedDict
 
 
@@ -55,6 +56,28 @@ class LocationTelemetry(BaseModel):
         return "unknown"
 
 
+class SpeakerAttribution(BaseModel):
+    """Who said the utterance an entity came from (docs/next_steps/08_speaker_identity.md)."""
+    role: Literal["user", "contact", "unknown"] = Field(
+        default="unknown", description="'user' = the account's wearer, 'contact' = another recognised person."
+    )
+    name: Optional[str] = Field(default=None, description="First name Bee reported, when tagged.")
+    score: Optional[float] = Field(default=None, ge=0.0, le=1.0, description="Bee speaker_score (0-1).")
+    source: Literal["bee_voice_id", "bee_name", "history_name", "untagged", "internal"] = Field(
+        default="untagged",
+        description="bee_voice_id = matched by Bee person id, bee_name = by first name, history_name = REST speaker.",
+    )
+    addressed_to_user: bool = Field(
+        default=False,
+        description="True when the sentence asked the owner to do something ('Damiano, remember to ...'): "
+                    "a request from someone else, kept as the owner's task.",
+    )
+
+    @property
+    def is_wearer(self) -> bool:
+        return self.role == "user"
+
+
 class UtteranceChunk(BaseModel):
     chunk_id: str = Field(default_factory=lambda: str(uuid.uuid4()), description="Unique utterance chunk identifier.")
     conversation_uuid: str = Field(default="default_session", description="Conversation session UUID.")
@@ -66,6 +89,11 @@ class UtteranceChunk(BaseModel):
     speaker_role: Optional[Literal["user", "contact", "unknown"]] = Field(
         default="unknown",
         description="Role of speaker: primary user ('user'), counterparty ('contact'), or 'unknown'."
+    )
+    speaker_person_id: Optional[str] = Field(default=None, description="Bee person_id from tagged-utterance.")
+    speaker_score: Optional[float] = Field(default=None, description="Bee speaker_score from tagged-utterance.")
+    speaker_source: Optional[str] = Field(
+        default=None, description="How the role was decided (SpeakerAttribution.source)."
     )
     timestamp: str = Field(
         default_factory=lambda: datetime.now().isoformat(),
@@ -408,6 +436,10 @@ class VerifiedAction(BaseModel):
     ingest_source: IngestSource = Field(default="live", description="Ingestion path that produced the action.")
     ingest_run_id: Optional[str] = Field(default=None, description="Backfill run that produced the action.")
     source_key: Optional[str] = Field(default=None, description="Idempotency key of the source utterance.")
+    # Hidden from the model's structured-output schema: set by the pipeline, never by the LLM
+    speaker: SkipJsonSchema[Optional[SpeakerAttribution]] = Field(
+        default=None, description="Who said the confirming utterance (None = not recorded)."
+    )
 
 
 class PlannedTask(BaseModel):
@@ -473,6 +505,9 @@ class PlannedTask(BaseModel):
         default=False,
         description="True when a history backfill created the task after its scheduled time had already passed."
     )
+    speaker: Optional[SpeakerAttribution] = Field(
+        default=None, description="Who voiced the task (None = not recorded, e.g. created manually)."
+    )
 
 
 class ScheduledTaskExtraction(BaseModel):
@@ -496,6 +531,17 @@ class ScheduledTaskExtraction(BaseModel):
     confidence: float = Field(
         default=0.95, ge=0.0, le=1.0,
         description="Extraction certainty score."
+    )
+    for_owner: bool = Field(
+        default=True,
+        description="True when the device owner must do it: their own intention ('remind me to ...', 'I need to ...') "
+                    "or something another person asks them to do ('Damiano, remember to ...', 'can you ...'). "
+                    "False when another person plans something for themselves, or the owner asks someone else."
+    )
+    requested_by: Optional[str] = Field(
+        default=None,
+        description="First name of the person asking the owner, when the statement is a request from someone else "
+                    "and the name is known; null otherwise."
     )
 
 
@@ -739,6 +785,9 @@ class ExamenState(TypedDict, total=False):
     location: Optional[dict]
     speaker: Optional[str]
     speaker_role: Optional[str]
+    speaker_score: Optional[float]
+    speaker_source: Optional[str]
+    wearer_name: Optional[str]  # the owner's first name (`bee me`), to recognise requests addressed to them
     utterance_id: Optional[str]
     # Historical Transcript Backfill
     source_key: Optional[str]

@@ -12,7 +12,7 @@
 | B Service layer, REST, SSE | ✅ | [curation_tools.py](../../../src/serving/tools/curation_tools.py); routes and `set_notifier(broadcast_event)` in [mcp_server.py](../../../src/serving/mcp_server.py) |
 | C MCP tools | ✅ | seven tools with `ToolAnnotations`; `verify_action_status` returns `action_id` |
 | D Dashboard | ✅ | `ConfirmDialog`, `TranscriptExcerpt`, `CardActions`, `EditModalFrame`, `EditActionModal`, `EditContactModal`, [curation.ts](../../../src/web_ui/src/utils/curation.ts); views and [page.tsx](../../../src/web_ui/src/app/page.tsx) |
-| E Docs & rollout | ✅ docs; rollout with the normal update | this section, ROADMAP Phase 10, AGENTS.MD |
+| E Docs & rollout | ✅ docs; rollout with the normal update | this section, ROADMAP Phase 11, AGENTS.MD |
 
 Tests:
 - [test_curation_store.py](../../../tests/test_curation_store.py) and [test_curation_api.py](../../../tests/test_curation_api.py), on both backends;
@@ -84,7 +84,7 @@ Each phase leaves the suite green on **both** backends:
 
 ### E. Docs & rollout
 1. Fill in §0 of this document with the code links and any deviations.
-2. ROADMAP Phase 10: mark the milestones done.
+2. ROADMAP Phase 11: mark the milestones done.
 3. AGENTS.MD rule: curation goes through `curation_tools`.
 4. Release through the normal update path (homelab `update.sh`, AWS `aws_deploy.py update`); no data migration is needed.
 

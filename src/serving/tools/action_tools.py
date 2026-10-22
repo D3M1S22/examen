@@ -112,6 +112,21 @@ def create_planned_task(
     )
 
 
+def speaker_label(speaker: Any) -> Optional[str]:
+    """Short attribution for answers and cards: who said the confirming sentence."""
+    if speaker is None:
+        return None
+    role = getattr(speaker, "role", None)
+    source = getattr(speaker, "source", None)
+    if getattr(speaker, "addressed_to_user", False):
+        return f"asked by {getattr(speaker, 'name', None) or 'someone'}"
+    if role == "user":
+        return "you (voice match)" if source in ("bee_voice_id", "bee_name") else "you"
+    if role == "contact":
+        return getattr(speaker, "name", None) or "another person"
+    return "unidentified speaker"
+
+
 def execute_verify_action_status(
     action_query: str,
     target_date: Optional[str] = None,
@@ -123,9 +138,14 @@ def execute_verify_action_status(
 
     if action:
         elapsed = _format_elapsed_time(action.timestamp)
+        spoken_by = speaker_label(action.speaker)
+        voice_note = {
+            "you (voice match)": " Bee recognised your voice.",
+            "unidentified speaker": " Bee could not confirm it was your voice.",
+        }.get(spoken_by or "", "")
         spoken = (
             f"Yes, you confirmed {action.action_type.replace('_', ' ')}: "
-            f"'{action.raw_statement}' approximately {elapsed}."
+            f"'{action.raw_statement}' approximately {elapsed}.{voice_note}"
         )
         card_payload = {
             "template": "ACTION_VERIFIED_BADGE",
@@ -137,6 +157,7 @@ def execute_verify_action_status(
             "confidence": round(action.confidence, 2),
             "elapsed_time_human": elapsed,
             "matched_task_id": action.matched_task_id,
+            "spoken_by": spoken_by,
             "spoken_summary": spoken,
         }
         return {
@@ -149,6 +170,8 @@ def execute_verify_action_status(
             "confidence": round(action.confidence, 2),
             "elapsed_time_human": elapsed,
             "matched_task_id": action.matched_task_id,
+            "spoken_by": spoken_by,
+            "voice_verified": spoken_by == "you (voice match)",
             "display_template": "ACTION_VERIFIED_BADGE",
             "ui_card_type": "ACTION_VERIFIED_BADGE",
             "spoken_summary": spoken,
@@ -318,6 +341,7 @@ def execute_get_upcoming_tasks(
             "relative_time_anchor": t.relative_time_anchor,
             "status": t.status,
             "created_at": t.created_at,
+            "spoken_by": speaker_label(t.speaker),
         })
 
     spoken_summary = (

@@ -9,12 +9,13 @@ Raw captures contain personal speech: they are written to `.bee-spike/` (git-ign
 synthetic payloads with the real shapes instead (docs/10_bee_cli_reference.md).
 
 Usage:
-    python scripts/bee_spike.py check
+    python scripts/bee_spike.py check                         # accounts on: --user <email> or EXAMEN_CLI_USER
     python scripts/bee_spike.py capture --minutes 30          # bee stream --json + raw SSE via bee proxy
     python scripts/bee_spike.py history --hours 24            # conversations list + get <id> for each
     python scripts/bee_spike.py poll <conversation_id> --minutes 60 --until-final
     python scripts/bee_spike.py analyze                       # V0-V6 report -> <session>/analysis.md
     python scripts/bee_spike.py fixture <session>/history/conv_<id>.json <name>
+    python scripts/bee_spike.py speakers                      # S1-S5 of docs/next_steps/08_speaker_identity.md
 
 Every command accepts `--session DIR` (default: .bee-spike/<today>) so that captures
 of the same day are analysed together.
@@ -41,6 +42,8 @@ sys.path.insert(0, str(ROOT))
 
 from src.ingestion.bee_history import epoch_ms  # noqa: E402
 from src.ingestion.coverage import normalize_text, token_jaccard  # noqa: E402
+from src.core.cli import cli_tenant  # noqa: E402
+from src.core.tenancy import bee_subprocess_env  # noqa: E402
 from src.ingestion.stream_convo import BeeClient, get_bee_binary_path  # noqa: E402
 
 SPIKE_ROOT = ROOT / ".bee-spike"
@@ -68,8 +71,13 @@ def bee_cmd(*sub: str) -> List[str]:
     return BeeClient()._build_cmd(list(sub))
 
 
+def bee_env() -> Optional[Dict[str, str]]:
+    """The account's private Bee login (AGENTS.MD F3: every bee subprocess gets bee_subprocess_env())."""
+    return bee_subprocess_env()
+
+
 def run_bee_json(*sub: str, timeout: float = 60.0) -> Any:
-    proc = subprocess.run(bee_cmd(*sub, "--json"), capture_output=True, text=True, timeout=timeout)
+    proc = subprocess.run(bee_cmd(*sub, "--json"), capture_output=True, text=True, timeout=timeout, env=bee_env())
     if proc.returncode != 0:
         raise RuntimeError(f"bee {' '.join(sub)} failed: {proc.stderr.strip() or proc.stdout.strip()}")
     return json.loads(proc.stdout)
@@ -102,8 +110,8 @@ def cmd_check(args) -> None:
     print(f"bee binary : {binary or 'NOT FOUND'}")
     if not binary:
         sys.exit(1)
-    print(subprocess.run(bee_cmd("--version"), capture_output=True, text=True).stdout.strip())
-    status = subprocess.run(bee_cmd("status"), capture_output=True, text=True)
+    print(subprocess.run(bee_cmd("--version"), capture_output=True, text=True, env=bee_env()).stdout.strip())
+    status = subprocess.run(bee_cmd("status"), capture_output=True, text=True, env=bee_env())
     print(status.stdout.strip() or status.stderr.strip())
     if "Not logged in" in status.stdout:
         sys.exit("Not logged in: run `bee login` (or `bee login --qr`) and approve it in the Bee app.")
@@ -124,7 +132,8 @@ async def _capture_stream_json(out: Path, types: Optional[str], stop: asyncio.Ev
     """What EXAMEN consumes today: `bee stream --json` lines, stamped on receipt."""
     sub = ["stream", "--json"] + (["--types", types] if types else [])
     proc = await asyncio.create_subprocess_exec(*bee_cmd(*sub), stdout=asyncio.subprocess.PIPE,
-                                                stderr=asyncio.subprocess.STDOUT, limit=10 * 1024 * 1024)
+                                                stderr=asyncio.subprocess.STDOUT, limit=10 * 1024 * 1024,
+                                                env=bee_env())
     try:
         while not stop.is_set():
             try:
@@ -148,18 +157,31 @@ async def _capture_stream_json(out: Path, types: Optional[str], stop: asyncio.Ev
             await proc.wait()
 
 
+def _free_port() -> int:
+    import socket
+
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
 async def _capture_raw_sse(out_raw: Path, out_events: Path, port: int, types: Optional[str],
                            stop: asyncio.Event) -> None:
     """Ground truth: raw SSE frames (event names, comment pings) through `bee proxy`."""
     import httpx
 
+    port = port or _free_port()  # 8787 is often taken by a running EXAMEN server's own proxy
     proxy = await asyncio.create_subprocess_exec(*bee_cmd("proxy", "--port", str(port), "--idle-timeout", "255"),
-                                                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+                                                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+                                                 env=bee_env())
     try:
+        said: List[str] = []
         while True:
             line = (await asyncio.wait_for(proxy.stdout.readline(), timeout=15)).decode()
             if not line:
-                raise RuntimeError("bee proxy exited before listening")
+                raise RuntimeError(f"bee proxy exited before listening on port {port}: "
+                                   + (" | ".join(said[-5:]) or "no output"))
+            said.append(line.strip())
             if "Proxy listening" in line:
                 break
         url = f"http://127.0.0.1:{port}/v1/stream" + (f"?types={types}" if types else "")
@@ -210,10 +232,15 @@ async def _capture(args) -> None:
             _capture_raw_sse(out / "sse_raw.jsonl", out / "sse_events.jsonl", args.port, args.types, stop)))
     print(f"Capturing into {out} for {args.minutes} min (Ctrl+C to stop early)...")
     try:
-        done, _ = await asyncio.wait(tasks, timeout=args.minutes * 60, return_when=asyncio.FIRST_EXCEPTION)
-        for task in done:
-            if task.exception():
-                print(f"capture task failed: {task.exception()!r}")
+        # One failed source (e.g. the proxy) must not end the capture of the other one
+        deadline = time.monotonic() + args.minutes * 60
+        running = set(tasks)
+        while running and time.monotonic() < deadline:
+            done, running = await asyncio.wait(running, timeout=deadline - time.monotonic(),
+                                               return_when=asyncio.FIRST_COMPLETED)
+            for task in done:
+                if task.exception():
+                    print(f"capture task failed (the other source keeps recording): {task.exception()!r}")
     finally:
         stop.set()
         _, pending = await asyncio.wait(tasks, timeout=3)
@@ -539,6 +566,90 @@ def _redact_words(text: str, salt: str) -> str:
     return _WORD_RE.sub(lambda m: "w" + hashlib.sha1((salt + m.group(0).lower()).encode()).hexdigest()[:6], text)
 
 
+def _stream_payloads(cap: Path) -> List[Dict[str, Any]]:
+    """(received_at_ms, payload) of every typed event, from the raw SSE capture or `bee stream --json`."""
+    out: List[Dict[str, Any]] = []
+    for e in read_jsonl(cap / "sse_events.jsonl"):
+        if isinstance(e.get("data"), dict):
+            out.append({"ms": e["received_at_ms"], "type": e["data"].get("type") or e.get("event"), "data": e["data"]})
+    if out:
+        return out
+    for rec in read_jsonl(cap / "stream_json.jsonl"):
+        try:
+            data = json.loads(rec["line"])
+        except (json.JSONDecodeError, KeyError):
+            continue
+        if isinstance(data, dict):
+            out.append({"ms": rec["received_at_ms"], "type": data.get("type"), "data": data})
+    return out
+
+
+def cmd_speakers(args) -> None:
+    """Speaker identity verification (doc 08 §7): tags vs `bee me`, lag, matching, REST speakers.
+
+    Prints ids, first names, scores and timings only, never utterance text."""
+    from src.ingestion.bee_identity import WearerIdentity
+
+    sess = session_dir(args)
+    events = _stream_payloads(sess / "capture")
+    me = run_bee_json("me")
+    utter_ms: Dict[str, int] = {}
+    tags: List[Dict[str, Any]] = []
+    for e in events:
+        if e["type"] == "new-utterance" and isinstance(e["data"].get("utterance"), dict):
+            utter_ms.setdefault(str(e["data"]["utterance"].get("id")), e["ms"])
+        elif e["type"] == "tagged-utterance":
+            tags.append(e)
+    lags = [(t["ms"] - utter_ms[str(t["data"].get("utterance_id"))]) / 1000.0
+            for t in tags if str(t["data"].get("utterance_id")) in utter_ms]
+    people: Dict[str, Dict[str, Any]] = {}
+    for t in tags:
+        d = t["data"]
+        entry = people.setdefault(str(d.get("person_id")), {"names": Counter(), "scores": [], "conversations": set()})
+        entry["names"][d.get("person_first_name") or ""] += 1
+        if isinstance(d.get("speaker_score"), (int, float)):
+            entry["scores"].append(float(d["speaker_score"]))
+        entry["conversations"].add(d.get("conversation_uuid"))
+    who = WearerIdentity(first_name="")
+    who.apply_profile(me)
+    roles = Counter(who.match_tag(t["data"].get("person_id"), t["data"].get("person_first_name"),
+                                  t["data"].get("speaker_score")).role for t in tags)
+    rest_keys: Counter = Counter()
+    rest_speakers: Counter = Counter()
+    for path in sorted((sess / "history").glob("conv_*.json")):
+        detail = json.loads(path.read_text())
+        conv = detail.get("conversation") if isinstance(detail.get("conversation"), dict) else detail
+        for tx in conv.get("transcriptions") or []:
+            for utt in tx.get("utterances") or []:
+                rest_keys.update(k for k in utt if "speak" in k or "person" in k)
+                rest_speakers[str(utt.get("speaker"))] += 1
+
+    def stats(values: List[float]) -> str:
+        if not values:
+            return "n/a"
+        return f"min {min(values):.2f} · median {statistics.median(values):.2f} · max {max(values):.2f} (n={len(values)})"
+
+    lines = [f"# Speaker identity check — {sess.name}", "",
+             f"- bee me: id={me.get('id')} first_name={me.get('first_name')!r}",
+             f"- utterances: {len(utter_ms)}, tagged: {len(tags)} "
+             f"({100.0 * len(tags) / len(utter_ms):.0f} %)" if utter_ms else "- utterances: 0",
+             "", "## S1–S3 person ids"]
+    for pid, entry in people.items():
+        lines.append(f"- person_id={pid}: names={dict(entry['names'])}, tags={sum(entry['names'].values())}, "
+                     f"score {stats(entry['scores'])}, conversations={len(entry['conversations'])}, "
+                     f"equals bee me id: {pid == str(me.get('id'))}")
+    lines += ["", f"- EXAMEN matching over the capture: {dict(roles)}; wearer ids bound: {sorted(who.person_ids)}",
+              "", "## S4 tag lag after its utterance (s)", f"- {stats(lags)}",
+              f"- within the {1.5:.1f} s default wait: {sum(1 for x in lags if x <= 1.5)}/{len(lags)}",
+              "", "## S5 REST history speaker fields",
+              f"- utterance keys about speakers: {dict(rest_keys)}",
+              f"- speaker values: {dict(rest_speakers.most_common(8))}"]
+    report = "\n".join(lines)
+    (sess / "speakers.md").write_text(report + "\n")
+    print(report)
+    print(f"\nSaved {sess / 'speakers.md'}")
+
+
 def cmd_fixture(args) -> None:
     detail = json.loads(Path(args.source).read_text())
     conv = detail.get("conversation") if isinstance(detail.get("conversation"), dict) else detail
@@ -574,6 +685,8 @@ def cmd_fixture(args) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--session", help="Capture directory (default: .bee-spike/<today>)")
+    parser.add_argument("--user", help="EXAMEN account whose paired Bee to use (default: $EXAMEN_CLI_USER); "
+                                       "not needed with AUTH_ENABLED=false (host bee login)")
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("check", help="Binary, login, account and latest conversations")
@@ -581,7 +694,7 @@ def main() -> None:
     p = sub.add_parser("capture", help="Record bee stream --json and the raw SSE stream")
     p.add_argument("--minutes", type=float, default=30)
     p.add_argument("--types", help="Comma-separated event types (default: server default, like EXAMEN)")
-    p.add_argument("--port", type=int, default=8787, help="Local port for bee proxy")
+    p.add_argument("--port", type=int, default=0, help="Local port for bee proxy (default: a free port)")
     p.add_argument("--no-raw", action="store_true", help="Skip the raw SSE capture through bee proxy")
     p.add_argument("--no-json", action="store_true", help="Skip `bee stream --json` (single raw SSE connection)")
 
@@ -597,18 +710,24 @@ def main() -> None:
     p.add_argument("--until-final", action="store_true")
 
     sub.add_parser("analyze", help="Answer V0-V6 from the session captures")
+    sub.add_parser("speakers", help="Speaker identity check (doc 08 §7): tags vs bee me, lag, REST speakers")
 
     p = sub.add_parser("fixture", help="Anonymise a conversation detail into .bee-spike/fixtures/")
     p.add_argument("source")
     p.add_argument("name")
     p.add_argument("--keep-text", action="store_true", help="Do not redact utterance text")
 
-    for name in ("check", "capture", "history", "poll", "analyze", "fixture"):
+    for name in ("check", "capture", "history", "poll", "analyze", "fixture", "speakers"):
         sub.choices[name].add_argument("--session", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
 
     args = parser.parse_args()
+    with cli_tenant(getattr(args, "user", None)):
+        _dispatch(args)
+
+
+def _dispatch(args) -> None:
     {"check": cmd_check, "capture": cmd_capture, "history": cmd_history, "poll": cmd_poll,
-     "analyze": cmd_analyze, "fixture": cmd_fixture}[args.command](args)
+     "analyze": cmd_analyze, "fixture": cmd_fixture, "speakers": cmd_speakers}[args.command](args)
 
 
 if __name__ == "__main__":

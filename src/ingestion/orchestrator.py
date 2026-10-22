@@ -1,11 +1,12 @@
 import asyncio
 import logging
+import statistics
 import time
 import argparse
 import signal
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from datetime import datetime
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Optional
 
 import sys
 from pathlib import Path
@@ -14,7 +15,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from src.ingestion.stream_convo import BeeClient, normalize_bee_time
-from src.ingestion.bee_identity import WearerIdentity, get_wearer_identity
+from src.ingestion.bee_identity import UNTAGGED, SpeakerMatch, WearerIdentity, get_wearer_identity
 from src.ingestion.coverage import (
     CoverageTracker,
     ledger_entry_for_chunk,
@@ -35,10 +36,20 @@ from src.core.storage import get_storage_store
 from src.core.limits import llm_slot
 from src.core.metrics import metrics
 from src.core.tenancy import get_tenant_id
-from src.core.schemas import CoverageGap, CoverageInterval, LocationTelemetry, UtteranceChunk
+from src.core.schemas import CoverageGap, CoverageInterval, LocationTelemetry, SpeakerAttribution, UtteranceChunk
 
 # Bounded caches keyed by Bee utterance id (speaker tags, utterance → conversation uuid)
 _ID_CACHE_SIZE = 2000
+
+
+def _epoch(iso: Optional[str]) -> float:
+    """Receive time of an utterance (BeeClient stamps ``received_at``); now when missing or invalid."""
+    if iso:
+        try:
+            return datetime.fromisoformat(iso).timestamp()
+        except ValueError:
+            pass
+    return time.time()
 
 
 def _remember(cache: "OrderedDict[str, Any]", key: str, value: Any) -> None:
@@ -79,8 +90,13 @@ class BeeStreamOrchestrator(Debug):
 
         # Speaker identity (`tagged-utterance`, ~1 s after its utterance): tag cache + waiters
         self.speaker_tag_wait: float = settings.bee_speaker_tag_wait_seconds
-        self._speaker_tags: "OrderedDict[str, Tuple[str, Optional[float]]]" = OrderedDict()
+        self._speaker_tags: "OrderedDict[str, SpeakerMatch]" = OrderedDict()
         self._tag_waiters: Dict[str, asyncio.Event] = {}
+        # Utterance receive time (epoch) by id, to measure the tag lag; ids already analysed by the pipeline
+        self._received_epoch: "OrderedDict[str, float]" = OrderedDict()
+        self._analysed: "OrderedDict[str, str]" = OrderedDict()  # utterance id → source key
+        self._tag_lags: "deque[float]" = deque(maxlen=200)
+        self._side_tasks: "set[asyncio.Task]" = set()
         # True while run() reads the stream concurrently with the utterance worker (tags can arrive)
         self._concurrent_reader = False
 
@@ -146,8 +162,9 @@ class BeeStreamOrchestrator(Debug):
             "has_location": self.latest_telemetry is not None,
             "location_place": self.latest_telemetry.place_name if self.latest_telemetry else None,
             "stream_transport": self.bee.active_transport if self.bee else None,
-            "wearer_identity_known": bool(self.identity.first_name),
-            "speaker_tags_seen": len(self._speaker_tags),
+            **self.identity.status(),
+            "speaker_tag_lag_seconds": round(statistics.median(self._tag_lags), 2) if self._tag_lags else None,
+            "speaker_tag_wait_seconds": self.speaker_tag_wait,
             "event_engine": self.engine.status_summary() if self.engine_enabled else None,
             "coverage": {
                 "live_since": self.coverage.current.start if self.coverage.current else None,
@@ -187,7 +204,7 @@ class BeeStreamOrchestrator(Debug):
     def patch_diarization(
         self,
         utterance_id: str,
-        speaker_id: str,
+        speaker_id: Optional[str],
         speaker_role: Optional[str] = None,
         session_id: Optional[str] = None,
     ) -> bool:
@@ -219,12 +236,13 @@ class BeeStreamOrchestrator(Debug):
 
         speaker = utterance_data.get("speaker") or utterance_data.get("speaker_id")
         speaker_role = utterance_data.get("speaker_role")
+        speaker_source = utterance_data.get("speaker_source")
         if not speaker_role or speaker_role == "unknown":
             # Live Bee utterances carry no speaker: identity arrives later as tagged-utterance
-            speaker_role = self.identity.role_for(speaker)
-        tag = self._speaker_tags.get(chunk_id)
-        if tag is not None:
-            speaker, speaker_role = tag[0], self.identity.role_for(tag[0])
+            named = self.identity.match_name(speaker, source="internal") if speaker else UNTAGGED
+            speaker_role, speaker_source = named.role, speaker_source or named.source
+        elif not speaker_source:
+            speaker_source = "internal"
 
         # Best-known utterance time: spoken_at (Bee) > received_at (BeeClient) > now
         spoken_at = utterance_data.get("spoken_at")
@@ -244,7 +262,12 @@ class BeeStreamOrchestrator(Debug):
             source_key=utterance_data.get("source_key") or live_source_key(conv_uuid, chunk_id),
             bee_conversation_id=self._conversation_ids.get(conv_uuid),
             duration_ms=utterance_data.get("duration_ms"),
+            speaker_source=speaker_source,
         )
+        tag = self._speaker_tags.get(chunk_id)
+        if tag is not None:
+            self._apply_match(chunk, tag)
+        _remember(self._received_epoch, chunk_id, _epoch(received_at))
         self.ring_buffer.push(chunk)
         return chunk
 
@@ -314,6 +337,9 @@ class BeeStreamOrchestrator(Debug):
             "location": chunk.location,
             "speaker": chunk.speaker_id,
             "speaker_role": chunk.speaker_role,
+            "speaker_score": chunk.speaker_score,
+            "speaker_source": chunk.speaker_source,
+            "wearer_name": self.identity.first_name,
             "utterance_id": chunk.chunk_id,
             "session_id": event_id or chunk.conversation_uuid,
             "timestamp": chunk.timestamp,
@@ -334,6 +360,11 @@ class BeeStreamOrchestrator(Debug):
                     result = await asyncio.to_thread(invoke_pipeline, payload)
             finally:
                 self.inflight_dispatches -= 1
+                _remember(self._analysed, chunk.chunk_id, chunk.source_key or "")
+            # A tag that arrived while the pipeline ran: correct what it extracted
+            late = self._speaker_tags.get(chunk.chunk_id)
+            if late is not None and chunk.speaker_source not in ("bee_voice_id", "bee_name"):
+                await asyncio.to_thread(self.reconcile_speaker, chunk.source_key, late)
         except Exception as e:
             self.warn(f"Pipeline dispatch error: {type(e).__name__}: {e}", "pipeline.dispatch_failed",
                       level=logging.ERROR, error=e, session_id=payload.get("session_id"))
@@ -362,23 +393,43 @@ class BeeStreamOrchestrator(Debug):
     # ------------------------------------------------------------------
 
     def on_tagged_utterance(self, data: dict) -> None:
-        """Caches a Bee speaker tag; wakes a waiting utterance or patches an already dispatched one."""
+        """Binds a Bee speaker tag to its utterance: wakes a waiting dispatch, or corrects a finished one."""
         uid = str(data.get("utterance_id") or "")
         name = (data.get("person_first_name") or "").strip()
-        if not uid or not name:
+        person_id = data.get("person_id")
+        if not uid or (not name and person_id is None):
             return
-        _remember(self._speaker_tags, uid, (name, data.get("speaker_score")))
+        match = self.identity.match_tag(person_id=person_id, name=name, score=data.get("speaker_score"))
+        _remember(self._speaker_tags, uid, match)
+        received = self._received_epoch.get(uid)
+        if received is not None:
+            self._tag_lags.append(max(0.0, time.time() - received))
+        metrics.incr("speaker.tags", get_tenant_id())
+        if match.is_wearer:
+            metrics.incr("speaker.wearer_tags", get_tenant_id())
         waiter = self._tag_waiters.get(uid)
         if waiter is not None:
             waiter.set()
             return
-        self.patch_diarization(uid, name, session_id=data.get("conversation_uuid"))
+        self.patch_diarization(uid, match.name or "Unknown", speaker_role=match.role,
+                               session_id=data.get("conversation_uuid"))
+        source_key = self._analysed.get(uid)
+        if source_key:
+            # Already analysed with an unknown speaker: fix the entities it produced
+            self._run_off_loop(self.reconcile_speaker, source_key, match)
+
+    def _apply_match(self, chunk: UtteranceChunk, match: SpeakerMatch) -> None:
+        chunk.speaker_id = match.name or chunk.speaker_id
+        chunk.speaker_role = match.role
+        chunk.speaker_person_id = match.person_id
+        chunk.speaker_score = match.score
+        chunk.speaker_source = match.source
 
     async def _await_speaker_tag(self, chunk: UtteranceChunk) -> None:
         """Before dispatch, waits (bounded) for the utterance's tagged-utterance and applies it."""
         tag = self._speaker_tags.get(chunk.chunk_id)
         if tag is None and self._concurrent_reader and self.speaker_tag_wait > 0:
-            received = datetime.fromisoformat(chunk.received_at).timestamp() if chunk.received_at else time.time()
+            received = _epoch(chunk.received_at)
             remaining = received + self.speaker_tag_wait - time.time()
             if remaining > 0:
                 waiter = self._tag_waiters.setdefault(chunk.chunk_id, asyncio.Event())
@@ -390,8 +441,63 @@ class BeeStreamOrchestrator(Debug):
                     self._tag_waiters.pop(chunk.chunk_id, None)
                 tag = self._speaker_tags.get(chunk.chunk_id)
         if tag is not None:
-            chunk.speaker_id = tag[0]
-            chunk.speaker_role = self.identity.role_for(tag[0])
+            self._apply_match(chunk, tag)
+
+    def _run_off_loop(self, fn: Callable[..., Any], *args: Any) -> None:
+        """Runs blocking store work in a thread when an event loop is running (tenant context is copied)."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            fn(*args)
+            return
+        task = loop.create_task(asyncio.to_thread(fn, *args))
+        self._side_tasks.add(task)  # keep a reference until done (the loop holds tasks weakly)
+        task.add_done_callback(self._side_tasks.discard)
+
+    def reconcile_speaker(self, source_key: Optional[str], match: SpeakerMatch) -> Dict[str, int]:
+        """Applies a late speaker tag to the action and task extracted from that utterance.
+
+        A contact's completed action no longer counts as the user's (revoked, and a task it completed is
+        reopened); a task a contact voiced is cancelled. Entities ids are derived from the source key."""
+        out = {"actions": 0, "tasks": 0}
+        if not source_key:
+            return out
+        from src.pipeline.nodes.persist import derived_entity_id
+
+        speaker = SpeakerAttribution(role=match.role, name=match.name, score=match.score, source=match.source)
+        try:
+            store = self.store or get_storage_store()
+            action_id = derived_entity_id(source_key, "action")
+            action = store.get_verified_action(action_id) if action_id else None
+            if action is not None:
+                revoke = match.role == "contact" and not action.is_revoked
+                store.set_action_speaker(action_id, speaker, revoke=revoke)
+                out["actions"] = 1
+                if revoke and action.matched_task_id:
+                    task = store.get_planned_task(action.matched_task_id)
+                    if task is not None and task.verified_action_id == action_id and task.status == "completed":
+                        task.status, task.completed_at, task.verified_action_id = "pending", None, None
+                        store.update_planned_task(task)
+            task_id = derived_entity_id(source_key, "task")
+            task = store.get_planned_task(task_id) if task_id else None
+            if task is not None:
+                from src.pipeline.nodes.scheduler import is_request_to_owner
+
+                requested = bool(task.speaker and task.speaker.addressed_to_user) or (
+                    match.role == "contact" and is_request_to_owner(task.raw_statement or "", self.identity.first_name))
+                if requested and match.role == "contact":
+                    # "Damiano, remember to ...": now we also know who asked; still the owner's task
+                    speaker = speaker.model_copy(update={"addressed_to_user": True})
+                elif match.role == "contact" and task.status == "pending" and task.origin == "ambient_voice":
+                    task.status = "cancelled"  # another person's own plan, not the owner's task
+                task.speaker = speaker
+                store.update_planned_task(task)
+                out["tasks"] = 1
+        except Exception as e:
+            self.warn(f"Speaker reconcile error: {type(e).__name__}: {e}", "storage.write_failed", error=e)
+        if out["actions"] or out["tasks"]:
+            self.debug(f"Late speaker tag applied ({match.role}): {out}", log=False)
+        return out
 
     # ------------------------------------------------------------------
     # Bee conversation identity (uuid ↔ numeric id)

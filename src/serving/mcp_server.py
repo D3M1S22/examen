@@ -792,6 +792,7 @@ async def api_actions(request: Request) -> JSONResponse:
             "matched_task_id": a.matched_task_id,
             "ingest_source": a.ingest_source,
             "ingest_run_id": a.ingest_run_id,
+            "speaker": a.speaker.model_dump() if a.speaker else None,
         })
 
     return JSONResponse({"actions": result, "count": len(result)})

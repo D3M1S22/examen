@@ -26,6 +26,7 @@ from src.core.schemas import (
     SocialCommitment,
     SocialEntity,
     SocialWebProfile,
+    SpeakerAttribution,
     TopicProfile,
     VerifiedAction,
 )
@@ -146,6 +147,20 @@ def _json(row: Any, key: str, default: Any) -> Any:
         return default
 
 
+def speaker_from_row(row: Any) -> Optional[SpeakerAttribution]:
+    data = _json(row, "speaker_json", None)
+    if not isinstance(data, dict):
+        return None
+    try:
+        return SpeakerAttribution.model_validate(data)
+    except ValueError:
+        return None
+
+
+def speaker_to_json(speaker: Optional[SpeakerAttribution]) -> Optional[str]:
+    return speaker.model_dump_json() if speaker is not None else None
+
+
 def row_to_planned_task(r: Any) -> PlannedTask:
     return PlannedTask(
         id=r["id"],
@@ -167,6 +182,7 @@ def row_to_planned_task(r: Any) -> PlannedTask:
         ingest_run_id=_get(r, "ingest_run_id"),
         source_key=_get(r, "source_key"),
         recovered=bool(_get(r, "recovered", 0)),
+        speaker=speaker_from_row(r),
     )
 
 
@@ -185,6 +201,7 @@ def row_to_action(row: Any) -> VerifiedAction:
         ingest_source=_get(row, "ingest_source") or "live",
         ingest_run_id=_get(row, "ingest_run_id"),
         source_key=_get(row, "source_key"),
+        speaker=speaker_from_row(row),
     )
 
 

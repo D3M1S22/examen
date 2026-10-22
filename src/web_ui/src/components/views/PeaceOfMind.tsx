@@ -3,6 +3,7 @@ import { ActionChanges, VerifiedAction } from "@/types/schemas";
 import { ScreenHeader } from "../ui/ScreenHeader";
 import { StatusBadge, DomainBadge } from "../ui/StatusBadge";
 import { RecoveredBadge } from "../ui/RecoveredBadge";
+import { SpeakerBadge } from "../ui/SpeakerBadge";
 import { CreateActionModal } from "../ui/CreateActionModal";
 import { EditActionModal } from "../ui/EditActionModal";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
@@ -318,6 +319,7 @@ export function PeaceOfMind({ actionsData, statusData, onAddAction, onEditAction
                       <div className="flex items-center gap-2 mb-1">
                         <DomainBadge domain={action.domain} />
                         <RecoveredBadge entity={action} />
+                        <SpeakerBadge speaker={action.speaker} />
                         <span className="font-mono text-[8px] text-secondary tracking-widest uppercase">
                           HASH: {action.id ? action.id.substring(0, 8) : "ACT_0" + idx}
                         </span>

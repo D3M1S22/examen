@@ -187,6 +187,10 @@ def node_extract_action(state: ExamenState) -> Dict[str, Any]:
     transcript = state.get("raw_transcript", "").strip()
     if not transcript:
         return {"action_data": None}
+    if state.get("speaker_role") == "contact":
+        # Bee recognised another person: their "I locked the door" does not verify the user's routine
+        logger.debug("Action extraction skipped: utterance spoken by a contact")
+        return {"action_data": None}
 
     historical_context = state.get("historical_context")
     location = state.get("location")
