@@ -1,6 +1,6 @@
 # 🧠 Deep Topic Event Engine — Overview
 
-> **Document Status:** Architectural Specification (not yet implemented)
+> **Document Status:** Implemented 2026-10-13 (Phase 4 completed; verification and tests in [07](07_implementation_plan_and_testing.md))
 > **Supersedes / extends:** [03_session_merging_and_micro_event_splitting.md](../03_session_merging_and_micro_event_splitting.md) (Milestone 3.2)
 > **Related specs:** [01_deep_topic_contextual_synthesis.md](../01_deep_topic_contextual_synthesis.md), [02_gatekeeper_context_and_multimodal_telemetry.md](../02_gatekeeper_context_and_multimodal_telemetry.md)
 > **Audience:** EXAMEN engineers implementing the ingestion, pipeline, storage and UI changes

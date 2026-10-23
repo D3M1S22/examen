@@ -27,46 +27,38 @@ amazon_challenge/
 ├── FRICTION_LOG.md                         # Log of blockers, gotchas, and resolutions
 ├── pyproject.toml / requirements.txt       # Python dependencies and build config
 ├── .env.example                            # Template of required environment variables
-├── docs/                                   # Full technical & strategy documentation
-│   ├── 01_architecture_flow.md             # 5-Stage end-to-end pipeline & Mermaid flow
-│   ├── 02_bedrock_agentcore_pipeline.md    # LangGraph state machine & model tiering
-│   ├── 03_alexa_mcp_serving.md             # FastMCP protocol, tools & Echo Show UI wireframes
-│   ├── 04_hackathon_strategy_demo.md       # 3-Minute pitch script, judging rubric & roadmap
-│   ├── 05_tech_stack_resources.md          # Tech stack breakdown & submodule references
-│   ├── 06_aws_cloud_deployment_architecture.md # Bedrock AgentCore, Memory & AWS infrastructure
-│   ├── 07_repository_structure_modules.md  # Detailed monorepo layout & deployment mapping
-│   ├── 08_real_telemetry_and_bee_hardware_spec.md # Telemetry & Bee hardware integration
-│   └── 10_bee_cli_reference.md             # Observed bee-cli/API contract (source of truth for Bee data)
-├── resources/                              # Dedicated Git submodules (Reference Only)
-│   ├── agentcore-samples/                  # Reference for Bedrock AgentCore + LangGraph
-│   └── bee-cli/                            # Reference for Bee Wearable SSE streaming API
-├── scripts/                                # Utility and benchmark scripts
-│   └── run_live_benchmark.py               # Comprehensive live evaluation benchmark suite
+├── docs/                                   # Full technical & strategy documentation (01 to 17 + next_steps)
+├── resources/                              # Dedicated Git submodules (Reference Only: agentcore-samples, bee-cli)
+├── scripts/                                # Utility, deploy, and benchmark scripts (live tester, dynamo, aws)
+├── deploy/                                 # Deployment configurations (homelab systemd, agentcore, aws CloudFormation)
 ├── src/                                    # Source code root
-│   ├── core/                               # Shared contracts, configs & storage
+│   ├── core/                               # Shared contracts, configs, auth, ops & storage
 │   │   ├── config.py                       # Pydantic Settings & environment config
 │   │   ├── models.py                       # Centralized Dual-Provider Model Factory (Bedrock & Mantle)
 │   │   ├── schemas.py                      # Pydantic V2 data contracts & LangGraph state
-│   │   └── storage/                        # Storage abstraction layer (SQLite FTS5 / DynamoDB)
+│   │   ├── tenancy.py                      # Multi-tenant context & scopes
+│   │   ├── auth/                           # Scrypt passwords, rate limits & auth stores
+│   │   └── storage/                        # Persistence layer (SQLite FTS5 & DynamoDB single-table)
 │   ├── pipeline/                           # LangGraph pipeline (Bedrock AgentCore Runtime)
 │   │   ├── graph.py                        # StateGraph definition & conditional routing
 │   │   ├── app.py                          # BedrockAgentCoreApp runtime entrypoint (@app.entrypoint)
-│   │   ├── nodes/                          # Action-state, social, topic research & persist nodes
+│   │   ├── remote.py                       # AgentCore Runtime remote invocation client
+│   │   ├── nodes/                          # Action-state, social, scheduler, topic research & persist nodes
 │   │   └── tools/                          # DuckDuckGo multi-tier web search tool
-│   ├── serving/                            # Serving layer (FastMCP Streamable HTTP for Alexa+)
-│   │   └── mcp_server.py                   # Port 8000 Streamable HTTP MCP server
-│   └── ingestion/                          # Edge ingestion bridge (Local / VPS / Bee Device)
-│       ├── stream_convo.py                 # Bee CLI SSE stream client (BeeClient)
-│       ├── orchestrator.py                 # Sliding window buffer & edge screening orchestrator
-│       └── gatekeeper.py                   # Semantic screening gatekeeper & task injection
-└── tests/                                  # Pytest unit and integration test suite (66 tests, 100% pass)
-    ├── test_storage.py                     # SQLite FTS5 storage contract tests
-    ├── test_gatekeeper.py                  # Gatekeeper screening & active task tests
-    ├── test_ingestion_orchestrator.py      # Buffer & semantic cut tests
-    ├── test_model_factory.py               # Bedrock & Mantle dual-provider factory tests
-    ├── test_web_search.py                  # Multi-tier web search & SSRF security tests
-    ├── test_pipeline_nodes.py              # Specialized pipeline nodes & scheduled task tests
-    └── test_langgraph_pipeline.py          # End-to-end LangGraph & AgentCore app tests
+│   ├── serving/                            # Serving layer (FastMCP Streamable HTTP for Alexa+, REST, SSE)
+│   │   ├── mcp_server.py                   # Port 8000/8042 Streamable HTTP MCP server (22 tools)
+│   │   ├── auth_routes.py                  # Multi-user auth, session management & Bee pairing
+│   │   ├── admin_routes.py                 # Admin console & runtime settings overrides
+│   │   └── tools/                          # Action, curation, session, social, and topic tools
+│   ├── ingestion/                          # Edge ingestion bridge (Local / VPS / Bee Device)
+│   │   ├── stream_convo.py                 # Bee CLI SSE stream client (BeeClient & private proxy)
+│   │   ├── orchestrator.py                 # Per-utterance screening, ring buffer & pipeline dispatch
+│   │   ├── gatekeeper.py                   # Semantic screening gatekeeper & dynamic task injection
+│   │   ├── event_engine.py                 # Deep Topic Event Engine (R0–R9 state machine)
+│   │   ├── topic_continuity.py             # Titan V2 embeddings & semantic topic continuity
+│   │   └── backfill.py                     # Historical transcript backfill engine
+│   └── web_ui/                             # Multimodal Next.js 14 + React 18 + Tailwind dashboard
+└── tests/                                  # Pytest unit and integration test suite (31 files, 588 tests, 100% pass)
 ```
 
 ---
@@ -141,12 +133,12 @@ Whenever you inspect, modify, or extend this codebase, you **must adhere strictl
 * `broadcast_event` targets the current tenant; pass `tenant=` explicitly from callbacks that may run elsewhere.
 * User edits and deletes of extracted results (actions, routines, contacts, events) go through `src/serving/tools/curation_tools.py` from both REST and MCP. It owns the cascades, the event-engine calls and the SSE events: never call the store's write methods for these directly from a route or a tool (`docs/next_steps/manual_curation/`).
 
-### F. FastMCP Version Constraint
+### G. FastMCP Version Constraint
 * Always ensure `mcp>=1.10.0,<2.0.0` is respected. Version `2.0.0` introduces breaking changes to `mcp.server.fastmcp` which breaks AWS Bedrock AgentCore Runtime compatibility.
 
 ---
 
-## 6. Key Reference Locations in Submodules
+## 7. Key Reference Locations in Submodules
 
 When implementing or debugging specific features, refer to these canonical implementations in `resources/`:
 
@@ -163,7 +155,7 @@ When implementing or debugging specific features, refer to these canonical imple
 
 ---
 
-## 7. Development Workflows & Commands
+## 8. Development Workflows & Commands
 
 ### Virtual Environment Setup
 The project uses `uv` for fast, deterministic Python environment management:
@@ -176,9 +168,11 @@ pip install -r requirements.txt
 ```
 
 ### Running Test Suite
-Always verify that test suites pass before concluding any task:
+Always verify that test suites pass before concluding any task (588 tests across 31 files):
 ```bash
 .venv/bin/pytest tests/ -v
+# Run against DynamoDB backend (via moto)
+EXAMEN_TEST_STORAGE=dynamo .venv/bin/pytest tests/
 ```
 
 ### Running the FastMCP Server Locally
@@ -207,7 +201,7 @@ The live stream uses a private `bee proxy` on 127.0.0.1 (`BEE_STREAM_TRANSPORT=p
 
 ---
 
-## 8. Friction Log Protocol
+## 9. Friction Log Protocol
 
 Whenever you encounter a non-obvious bug, dependency incompatibility, or tricky API quirk (such as SDK breaking changes, Bedrock prompt formatting issues, or FastMCP quirks), **record it immediately** in `FRICTION_LOG.md`:
 * **Problem:** What failed or caused unexpected friction.
@@ -216,29 +210,28 @@ Whenever you encounter a non-obvious bug, dependency incompatibility, or tricky 
 
 ---
 
-## 9. Current Project Roadmap & Priorities
+## 10. Current Project Architecture & Status
 
 1. **Pipeline Core (`src/pipeline/`) — [COMPLETED & VERIFIED]:**
    * ✅ Implemented `src/ingestion/gatekeeper.py` with dynamic active task injection.
-   * ✅ Implemented parallel enrichment nodes: `social.py`, `action_state.py`, and `topic_research.py`.
+   * ✅ Implemented parallel enrichment nodes: `social.py`, `action_state.py`, `scheduler.py`, and `topic_research.py`.
    * ✅ Compiled pure LangGraph `StateGraph` in `src/pipeline/graph.py` with multi-label fan-out and conditional routing.
-   * ✅ Integrated Bedrock AgentCore Runtime entrypoint in `src/pipeline/app.py` (`@app.entrypoint`).
+   * ✅ Integrated Bedrock AgentCore Runtime entrypoint in `src/pipeline/app.py` (`@app.entrypoint`) and remote invocation client in `src/pipeline/remote.py`.
    * ✅ Dual-Provider Engine: Native Bedrock Converse API + Bedrock Mantle OpenAI-compatible API (`src/core/models.py`).
    * ✅ Comprehensive Live Evaluation Benchmark (`scripts/run_live_benchmark.py`): 25/25 scenarios passed (100%), average 3.5s latency, sub-1-cent cost on `nvidia.nemotron-super-3-120b`.
 2. **Serving Layer (`src/serving/`) — [COMPLETED & VERIFIED]:**
-   * ✅ Implemented FastMCP server in `src/serving/mcp_server.py` with Starlette ASGI support.
-   * ✅ Implemented 5 exposed MCP tools in `src/serving/tools/`:
-     * `create_planned_task` (for scheduling domestic/routine checks)
-     * `verify_action_status` (for peace of mind queries like "did I unplug the iron?")
-     * `get_daily_actions_recap`
-     * `query_social_contact`
-     * `get_topic_briefing`
-   * ✅ Exposes REST telemetry endpoints (`/api/status`, `/api/actions`, `/api/routines`, `/api/contacts`, `/api/topics`, `/api/simulate`).
-3. **Frontend UI & Alexa+ Add-On (`src/web_ui/` & `deploy/`) — [COMPLETED & VERIFIED]:**
-   * ✅ Built modern multimodal touch dashboard for Echo Show (ext-apps) and desktop/mobile in `src/web_ui/` (`index.html`, `styles.css`, `app.js`).
-   * ✅ Implemented Peace of Mind Hero banner, Daily Routines Checklist with live scheduling, Social Rolodex cards, Topic Dossiers viewer, and Ambient Audio Stream Simulator.
-   * ✅ 85 unit & integration tests passing (100% test suite).
+   * ✅ Implemented FastMCP server in `src/serving/mcp_server.py` with Starlette ASGI support over Streamable HTTP (`/mcp`).
+   * ✅ 22 exposed MCP tools with tenant scoping:
+     * 12 base tools (`create_planned_task`, `get_upcoming_tasks`, `verify_action_status`, `get_daily_actions_recap`, `query_social_contact`, `get_contact_profile`, `get_social_commitments`, `get_topic_briefing`, `get_session_dossier`, `list_session_dossiers`, `get_live_event_outline`, `get_ingestion_coverage`).
+     * 3 curation edit tools (`update_action`, `update_planned_task`, `update_contact`).
+     * 4 two-step curation delete tools (`delete_action`, `delete_planned_task`, `delete_contact`, `delete_session_dossier`).
+     * 3 speaker review queue tools (`list_items_to_review`, `accept_item`, `dismiss_item`).
+   * ✅ Multi-user REST API, per-tenant SSE (`/api/events`), Admin Console endpoints (`/api/admin/*`), and GDPR export/erasure.
+3. **Frontend Web UI (`src/web_ui/`) — [COMPLETED & VERIFIED]:**
+   * ✅ Modern multimodal touch dashboard for Echo Show and desktop built in Next.js 14 + React 18 + Tailwind CSS + TypeScript + SWR.
+   * ✅ Implemented Peace of Mind Hero banner, Daily Routines Checklist with live scheduling, Social Rolodex cards, Topic Dossiers viewer & export, Admin Console, and Ambient Audio Stream Simulator.
+   * ✅ 588 unit & integration tests passing (100% test suite across 31 test modules).
 4. **Ingestion & Demo Bridge (`src/ingestion/`):**
-   * ✅ Demo scenarios via `scripts/simulate_mock_conversations.py` and `scripts/replay_event_scenarios.py`.
-   * ✅ Live stream verified with a real account (2026-10-19, Apple Watch): `docs/10_bee_cli_reference.md`.
-   * Conformance fixes pending: `docs/10_bee_cli_reference.md` §10 (C1–C16) and backfill items I1–I9.
+   * ✅ Deep Topic Event Engine (R0–R9 state machine, Titan V2 embeddings, segment and final briefings).
+   * ✅ Historical Transcript Backfill with coverage ledger and virtual-clock replay.
+   * ✅ Multi-user per-tenant Bee stream isolation and pairing via QR code.

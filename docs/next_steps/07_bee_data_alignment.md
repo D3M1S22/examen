@@ -28,7 +28,7 @@
 | Topic | Decision |
 |---|---|
 | Stream transport | **Raw SSE through a private `bee proxy` on 127.0.0.1** read with `httpx` (not `--socket`: there the proxy ignores `--idle-timeout` and Bun closes the stream after 10 s idle, observed), so pings are visible: liveness timeout 90 s. Automatic fallback to `bee stream --json` (no read timeout, process-alive ticker) |
-| Dashboard logout | **Unchanged by design**: `/api/auth/logout` with `disconnect_bee: true` runs `bee logout`, which disconnects Bee for the whole host and stops the live stream (C11) |
+| Dashboard logout | Superseded by multi-user accounts ([13](../13_multi_user_accounts.md)): web signout no longer touches Bee; `POST /api/bee/disconnect` disconnects only that user's private folder. (Originally: kept by design on 2026-10-19 for single-user mode). |
 | Wearer identity | `tagged-utterance.person_first_name` (live) or REST `speaker` equal to `bee me` → `first_name` ⇒ `user`; `"Unknown"`/empty ⇒ `unknown`; any other name ⇒ `contact`. `BEE_WEARER_NAME` overrides `bee me` |
 | Location source | Poll `bee locations current --json` (accept only `is_recent` fixes with a new id) in addition to SSE `update-location` |
 | Verification | Unit tests + real device + real Bedrock end-to-end session |

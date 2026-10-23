@@ -1,6 +1,7 @@
 # 05 — Implementation Plan, Tests & Onboarding
 
-> Part of the [Alexa+ MCP Add-on](00_overview.md) specification.
+> Part of the [Alexa+ MCP Add-on](00_overview.md) specification (Future Post-Hackathon Integration).
+> For the Amazon Developer Hackathon 2026, the Alexa+ track is fulfilled by the self-hosted MCP server deployed on AWS at `https://examen.devgiov.com/mcp`. The roadmap below guides subsequent commercial store release.
 
 ---
 

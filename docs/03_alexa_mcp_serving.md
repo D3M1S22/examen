@@ -2,6 +2,16 @@
 
 > This document defines the **Serving Architecture** of **EXAMEN** *(from Latin "exāmen": swarm of bees & careful examination)*, explaining how stored context is exposed via a **Model Context Protocol (MCP)** server for **Alexa+** and rendered visually on **Echo Show** screens using the **ext-apps** framework.
 
+> [!NOTE]
+> **Current Serving State:**
+> - The live FastMCP server on Streamable HTTP exposes **22 MCP tools** (registered in `src/serving/mcp_server.py`):
+>   1. 12 base tools (`create_planned_task`, `get_upcoming_tasks`, `verify_action_status`, `get_daily_actions_recap`, `query_social_contact`, `get_contact_profile`, `get_social_commitments`, `get_topic_briefing`, `get_session_dossier`, `list_session_dossiers`, `get_live_event_outline`, `get_ingestion_coverage`)
+>   2. 3 curation update tools (`update_action`, `update_planned_task`, `update_contact`)
+>   3. 4 curation delete tools with two-step confirmation (`delete_action`, `delete_planned_task`, `delete_contact`, `delete_session_dossier`)
+>   4. 3 speaker review tools (`list_items_to_review`, `accept_item`, `dismiss_item`)
+> - The MCP server runs live with tenant scoping on AWS at `https://examen.devgiov.com/mcp` and locally at `http://localhost:8000/mcp`.
+> - For the post-hackathon store release with OAuth 2.1 account linking and `@alexa-ai/cli` add-on packaging, see the comprehensive blueprint in [docs/next_steps/alexa_addon/](next_steps/alexa_addon/00_overview.md).
+
 ---
 
 ## 🌐 Architecture of the Alexa+ MCP Server

@@ -2,6 +2,15 @@
 
 > This document provides an exhaustive overview of the **file layout and module architecture** for **EXAMEN** *(from Latin "exāmen": swarm of bees & careful examination)*, explaining boundaries of responsibility and mapping directories to **deployment targets**.
 
+> [!NOTE]
+> **Baseline Reference (v1.0):** This document outlines the initial monorepo layout. In the current codebase:
+> - Storage includes Amazon DynamoDB single-table persistence (`src/core/storage/dynamo_store.py`) alongside SQLite FTS5.
+> - Multi-user authentication, tenant isolation, and session controls live in `src/core/auth/` and `src/core/tenancy.py` ([13_multi_user_accounts.md](13_multi_user_accounts.md)).
+> - The serving layer exposes **22 tenant-aware MCP tools** and Admin Console routes in `src/serving/`.
+> - The web UI is a Next.js 14 + React 18 + Tailwind CSS application in `src/web_ui/` built with Bun.
+> - Real deployment assets are located in `deploy/homelab/`, `deploy/agentcore/`, and `deploy/aws/` ([17_aws_deployment_runbook.md](17_aws_deployment_runbook.md)).
+> - Comprehensive module audit: [12_full_repo_recap.md](12_full_repo_recap.md).
+
 ---
 
 ## 🏛️ Design Philosophy: Modular Monorepo per Deploy Target

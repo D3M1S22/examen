@@ -2,6 +2,13 @@
 
 > This document provides the engineering specifications for the **EXAMEN** agentic pipeline *(from Latin "exāmen": swarm of bees & careful examination)*, detailing **AWS Bedrock** model selection, state graph orchestration with **LangGraph / AgentCore**, Pydantic data schemas, system prompts, and autonomous web research enrichment.
 
+> [!NOTE]
+> **Baseline Reference (v1.0):** This document details the initial LangGraph design and schemas. In the production codebase:
+> - Pydantic schemas in [`src/core/schemas.py`](../src/core/schemas.py) include `scheduled_task`, multi-tenant attributes, speaker tags, and location telemetry.
+> - The Gatekeeper operates as an ingestion pre-filter (`src/ingestion/gatekeeper.py`) before graph fan-out.
+> - AgentCore invocation is supported both in-process and remotely via [`src/pipeline/remote.py`](../src/pipeline/remote.py) deployed on AgentCore Runtime (`PIPELINE_MODE=agentcore`).
+> - Web research uses a multi-tier DuckDuckGo cascading search with SSRF protection without external API keys.
+
 ---
 
 ## 🧠 Dual-Provider Model Tiering & Latency/Cost Strategy

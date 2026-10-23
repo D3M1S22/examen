@@ -2,6 +2,9 @@
 
 > This document tracks all **frameworks**, **libraries**, **APIs**, **cloud platforms**, and **reference repositories** used across the **EXAMEN** project *(from Latin "exāmen": swarm of bees & careful examination)*, with relative links, paths, and integration patterns.
 
+> [!NOTE]
+> **Evolution Note:** The stack has expanded to include Next.js 14 + React 18 + Tailwind for the dashboard, Bun for UI builds and Bee CLI compilation, Amazon DynamoDB for cloud-native persistence, and Amazon Titan Text Embeddings V2 for topic continuity. See [12_full_repo_recap.md](12_full_repo_recap.md) and [16_aws_data_layer_k3.md](16_aws_data_layer_k3.md).
+
 ---
 
 ## 📁 External Resources & Submodules Directory (`resources/`)
@@ -88,12 +91,14 @@ To keep the core codebase of **EXAMEN** clean and distinguish application code f
 | **State Graph** | **LangGraph** | `langgraph` ($\ge 0.2.0$) | State orchestration: conditional routing from `START` to specialized sub-agents. |
 | **LLM Provider (Native)** | **LangChain AWS** | `langchain-aws`, `boto3` | Interface to native AWS Bedrock Converse API with IAM SigV4 auth. |
 | **LLM Provider (Mantle)** | **LangChain OpenAI & Token Gen** | `langchain-openai`, `aws-bedrock-token-generator` | Interface to Bedrock Mantle OpenAI-compatible endpoints with dynamic IAM token minting. |
-| **Serving Layer** | **Model Context Protocol (MCP)** | `mcp>=1.10.0,<2.0.0` | FastMCP streamable-HTTP server exposing memory tools to Alexa+. |
-| **Wearable Bridge** | **Bee CLI & beemcp** | `@beeai/cli`, `beemcp` | Real-time audio stream and utterance ingestion from Bee wearable. |
-| **Frontend UI** | **Echo Show Ext-Apps** | HTML5, Vanilla CSS, JS | Multimodal touch UI for Echo Show (Peace of Mind, Rolodex, Briefings). |
+| **Serving Layer** | **Model Context Protocol (MCP)** | `mcp>=1.10.0,<2.0.0` | FastMCP streamable-HTTP server exposing 22 tools to Alexa+. |
+| **Wearable Bridge** | **Bee CLI (`bee`)** | `bee-cli` (Bun compiled binary) | Real-time audio stream and utterance ingestion from Bee wearable via private proxy. |
+| **Frontend UI** | **Echo Show & Web Dashboard** | Next.js 14, React 18, Tailwind CSS, TypeScript | Modern touch UI for Echo Show & web (Peace of Mind, Rolodex, Briefings, Admin Console). |
 | **Local Store** | **SQLite + FTS5** | Python native (`sqlite3`) | Zero-latency local context store with full-text search indexing. |
+| **Cloud Store** | **Amazon DynamoDB** | `boto3` (on-demand single-table) | Cloud-native multi-user data layer with IAM LeadingKeys tenant isolation. |
+| **Embeddings** | **Titan Text Embeddings V2** | `amazon.titan-embed-text-v2:0` | Calibrated cosine similarity for topic continuity and boundary detection. |
 | **Data Validation** | **Pydantic V2** | `pydantic>=2.7` | Typed contracts for structured outputs (social entities, actions, reports). |
-| **Web Research** | **DuckDuckGo Search** | `ddgs`, `duckduckgo-search` | Autonomous multi-tier web research tool with SSRF protection. |
+| **Web Research** | **DuckDuckGo Search** | `ddgs`, HTML scraping, SearXNG | Autonomous multi-tier web research tool with SSRF protection. |
 
 ---
 

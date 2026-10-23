@@ -1,9 +1,9 @@
 # 🗺️ EXAMEN Evolution Roadmap & Execution Plan
 
-> **Document Status:** Active Execution Plan & Project Tracking Board  
-> **Source Documents:** [00_overview.md](00_overview.md) to [06_social_web_enrichment.md](06_social_web_enrichment.md)  
-> **Target Branch:** `Next_steps` / `main`  
-> **Current Baseline:** v1.4.0 (272/272 Pytest suites passing 100% green, Deep Topic Event Engine + Next.js event timeline live)
+> **Document Status:** Active Execution Plan & Project Tracking Board
+> **Source Documents:** [00_overview.md](00_overview.md) to [06_social_web_enrichment.md](06_social_web_enrichment.md)
+> **Target Branch:** `main`
+> **Current Baseline:** v1.8.0 (588/588 Pytest suites passing 100% green; multi-user accounts, DynamoDB, Deep Topic Event Engine, manual curation, speaker review, and AWS CloudFront/EC2/AgentCore deployment live)
 
 ---
 
@@ -46,7 +46,7 @@
 │    ├─ M8.1: DynamoContextStore (P1)                │ P1       │ High   │ DDB 02      │ ✅ DONE   │
 │    ├─ M8.2: IAM tenant isolation & infra (P2)      │ P1       │ Medium │ DDB 04, 05  │ ✅ DONE   │
 │    ├─ M8.3: Auth & ops on DynamoDB (P3)            │ P2       │ Medium │ DDB 03      │ ✅ DONE   │
-│    └─ M8.4: Migration & cutover (P4)               │ P2       │ Low    │ DDB 06      │ 🔶 cutover │
+│    └─ M8.4: Migration & cutover (P4)               │ P2       │ Low    │ DDB 06      │ ✅ DONE   │
 │  Phase 10: Speaker Identity (voice tags → account) │ High     │ Medium │ Doc 08      │ ✅ IMPLEMENTED│
 │  Phase 11: Manual Curation                         │ High     │ Medium │ MC 00-05    │ ✅ IMPLEMENTED│
 │    ├─ M11.1: Store & engine (edit/revoke/cascade)  │ P1       │ Medium │ MC 02       │ ✅ DONE   │
@@ -54,7 +54,7 @@
 │    ├─ M11.3: MCP edit/delete (two-step confirm)    │ P1       │ Low    │ MC 03 §5    │ ✅ DONE   │
 │    └─ M11.4: Dashboard edit/delete & excerpts      │ P1       │ Medium │ MC 04       │ ✅ DONE   │
 │  Phase 12: Speaker Review (confirm untagged)       │ High     │ Medium │ SR 00-04    │ ✅ IMPLEMENTED│
-│  Phase 13: Alexa+ MCP Add-on (OAuth, listing)      │ High     │ High   │ AX 00-05    │ ⏳ PLANNED │
+│  Phase 13: Alexa+ MCP Add-on (OAuth, listing)      │ Medium   │ High   │ AX 00-05    │ ⏳ FUTURE (POST-HACKATHON) │
 └──────────────────────────────────────────────────────────────────────────────────────────────────┘
 
 > **DTEE** = [docs/next_steps/deep_topic_event_engine/](deep_topic_event_engine/00_overview.md)
@@ -71,14 +71,14 @@
 ## 🏗️ Detailed Execution Phases
 
 ### Phase 0: Baseline v1.0 — Current Foundation (COMPLETED ✅)
-* [x] **Semantic Gatekeeper**: Dual-stage filtering dropping >90% ambient chatter (`src/pipeline/nodes/gatekeeper.py`).
-* [x] **Dual LLM Provider**: AWS Bedrock native Converse API + AWS Bedrock Mantle runtime support (`src/core/model_factory.py`).
-* [x] **LangGraph StateGraph**: Parallel fan-out routing (`social`, `action`, `deep_topic`, `noop`).
-* [x] **Autonomous Web Research**: DuckDuckGo / Tavily multi-source scraping for technical topics (`src/pipeline/tools/web_search.py`).
-* [x] **SQLite FTS5 Storage**: Local persistent context store with full-text search (`src/core/storage/sqlite_store.py`).
-* [x] **FastMCP Serving Layer**: Streamable-HTTP server exposing Alexa+ tools on `/mcp` (`src/serving/mcp_server.py`).
-* [x] **Real-Time Web UI**: Modern dark-mode dashboard with Server-Sent Events (`/api/events`), complete Routines CRUD, and Chronological Timeline view (`src/web_ui/`).
-* [x] **Test Verification**: 89/89 tests passing across `tests/`.
+* [x] **Semantic Gatekeeper**: Low-cost filtering dropping >90% ambient chatter (`src/ingestion/gatekeeper.py`).
+* [x] **Dual LLM Provider**: AWS Bedrock native Converse API + AWS Bedrock Mantle runtime support (`src/core/models.py`).
+* [x] **LangGraph StateGraph**: Parallel fan-out routing (`social`, `action`, `deep_topic`, `scheduled_task`, `noop`).
+* [x] **Autonomous Web Research**: DuckDuckGo multi-source scraping for technical topics (`src/pipeline/tools/web_search.py`).
+* [x] **Storage Layer**: Local SQLite FTS5 context store and cloud-native Amazon DynamoDB (`src/core/storage/`).
+* [x] **FastMCP Serving Layer**: Streamable-HTTP server exposing 22 tools on `/mcp` (`src/serving/mcp_server.py`).
+* [x] **Real-Time Web UI**: Modern dark-mode dashboard with Next.js 14 + React 18, Server-Sent Events (`/api/events`), Routines CRUD, and Topic Dossiers timeline (`src/web_ui/`).
+* [x] **Test Verification**: 588/588 tests passing across `tests/`.
 
 ---
 
@@ -352,9 +352,13 @@
 > **Goal:** actions and tasks from speech Bee did not attribute to anyone wait for the owner's confirmation instead of counting at once; another recognised person's own plans are dropped; requests naming the owner stay the owner's tasks. A per-user setting (off by default) accepts untagged speech automatically.
 > **Spec:** [speaker_review/](speaker_review/00_overview.md) (decisions R1–R9, implemented 2026-10-23; status and deviations in [04 §0](speaker_review/04_implementation_plan_and_testing.md)).
 
-### Phase 13: Alexa+ MCP Add-on (PLANNED)
-> **Goal:** real Alexa+ devices use EXAMEN through an Alexa+ MCP Add-on: an OAuth 2.1 server built into EXAMEN (account linking with PKCE, refresh tokens, client-credentials discovery), TLS to the origin, public privacy and terms pages and listing assets, Alexa-facing tool adjustments, then deploy, simulator, device and certification with the Alexa AI CLI.
-> **Spec:** [alexa_addon/](alexa_addon/00_overview.md) (decisions A1–A6 to confirm; blocked on Amazon program onboarding for the CLI).
+### Phase 13: Alexa+ MCP Add-on (FUTURE INTEGRATION / POST-HACKATHON)
+> **Goal:** real Alexa+ devices in the Alexa store use EXAMEN through a packaged Alexa+ MCP Add-on: an OAuth 2.1 server built into EXAMEN (account linking with PKCE, refresh tokens, client-credentials discovery), TLS to the origin, public privacy and terms pages and listing assets, Alexa-facing tool adjustments, then deploy, simulator, device and certification with the Alexa AI CLI.
+> **Spec:** [alexa_addon/](alexa_addon/00_overview.md) (decisions A1–A6).
+> **Deferred post-hackathon for two reasons:**
+> 1. **Hackathon Track Compliance:** The official Amazon Developer Hackathon 2026 rules for the Alexa+ track explicitly accept a *self-hosted MCP server implementing MCP 2025-11-25 over Streamable HTTP*, which EXAMEN already delivers with 22 tools live on AWS at `https://examen.devgiov.com/mcp`.
+> 2. **Program Access Pre-requisite:** Building and deploying an official Add-on requires Amazon Solutions Architect onboarding to grant `AddOn3PDeveloperToolsRead` in AWS IAM for `@alexa-ai/cli` CodeArtifact and CodeCommit access.
+> The full specification is preserved in `docs/next_steps/alexa_addon/` as the blueprint for the post-hackathon store release.
 ---
 
 ## 📈 Dependency Graph & Recommended Execution Sequence

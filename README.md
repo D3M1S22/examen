@@ -151,7 +151,7 @@ python scripts/replay_event_scenarios.py --calibrate
 | Track / Challenge | How EXAMEN Maximizes Score |
 | :--- | :--- |
 | **Track 1: Bee Wearable AI ($12,000)** | Goes beyond passive audio logging by providing real-time ambient understanding, proactive web enrichment, and cross-device intelligence. |
-| **Alexa+ (self-hosted MCP server)** | FastMCP server implementing MCP **2025-11-25** over **Streamable HTTP** (`/mcp`, bearer token per user), deployed on AWS at `https://examen.devgiov.com/mcp`. 22 tools: action verification, routines, contacts and commitments, event dossiers, manual curation with two-step deletes, speaker review queue. |
+| **Alexa+ (self-hosted MCP server)** | FastMCP server implementing MCP **2025-11-25** over **Streamable HTTP** (`/mcp`, bearer token per user), deployed on AWS at `https://examen.devgiov.com/mcp`. 22 tools: action verification, routines, contacts and commitments, event dossiers, manual curation with two-step deletes, speaker review queue. (Official Alexa+ Add-on package with OAuth 2.1 is planned for post-hackathon store release). |
 | **Mini-Challenge: AWS Builder ($5,000 + $5,000 credits)** | Native deep integration with AWS Bedrock multi-model tiering (Bedrock Native & Mantle dual-provider) and orchestration on Bedrock AgentCore. |
 | **Cross-Device Orchestration** | Frictionless synergy: **Bee** captures context in the physical world on the go; **Alexa+ on Echo Show** synthesizes and surfaces it at home or office. |
 
@@ -161,21 +161,31 @@ python scripts/replay_event_scenarios.py --calibrate
 
 Detailed technical, architectural, and operational documentation is organized across the following dedicated guides:
 
-* 📄 [01_architecture_flow.md](docs/01_architecture_flow.md): In-depth 5-stage architecture, end-to-end dataflow, and Mermaid diagrams.
-* 📄 [02_bedrock_agentcore_pipeline.md](docs/02_bedrock_agentcore_pipeline.md): LangGraph state graph implementation, dual-provider model factory, Pydantic V2 schemas, and search tools.
-* 📄 [03_alexa_mcp_serving.md](docs/03_alexa_mcp_serving.md): MCP Server specifications for Alexa+, JSON-RPC tool schemas, and Echo Show ext-apps wireframes.
+* 📄 [01_architecture_flow.md](docs/01_architecture_flow.md): In-depth 5-stage architecture, end-to-end dataflow, and Mermaid diagrams *(Baseline v1.0)*.
+* 📄 [02_bedrock_agentcore_pipeline.md](docs/02_bedrock_agentcore_pipeline.md): LangGraph state graph implementation, dual-provider model factory, Pydantic V2 schemas, and search tools *(Baseline v1.0)*.
+* 📄 [03_alexa_mcp_serving.md](docs/03_alexa_mcp_serving.md): MCP Server specifications for Alexa+, JSON-RPC tool schemas, and Echo Show ext-apps wireframes *(Baseline v1.0)*.
 * 📄 [04_hackathon_strategy_demo.md](docs/04_hackathon_strategy_demo.md): 3-minute video demo script, judging criteria alignment, and 4-sprint roadmap.
 * 📄 [05_tech_stack_resources.md](docs/05_tech_stack_resources.md): Comprehensive tech stack, frameworks, APIs, and submodule references (`agentcore-samples`, `bee-cli`).
-* 📄 [06_aws_cloud_deployment_architecture.md](docs/06_aws_cloud_deployment_architecture.md): AWS Cloud deployment architecture (AgentCore Runtime, AgentCore Memory, S3, DynamoDB, Alexa+ MCP, CloudFront).
-* 📄 [07_repository_structure_modules.md](docs/07_repository_structure_modules.md): Detailed repository layout, modular monorepo mapping by deployment target, and developer quickstart.
+* 📄 [06_aws_cloud_deployment_architecture.md](docs/06_aws_cloud_deployment_architecture.md): AWS Cloud deployment architecture (EC2 lift-and-shift, DynamoDB, AgentCore Runtime, S3, CloudFront).
+* 📄 [07_repository_structure_modules.md](docs/07_repository_structure_modules.md): Detailed repository layout, modular monorepo mapping by deployment target, and developer quickstart *(Baseline v1.0)*.
 * 📄 [08_real_telemetry_and_bee_hardware_spec.md](docs/08_real_telemetry_and_bee_hardware_spec.md): Real hardware telemetry integration, Bee Wearable CLI capabilities, latency tracking architecture, and sector-by-sector frontend data contracts.
-* 🏠 [11_homelab_test_deployment.md](docs/11_homelab_test_deployment.md): Single-LXC test deployment on the homelab (before AWS): service layout, redeploy script, Bee login on the server.
-* 👥 [13_multi_user_accounts.md](docs/13_multi_user_accounts.md): Accounts (email + password, GDPR), per-user data folders, per-user Bee QR pairing and orchestrators, MCP access tokens, operator CLI.
+* 📄 [09_frontend_gaps_from_next_steps.md](docs/09_frontend_gaps_from_next_steps.md): Frontend enhancements audit, links tray, disambiguation drawer, and simulator presets.
 * 🐝 [10_bee_cli_reference.md](docs/10_bee_cli_reference.md): Observed bee-cli / Bee API contract (commands, payloads, timestamps, stream events, conversation lifecycle, locations) and the conformance audit of the EXAMEN code.
-* 🚀 [ROADMAP.md](docs/next_steps/ROADMAP.md): Evolution Roadmap, pipeline refinements status dashboard, and execution plan for Next Steps.
-* 🧠 [deep_topic_event_engine/](docs/next_steps/deep_topic_event_engine/00_overview.md): Deep Topic Event Engine specification, state machine, topic continuity calibration, synthesis scheduling, serving/UI and test plan.
-* ⏪ [historical_backfill/](docs/next_steps/historical_backfill/00_overview.md): Historical Transcript Backfill specification: coverage ledger, gap detection, live/backfill de-duplication, virtual-clock replay, auto catch-up and the History Sync UI.
-* 🐝 [07_bee_data_alignment.md](docs/next_steps/07_bee_data_alignment.md): Fix plan and status for aligning EXAMEN with the observed Bee data (location, speaker identity, stream liveness, backfill durations).
+* 🏠 [11_homelab_test_deployment.md](docs/11_homelab_test_deployment.md): Single-LXC test deployment on the homelab (before AWS): service layout, redeploy script, Bee login on the server.
+* 📑 [12_full_repo_recap.md](docs/12_full_repo_recap.md): Comprehensive repository recap and technical audit of the codebase and documentation.
+* 👥 [13_multi_user_accounts.md](docs/13_multi_user_accounts.md): Multi-user accounts (email + password, GDPR), per-user data folders, per-user Bee QR pairing and orchestrators, MCP access tokens, operator CLI.
+* 📚 [14_aws_and_hackathon_reference.md](docs/14_aws_and_hackathon_reference.md): Official hackathon rules, quotas, pricing, and AWS service references.
+* 🧭 [15_aws_split_architecture_report.md](docs/15_aws_split_architecture_report.md): Architectural report on always-on ingestion + on-demand AgentCore Runtime split.
+* 🗄️ [16_aws_data_layer_k3.md](docs/16_aws_data_layer_k3.md): Cloud-native data layer evaluation: DynamoDB vs Aurora vs Aurora DSQL.
+* 🚀 [17_aws_deployment_runbook.md](docs/17_aws_deployment_runbook.md): Production AWS deployment runbook, live on CloudFront (`examen.devgiov.com`), DynamoDB eu-central-1, and AgentCore Runtime.
+* 🚀 [ROADMAP.md](docs/next_steps/ROADMAP.md): Master Evolution Roadmap, milestone progress, and execution status dashboard (Phases 0–13).
+* 🧠 [deep_topic_event_engine/](docs/next_steps/deep_topic_event_engine/00_overview.md): Deep Topic Event Engine specification (R0–R9 state machine, Titan V2 embeddings, segment/final synthesis).
+* ⏪ [historical_backfill/](docs/next_steps/historical_backfill/00_overview.md): Historical Transcript Backfill specification (coverage ledger, gap detection, virtual-clock replay, History Sync UI).
+* 🗄️ [dynamodb_storage/](docs/next_steps/dynamodb_storage/00_overview.md): DynamoDB cloud storage specification (three tables: user, auth, ops; IAM tenant isolation via LeadingKeys).
+* 🛠️ [admin_console/](docs/next_steps/admin_console/00_overview.md): Admin Console specification (runtime settings overrides, service log, health monitor incidents, token usage).
+* ✏️ [manual_curation/](docs/next_steps/manual_curation/00_overview.md): Manual Curation specification (action/routine/contact edit and two-step delete over REST and MCP).
+* 🎙️ [speaker_review/](docs/next_steps/speaker_review/00_overview.md): Speaker Review specification (confirmation queue for untagged speech).
+* 🗣️ [alexa_addon/](docs/next_steps/alexa_addon/00_overview.md): Alexa+ MCP Add-on specification (OAuth 2.1 server, account linking, listing assets; planned post-hackathon).
 
 ---
 
@@ -202,7 +212,7 @@ In strict accordance with the non-modifying model directive, the current LLM mod
 - [x] **Precompiled Standalone Binary Resolution:** Native fallback to `resources/bee-cli/dist/platforms/mac-arm64/bee` (or linux/windows) removing dependency on global `bun`/`node` on host.
 - [x] **Capture real `bee stream --json` samples:** event `type` field present, `utterance.spoken_at` (ISO) present, undocumented `tagged-utterance` / `new-utterance-chunks` events, 30 s SSE pings dropped by `--json`. Full contract: [docs/10_bee_cli_reference.md](docs/10_bee_cli_reference.md).
 - [ ] **Live Audio Stream Linking with the physical Bee wearable:** verified with the Apple Watch app only; re-run `scripts/bee_spike.py` with the wearable (locations, `device_type`, `update-location`).
-- [x] **Bee data conformance fixes** ([docs/next_steps/07_bee_data_alignment.md](docs/next_steps/07_bee_data_alignment.md)): live location polling (C2–C4), speaker identity from `tagged-utterance` (C5, C16), raw-SSE liveness through a private `bee proxy` (C9), backfill durations and re-segmented finals (I2, I3). Dashboard logout disconnecting Bee is kept by design (C11).
+- [x] **Bee data conformance fixes** ([docs/next_steps/07_bee_data_alignment.md](docs/next_steps/07_bee_data_alignment.md)): live location polling (C2–C4), speaker identity from `tagged-utterance` (C5, C16), raw-SSE liveness through a private `bee proxy` (C9), backfill durations and re-segmented finals (I2, I3). Under multi-user accounts ([docs/13_multi_user_accounts.md](docs/13_multi_user_accounts.md)), signing out of the dashboard preserves the background Bee stream until explicit device disconnection.
 - [ ] **End-to-end verification of the fixes** with the real device and Bedrock (doc 07 §4).
 - [ ] **Capture `new-conversation` / `update-conversation`:** start a capture before speaking.
 - [ ] **Re-calibrate topic similarity on real lectures:** `python scripts/replay_event_scenarios.py --calibrate` after adding recorded scenarios (the Titan V2 same/different gap is narrow: 0.36 / 0.43).

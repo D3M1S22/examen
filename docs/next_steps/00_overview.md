@@ -1,8 +1,8 @@
 # 🚀 EXAMEN Pipeline Refinements & Evolution Roadmap
 
-> **Document Status:** Architectural Specification  
-> **Source Task:** [Next_steps.txt](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/Next_steps.txt)  
-> **Execution Tracking:** See the full [ROADMAP.md](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/docs/next_steps/ROADMAP.md) for milestone order and progress.  
+> **Document Status:** Architectural Specification (Implemented)
+> **Source Task:** `Next_steps.txt`
+> **Execution Tracking:** See the full [ROADMAP.md](ROADMAP.md) for milestone order and progress.
 > **Scope:** High-impact enhancements to ambient screening, multi-modal ingestion, contextual synthesis, and relational intelligence.
 
 ---
@@ -15,7 +15,7 @@
 3. Durable context storage with **SQLite FTS5**.
 4. Multi-modal serving to **Alexa+ on Echo Show** via **FastMCP** (Streamable-HTTP).
 
-While the foundational pipeline operates reliably (89/89 tests passing), real-world wearable audio from the **Bee Wearable** presents nuanced conversational patterns that demand six targeted architectural refinements tracked in the [Evolution Roadmap](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/docs/next_steps/ROADMAP.md):
+While the foundational pipeline operates reliably, real-world wearable audio from the **Bee Wearable** presents nuanced conversational patterns that demand six targeted architectural refinements tracked in the [Evolution Roadmap](ROADMAP.md):
 
 ```mermaid
 flowchart TD
@@ -59,16 +59,16 @@ flowchart TD
 
 ## 📑 The 6 Pipeline Refinement Areas
 
-The refinements defined in [Next_steps.txt](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/Next_steps.txt) are organized into six dedicated specification documents:
+The refinements defined in `Next_steps.txt` are organized into six dedicated specification documents:
 
 | # | Topic | Document | Primary Goal |
 |---|---|---|---|
-| **1** | **Contextual Deep Topic Synthesis** | [01_deep_topic_contextual_synthesis.md](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/docs/next_steps/01_deep_topic_contextual_synthesis.md) | Generate rich, educational, and technical explanatory sections that use web research to unpack concepts discussed in meetings or lectures, tailored to the topic's nature. |
-| **2** | **Gatekeeper Context & Multimodal Telemetry** | [02_gatekeeper_context_and_multimodal_telemetry.md](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/docs/next_steps/02_gatekeeper_context_and_multimodal_telemetry.md) | Implement multi-chunk historical context forwarding on positive triggers, integrating Bee GPS location data and asynchronous speaker diarization. |
-| **3** | **Session Merging & Micro-Event Splitting** | [03_session_merging_and_micro_event_splitting.md](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/docs/next_steps/03_session_merging_and_micro_event_splitting.md) | Aggregate long meetings/lectures spanning multiple chunks into a unified session dossier, while splitting nested actions/contacts occurring during discussions. |
-| **4** | **Ambient Scheduled Task Extraction** | [04_ambient_scheduled_tasks.md](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/docs/next_steps/04_ambient_scheduled_tasks.md) | Extract spoken future intentions ("I need to call Dr. Smith at 3 PM") into calendar-ready planned tasks, distinguishing them from manual entries. |
-| **5** | **Structured Social Commitments** | [05_structured_social_commitments.md](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/docs/next_steps/05_structured_social_commitments.md) | Parse bilateral promises (debtor, deadline, action) and automatically schedule tasks when the user makes a commitment to another person. |
-| **6** | **Social Contact Web Enrichment** | [06_social_web_enrichment.md](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/docs/next_steps/06_social_web_enrichment.md) | Enrich newly encountered contacts with autonomous public web research (LinkedIn role, professional bio, company domain). |
+| **1** | **Contextual Deep Topic Synthesis** | [01_deep_topic_contextual_synthesis.md](01_deep_topic_contextual_synthesis.md) | Generate rich, educational, and technical explanatory sections that use web research to unpack concepts discussed in meetings or lectures, tailored to the topic's nature. |
+| **2** | **Gatekeeper Context & Multimodal Telemetry** | [02_gatekeeper_context_and_multimodal_telemetry.md](02_gatekeeper_context_and_multimodal_telemetry.md) | Implement multi-chunk historical context forwarding on positive triggers, integrating Bee GPS location data and asynchronous speaker diarization. |
+| **3** | **Session Merging & Micro-Event Splitting** | [03_session_merging_and_micro_event_splitting.md](03_session_merging_and_micro_event_splitting.md) | Aggregate long meetings/lectures spanning multiple chunks into a unified session dossier, while splitting nested actions/contacts occurring during discussions. |
+| **4** | **Ambient Scheduled Task Extraction** | [04_ambient_scheduled_tasks.md](04_ambient_scheduled_tasks.md) | Extract spoken future intentions ("I need to call Dr. Smith at 3 PM") into calendar-ready planned tasks, distinguishing them from manual entries. |
+| **5** | **Structured Social Commitments** | [05_structured_social_commitments.md](05_structured_social_commitments.md) | Parse bilateral promises (debtor, deadline, action) and automatically schedule tasks when the user makes a commitment to another person. |
+| **6** | **Social Contact Web Enrichment** | [06_social_web_enrichment.md](06_social_web_enrichment.md) | Enrich newly encountered contacts with autonomous public web research (LinkedIn role, professional bio, company domain). |
 
 ---
 

@@ -1,14 +1,14 @@
 # 🤝 Structured Social Commitments & Bilateral Promises
 
-> **Document Status:** Architectural Specification  
-> **Source Task:** [Next_steps.txt](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/Next_steps.txt) — Item 5  
-> **Related Components:** [social.py](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/src/pipeline/nodes/social.py), [schemas.py](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/src/core/schemas.py), [database.py](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/src/core/database.py), [mcp_server.py](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/src/serving/mcp_server.py)
+> **Document Status:** Architectural Specification (Implemented in Milestone 1.3)
+> **Source Task:** `Next_steps.txt` — Item 5
+> **Related Components:** [`social.py`](../../src/pipeline/nodes/social.py), [`schemas.py`](../../src/core/schemas.py), [`src/core/storage/`](../../src/core/storage/), [`mcp_server.py`](../../src/serving/mcp_server.py)
 
 ---
 
 ## 1. Problem Statement & Baseline Deficiencies
 
-In EXAMEN's current implementation, social interactions extract commitments as unstructured string arrays inside [SocialEntity](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/src/core/schemas.py):
+In EXAMEN's initial baseline, social interactions extracted commitments as unstructured string arrays inside `SocialEntity` ([`schemas.py`](../../src/core/schemas.py)):
 
 ```python
 # CURRENT SCHEMA (Unstructured Strings):

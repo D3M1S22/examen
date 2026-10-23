@@ -1,23 +1,24 @@
 # 🗣️ Alexa+ MCP Add-on — Overview
 
-> **Document Status:** Planned (analysis 2026-10-23; decisions to confirm in §4)
+> **Document Status:** Future Integration (Post-Hackathon Specification)
+> **Hackathon Submission Status:** The hackathon Alexa+ track is **fully satisfied** by EXAMEN's deployed FastMCP server implementing MCP **2025-11-25** over Streamable HTTP (`/mcp` with 22 tools) live at `https://examen.devgiov.com/mcp`.
+> **Deferred post-hackathon because:** (1) The `@alexa-ai/cli` tool requires Amazon program onboarding to grant `AddOn3PDeveloperToolsRead` on AWS for CodeArtifact/CodeCommit access. (2) The hackathon rules explicitly validate a self-hosted conforming MCP server.
 > **Related:** [03_alexa_mcp_serving.md](../../03_alexa_mcp_serving.md) (MCP tools for Alexa+), [13_multi_user_accounts.md](../../13_multi_user_accounts.md) (accounts, MCP access tokens), [17_aws_deployment_runbook.md](../../17_aws_deployment_runbook.md) (the public HTTPS deployment)
-> **Audience:** EXAMEN engineers connecting the MCP server to real Alexa+ devices
+> **Audience:** EXAMEN engineers planning the post-hackathon commercial Alexa+ store add-on release
 
 ---
 
 ## 1. Why this exists
 
-EXAMEN already exposes an MCP server: Streamable HTTP at `/mcp`, 22 tools, one tenant per user, `Bearer exm_…` personal tokens. That is enough for the hackathon's Alexa+ track ("a self-hosted MCP server implementing MCP 2025-11-25"). It is **not** enough for a real Alexa+ device, for two reasons.
+EXAMEN already exposes a fully compliant MCP server: Streamable HTTP at `/mcp`, 22 tools, one tenant per user, and `Bearer exm_…` personal tokens. That satisfies the hackathon's Alexa+ track requirements ("a self-hosted MCP server implementing MCP 2025-11-25").
 
-- **Alexa+ does not connect to a raw MCP URL.** It talks to an **Alexa+ MCP Add-on**: a registered package (`addon-package/addon.json`) deployed with the **Alexa AI CLI**. The add-on carries the store listing, the endpoint and the account-linking configuration. Alexa+ discovers the tools at deploy time and calls them when a customer's request fits.
-- **Alexa+ cannot use EXAMEN's personal tokens.** It authenticates with **OAuth**:
-  - a service token (client credentials) to discover the tools;
-  - a per-customer token from **account linking** (authorization code + PKCE) to call them.
+For a production consumer release on physical Alexa+ devices through the Amazon Alexa Store, Amazon requires an **Alexa+ MCP Add-on**:
+- **Alexa+ Store Integration:** Talk to an **Alexa+ MCP Add-on**: a registered package (`addon-package/addon.json`) deployed with the **Alexa AI CLI** (`@alexa-ai/cli`).
+- **OAuth 2.1 & Account Linking:** Authentication via OAuth 2.1:
+  - A service token (`client_credentials`) for tool discovery;
+  - A per-customer token via **account linking** (authorization code + PKCE) to execute tool calls on behalf of the linked user.
 
-  EXAMEN has no OAuth authorization server today.
-
-The goal is a private add-on, then a certified one, through which an EXAMEN user links their account in the Alexa app and asks Alexa+ things like "did I lock the door?", "what do I have to confirm?" or "remind me to push tonight". Each request reads and writes that user's data only.
+This document and sub-specs define the turnkey architecture to implement once developer program onboarding is finalized.
 
 ## 2. Target architecture
 

@@ -1,8 +1,8 @@
 # 🔄 Session Merging & Micro-Event Splitting
 
-> **Document Status:** Architectural Specification — **superseded for `deep_topic` by the [Deep Topic Event Engine](deep_topic_event_engine/00_overview.md)** (2026-10-13). The micro-event linking described here is still valid; macro-session aggregation, boundary detection and synthesis scheduling are now specified and implemented there (events decoupled from Bee `conversation_uuid`, segment + final briefings, topic-based resume/split).  
-> **Source Task:** [Next_steps.txt](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/Next_steps.txt) — Item 3  
-> **Related Components:** [orchestrator.py](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/src/ingestion/orchestrator.py), [graph.py](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/src/pipeline/graph.py), [database.py](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/src/core/database.py), [mcp_server.py](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/src/serving/mcp_server.py)
+> **Document Status:** Architectural Specification — **superseded for `deep_topic` by the [Deep Topic Event Engine](deep_topic_event_engine/00_overview.md)** (2026-10-13). The micro-event linking described here is still valid; macro-session aggregation, boundary detection and synthesis scheduling are now specified and implemented there (events decoupled from Bee `conversation_uuid`, segment + final briefings, topic-based resume/split).
+> **Source Task:** `Next_steps.txt` — Item 3
+> **Related Components:** [`orchestrator.py`](../../src/ingestion/orchestrator.py), [`graph.py`](../../src/pipeline/graph.py), [`src/core/storage/`](../../src/core/storage/), [`mcp_server.py`](../../src/serving/mcp_server.py)
 
 ---
 
@@ -121,7 +121,7 @@ To maintain both low resource utilization and high responsiveness:
 - **On Session Boundary Trigger:** When the session concludes (or on a 15-minute checkpoint for multi-hour lectures), **Stage 3C** runs a holistic synthesis:
   1. Identifies the 2–4 dominant concepts discussed.
   2. Executes targeted web search queries via `web_search.py`.
-  3. Formulates the contextual explanatory synthesis (detailed in [01_deep_topic_contextual_synthesis.md](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/docs/next_steps/01_deep_topic_contextual_synthesis.md)).
+  3. Formulates the contextual explanatory synthesis (detailed in [01_deep_topic_contextual_synthesis.md](01_deep_topic_contextual_synthesis.md)).
   4. Embeds the list of linked micro-events (actions completed, tasks scheduled, contacts met) directly into the executive dossier.
 
 ---
@@ -194,7 +194,7 @@ The FastMCP tool `get_session_dossier` or `get_topic_briefings` renders the unif
 
 ## 6. Implementation Checklist & Migration Steps
 
-- [ ] **Orchestrator Ingestion:** Add `SessionManager` in [orchestrator.py](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/src/ingestion/orchestrator.py) that tracks active `conversation_uuid` sessions and maintains inactivity timers.
-- [ ] **LangGraph Decoupling:** Ensure [graph.py](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/src/pipeline/graph.py) routes parallel micro-events concurrently while updating the session state.
-- [ ] **Database Schema:** Add `session_dossiers` table in [database.py](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/src/core/database.py) with foreign key relations on actions, tasks, and social entities.
-- [ ] **MCP Tooling:** Add `get_session_dossier(session_id: str)` to [mcp_server.py](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/src/serving/mcp_server.py) for comprehensive Echo Show meeting recap.
+- [x] **Orchestrator Ingestion:** Add `EventEngine` / `SessionManager` in [`orchestrator.py`](../../src/ingestion/orchestrator.py) that tracks active sessions/events and maintains inactivity timers.
+- [x] **LangGraph Decoupling:** Ensure [`graph.py`](../../src/pipeline/graph.py) routes parallel micro-events concurrently while updating the session state.
+- [x] **Database Schema:** Add `session_dossiers` table in [`src/core/storage/`](../../src/core/storage/) with foreign key relations on actions, tasks, and social entities.
+- [x] **MCP Tooling:** Add `get_session_dossier(session_id: str)` to [`mcp_server.py`](../../src/serving/mcp_server.py) for comprehensive Echo Show meeting recap.

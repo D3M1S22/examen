@@ -1,8 +1,8 @@
 # 🌐 Autonomous Social Contact Web Enrichment
 
-> **Document Status:** Architectural Specification  
-> **Source Task:** [Next_steps.txt](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/Next_steps.txt) — Item 6  
-> **Related Components:** [social.py](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/src/pipeline/nodes/social.py), [web_search.py](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/src/pipeline/tools/web_search.py), [schemas.py](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/src/core/schemas.py), [mcp_server.py](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/src/serving/mcp_server.py)
+> **Document Status:** Architectural Specification (Implemented in Milestone 2.1)
+> **Source Task:** `Next_steps.txt` — Item 6
+> **Related Components:** [`social.py`](../../src/pipeline/nodes/social.py), [`social_profiler.py`](../../src/pipeline/nodes/social_profiler.py), [`web_search.py`](../../src/pipeline/tools/web_search.py), [`schemas.py`](../../src/core/schemas.py), [`mcp_server.py`](../../src/serving/mcp_server.py)
 
 ---
 
@@ -36,7 +36,7 @@ flowchart TD
     DB_CHECK -- "Yes" --> MERGE_NOTES["Update last_interaction & conversation notes"]
     DB_CHECK -- "No (New/Stale)" --> SEARCH_DISPATCH["Async Social Web Profiler"]
     
-    subgraph Web_Profiling_Engine ["Autonomous Web Profiler (DuckDuckGo / Tavily)"]
+    subgraph Web_Profiling_Engine ["Autonomous Web Profiler (DuckDuckGo ddgs / HTML / SearXNG)"]
         SEARCH_DISPATCH --> Q1["Query 1: 'Luca Bianchi' 'CloudScale' 'VP' linkedin"]
         SEARCH_DISPATCH --> Q2["Query 2: 'Luca Bianchi' 'CloudScale' biography"]
         Q1 --> HARVEST["Collect Public Snippets & Professional URLs"]

@@ -1,7 +1,7 @@
 # 📚 Deep Topic: Contextual Explanatory Synthesis
 
-> **Reference Item:** Point 1 from [Next_steps.txt](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/Next_steps.txt)  
-> **Target Module:** `src/pipeline/nodes/topic_research.py`  
+> **Reference Item:** Point 1 from `Next_steps.txt`
+> **Target Module:** `src/pipeline/nodes/topic_research.py`
 > **Schema Contract:** `src/core/schemas.py::BriefingReport`
 
 ---

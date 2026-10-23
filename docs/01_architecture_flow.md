@@ -2,6 +2,13 @@
 
 > This document details the **5 fundamental stages** of the **EXAMEN** architecture *(from Latin "exāmen": a swarm of bees and a careful examination)*, showing how raw audio streams captured by the **Bee** wearable are transformed into structured, enriched insights served via **Alexa+** on **Echo Show**.
 
+> [!NOTE]
+> **Baseline Reference (v1.0):** This document reflects the foundational 5-stage conceptual pipeline. In the current implementation:
+> 1. Ingestion operates via **per-utterance screening** with a 4-chunk FIFO context ring buffer (`src/ingestion/ring_buffer.py`) rather than a 30–45s sliding window.
+> 2. The Gatekeeper evaluates 5 categories (including `scheduled_task`) as an ingestion filter before LangGraph dispatch.
+> 3. Serving exposes **22 MCP tools** and a Next.js 14 dashboard, backed by SQLite and Amazon DynamoDB with multi-user isolation ([13_multi_user_accounts.md](13_multi_user_accounts.md)).
+> 4. See [12_full_repo_recap.md](12_full_repo_recap.md), [17_aws_deployment_runbook.md](17_aws_deployment_runbook.md), and [next_steps/ROADMAP.md](next_steps/ROADMAP.md) for the active production architecture.
+
 ---
 
 ## 🗺️ End-to-End Architecture Flowchart

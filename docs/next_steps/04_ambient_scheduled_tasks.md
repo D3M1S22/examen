@@ -1,8 +1,8 @@
 # ⏰ Ambient Scheduled Task Extraction from Voice
 
-> **Document Status:** Architectural Specification  
-> **Source Task:** [Next_steps.txt](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/Next_steps.txt) — Item 4  
-> **Related Components:** [gatekeeper.py](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/src/pipeline/nodes/gatekeeper.py), [graph.py](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/src/pipeline/graph.py), [schemas.py](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/src/core/schemas.py), [database.py](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/src/core/database.py), [mcp_server.py](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/src/serving/mcp_server.py)
+> **Document Status:** Architectural Specification (Implemented in Milestone 1.2)
+> **Source Task:** `Next_steps.txt` — Item 4
+> **Related Components:** [`gatekeeper.py`](../../src/ingestion/gatekeeper.py), [`graph.py`](../../src/pipeline/graph.py), [`schemas.py`](../../src/core/schemas.py), [`src/core/storage/`](../../src/core/storage/), [`mcp_server.py`](../../src/serving/mcp_server.py)
 
 ---
 
@@ -81,7 +81,7 @@ class PlannedTask(BaseModel):
 
 ## 4. Gatekeeper Prompt Evolution
 
-The Gatekeeper prompt in [gatekeeper.py](file:///home/deggio/Desktop/coding/hackathon/amazon_challenge/src/pipeline/nodes/gatekeeper.py) is upgraded to recognize `scheduled_task` while strictly segregating it from `action`:
+The Gatekeeper prompt in [`gatekeeper.py`](../../src/ingestion/gatekeeper.py) is upgraded to recognize `scheduled_task` while strictly segregating it from `action`:
 
 ```markdown
 Categories to evaluate:

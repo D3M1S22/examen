@@ -2,6 +2,13 @@
 
 Oct 19, 2026 · @damiano shushku
 
+> [!NOTE]
+> **Status Update (23 Oct 2026):** Many historical findings identified below have been addressed:
+> - **AWS deployment & storage:** DynamoDB multi-table backend implemented in `src/core/storage/dynamo/` (`examen-user`, `examen-auth`, `examen-ops`), live at `https://examen.devgiov.com`, with AgentCore runtime client in `src/pipeline/remote.py`.
+> - **Multi-tenant auth & isolation:** Implemented in `src/core/auth/` and `src/core/tenancy.py` (see [13_multi_user_accounts.md](13_multi_user_accounts.md)).
+> - **Docs, tools and tests:** Docs aligned; MCP server serves 22 tools over Streamable HTTP; test suite comprises 588 tests across 31 files; all hardcoded absolute links converted to relative paths. Phase 13 (Alexa+ Add-on) marked as post-hackathon future integration.
+
+
 ## Executive summary
 
 EXAMEN is a working local prototype: one Python process listens to the Bee wearable's live transcript stream, screens each utterance with a Bedrock model, extracts actions, contacts, tasks and topic briefings through a LangGraph pipeline, stores them in SQLite, and serves them over MCP (for Alexa+), a REST/SSE API and a Next.js dashboard. It was built for the Amazon Developer Hackathon 2026 (Bee Wearable AI track and AWS Builder mini-challenge).
