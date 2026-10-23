@@ -178,6 +178,7 @@ Detailed technical, architectural, and operational documentation is organized ac
 * 🧭 [15_aws_split_architecture_report.md](docs/15_aws_split_architecture_report.md): Architectural report on always-on ingestion + on-demand AgentCore Runtime split.
 * 🗄️ [16_aws_data_layer_k3.md](docs/16_aws_data_layer_k3.md): Cloud-native data layer evaluation: DynamoDB vs Aurora vs Aurora DSQL.
 * 🚀 [17_aws_deployment_runbook.md](docs/17_aws_deployment_runbook.md): Production AWS deployment runbook, live on CloudFront (`examen.devgiov.com`), DynamoDB eu-central-1, and AgentCore Runtime.
+* 🎬 [18_video_pitch_script_and_production_guide.md](docs/18_video_pitch_script_and_production_guide.md): 3-minute video pitch script, storyboard, screen recording cues on `examen.devgiov.com`, and production guide.
 * 🚀 [ROADMAP.md](docs/next_steps/ROADMAP.md): Master Evolution Roadmap, milestone progress, and execution status dashboard (Phases 0–13).
 * 🧠 [deep_topic_event_engine/](docs/next_steps/deep_topic_event_engine/00_overview.md): Deep Topic Event Engine specification (R0–R9 state machine, Titan V2 embeddings, segment/final synthesis).
 * ⏪ [historical_backfill/](docs/next_steps/historical_backfill/00_overview.md): Historical Transcript Backfill specification (coverage ledger, gap detection, virtual-clock replay, History Sync UI).
