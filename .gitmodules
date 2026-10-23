@@ -1,6 +1,6 @@
 [submodule "agentcore-samples"]
 	path = resources/agentcore-samples
-	url = git@github.com:awslabs/agentcore-samples.git
+	url = https://github.com/awslabs/agentcore-samples.git
 [submodule "resources/bee-cli"]
 	path = resources/bee-cli
-	url = git@github.com:bee-computer/bee-cli.git
+	url = https://github.com/bee-computer/bee-cli.git

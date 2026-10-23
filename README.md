@@ -108,9 +108,17 @@ The engine underwent a rigorous 25-scenario live evaluation against **NVIDIA Nem
 
 ## 🚀 Quickstart: Running Serving & Live Dashboard
 
+Prerequisites: Python 3.11+, [uv](https://docs.astral.sh/uv/), [Bun](https://bun.sh/), AWS credentials with Bedrock access (or `MOCK_AI=true` to run without AWS).
+
 ```bash
-# 1. Setup virtual environment
+# 0. Clone with the submodules (bee-cli, agentcore-samples)
+git clone --recurse-submodules <repo-url> && cd amazon_challenge
+#    already cloned: git submodule update --init
+
+# 1. Setup virtual environment and configuration
+uv sync                          # or: uv venv && uv pip install -r requirements.txt
 source .venv/bin/activate
+cp .env.example .env             # fill AWS_REGION / credentials and model ids, or set MOCK_AI=true
 
 # 2. Run the test suite
 pytest
@@ -143,6 +151,7 @@ python scripts/replay_event_scenarios.py --calibrate
 | Track / Challenge | How EXAMEN Maximizes Score |
 | :--- | :--- |
 | **Track 1: Bee Wearable AI ($12,000)** | Goes beyond passive audio logging by providing real-time ambient understanding, proactive web enrichment, and cross-device intelligence. |
+| **Alexa+ (self-hosted MCP server)** | FastMCP server implementing MCP **2025-11-25** over **Streamable HTTP** (`/mcp`, bearer token per user), deployed on AWS at `https://examen.devgiov.com/mcp`. 22 tools: action verification, routines, contacts and commitments, event dossiers, manual curation with two-step deletes, speaker review queue. |
 | **Mini-Challenge: AWS Builder ($5,000 + $5,000 credits)** | Native deep integration with AWS Bedrock multi-model tiering (Bedrock Native & Mantle dual-provider) and orchestration on Bedrock AgentCore. |
 | **Cross-Device Orchestration** | Frictionless synergy: **Bee** captures context in the physical world on the go; **Alexa+ on Echo Show** synthesizes and surfaces it at home or office. |
 

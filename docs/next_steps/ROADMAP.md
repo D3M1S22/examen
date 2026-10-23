@@ -54,6 +54,7 @@
 │    ├─ M11.3: MCP edit/delete (two-step confirm)    │ P1       │ Low    │ MC 03 §5    │ ✅ DONE   │
 │    └─ M11.4: Dashboard edit/delete & excerpts      │ P1       │ Medium │ MC 04       │ ✅ DONE   │
 │  Phase 12: Speaker Review (confirm untagged)       │ High     │ Medium │ SR 00-04    │ ✅ IMPLEMENTED│
+│  Phase 13: Alexa+ MCP Add-on (OAuth, listing)      │ High     │ High   │ AX 00-05    │ ⏳ PLANNED │
 └──────────────────────────────────────────────────────────────────────────────────────────────────┘
 
 > **DTEE** = [docs/next_steps/deep_topic_event_engine/](deep_topic_event_engine/00_overview.md)
@@ -62,6 +63,7 @@
 > **DDB** = [docs/next_steps/dynamodb_storage/](dynamodb_storage/00_overview.md)
 > **MC** = [docs/next_steps/manual_curation/](manual_curation/00_overview.md)
 > **SR** = [docs/next_steps/speaker_review/](speaker_review/00_overview.md)
+> **AX** = [docs/next_steps/alexa_addon/](alexa_addon/00_overview.md)
 ```
 
 ---
@@ -349,6 +351,10 @@
 ### Phase 12: Speaker Review (IMPLEMENTED)
 > **Goal:** actions and tasks from speech Bee did not attribute to anyone wait for the owner's confirmation instead of counting at once; another recognised person's own plans are dropped; requests naming the owner stay the owner's tasks. A per-user setting (off by default) accepts untagged speech automatically.
 > **Spec:** [speaker_review/](speaker_review/00_overview.md) (decisions R1–R9, implemented 2026-10-23; status and deviations in [04 §0](speaker_review/04_implementation_plan_and_testing.md)).
+
+### Phase 13: Alexa+ MCP Add-on (PLANNED)
+> **Goal:** real Alexa+ devices use EXAMEN through an Alexa+ MCP Add-on: an OAuth 2.1 server built into EXAMEN (account linking with PKCE, refresh tokens, client-credentials discovery), TLS to the origin, public privacy and terms pages and listing assets, Alexa-facing tool adjustments, then deploy, simulator, device and certification with the Alexa AI CLI.
+> **Spec:** [alexa_addon/](alexa_addon/00_overview.md) (decisions A1–A6 to confirm; blocked on Amazon program onboarding for the CLI).
 ---
 
 ## 📈 Dependency Graph & Recommended Execution Sequence
