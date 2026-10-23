@@ -224,3 +224,9 @@ In strict accordance with the non-modifying model directive, the current LLM mod
 - [ ] **Multilingual Gatekeeper Prompt Refinement:** Add explicit Italian few-shot anchors (*"ho staccato il ferro"*, *"gas spento"*, *"chiuso la porta"*) to `src/ingestion/gatekeeper.py` to maximize zero-shot domestic safety recall.
 - [ ] **Streaming Token Generation for Voice Recall:** Stream Bedrock Converse API token chunks directly through FastMCP SSE for instant Echo Show display updates.
 - [ ] **Dynamic Multi-Tier Model Switching:** Programmatic fallback to Amazon Nova Micro for high-frequency domestic screening and Claude 3.5 Sonnet for multi-source academic research.
+
+---
+
+## 📄 License
+
+This project is licensed under the terms of the [MIT License](LICENSE).

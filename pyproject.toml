@@ -3,6 +3,7 @@ name = "examen"
 version = "0.1.0"
 description = "Ambient Knowledge & Action Engine for Bee Wearable AI, AWS Bedrock AgentCore, and Alexa+"
 readme = "README.md"
+license = { text = "MIT" }
 requires-python = ">=3.11"
 dependencies = [
     "pydantic>=2.7.0",
