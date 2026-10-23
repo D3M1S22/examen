@@ -106,41 +106,120 @@ The engine underwent a rigorous 25-scenario live evaluation against **NVIDIA Nem
 
 ---
 
-## 🚀 Quickstart: Running Serving & Live Dashboard
+## 🚀 Running & Deployment Guide
 
-Prerequisites: Python 3.11+, [uv](https://docs.astral.sh/uv/), [Bun](https://bun.sh/), AWS credentials with Bedrock access (or `MOCK_AI=true` to run without AWS).
+EXAMEN supports three deployment modes:
+1. **Local Development (Bare Metal)**
+2. **Single Container Deployment (Docker)**
+3. **Production AWS Cloud Deployment (EC2, DynamoDB, CloudFront, AgentCore)**
+
+---
+
+### 1. Local Development (Bare Metal)
+
+Prerequisites: Python 3.11+, [uv](https://docs.astral.sh/uv/) (or standard `venv`), [Bun](https://bun.sh/) (for building the Next.js UI), and AWS credentials with Bedrock access (or set `MOCK_AI=true` to test locally without an AWS account).
 
 ```bash
-# 0. Clone with the submodules (bee-cli, agentcore-samples)
+# 1. Clone the repository and initialize submodules (bee-cli, agentcore-samples)
 git clone --recurse-submodules <repo-url> && cd amazon_challenge
-#    already cloned: git submodule update --init
+# If already cloned:
+git submodule update --init
 
-# 1. Setup virtual environment and configuration
-uv sync                          # or: uv venv && uv pip install -r requirements.txt
+# 2. Setup virtual environment and dependencies
+uv sync                          # or: python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
 source .venv/bin/activate
-cp .env.example .env             # fill AWS_REGION / credentials and model ids, or set MOCK_AI=true
+cp .env.example .env             # configure AWS_REGION / credentials, or set MOCK_AI=true
 
-# 2. Run the test suite
+# 3. Run the automated test suite (588 tests)
 pytest
 
-# 3. Build the Next.js dashboard (static export served by the MCP server) — Bun is the package manager
-./scripts/build_ui.sh            # = cd src/web_ui && bun install && bun run build
+# 4. Build the Next.js dashboard (static export served by the FastMCP server)
+./scripts/build_ui.sh            # executes: cd src/web_ui && bun install && bun run build
 
-# 4. Launch Unified FastMCP Server & Echo Show Web Dashboard (port = MCP_PORT, default 8000)
+# 5. Launch the FastMCP Server & Web Dashboard (port 8000 by default)
 python -m src.serving.mcp_server
-#    Open the dashboard, create an account (email + password), then Account → Bee device →
-#    "Connect my Bee" and scan the QR code. Each account has its own data and its own Bee.
-
-# Optional: replay the event-engine scenarios / calibrate topic similarity thresholds
-python scripts/replay_event_scenarios.py --calibrate
 ```
+
+- **Web Dashboard & Echo Show UI:** Open [http://localhost:8000/](http://localhost:8000/) (or `/ext-app/`).
+- **Alexa+ FastMCP Endpoint:** Connect any MCP-compliant assistant to `http://localhost:8000/mcp` (Bearer token: *Account → Alexa+ / MCP access tokens*).
+- **Accounts:** Create an account (email + password), then go to *Account → Bee device → Connect my Bee* and scan the QR code to pair your wearable.
+- **Offline Mock Mode:** Setting `MOCK_AI=true` in `.env` allows running the entire UI, simulator, and MCP tools with synthetic AI responses at zero cost.
+
+---
+
+### 2. Single Container Deployment (Docker)
+
+You can containerize the entire application (FastMCP server, background ingestion loop, and Next.js frontend) into a single self-contained Docker container using the multi-stage [`Dockerfile`](Dockerfile).
+
+```bash
+# 1. Ensure the Next.js static UI is built
+./scripts/build_ui.sh
+
+# 2. Build the Docker container image
+docker build -t examen:latest .
+
+# 3. Run the container with your environment configuration
+docker run -d \
+  --name examen \
+  -p 8000:8000 \
+  -v examen_data:/app/data \
+  --env-file .env \
+  --restart unless-stopped \
+  examen:latest
+
+# 4. Verify container logs and health probe
+docker logs -f examen
+curl -f http://localhost:8000/api/health
+```
+
+- Data persistence is guaranteed by mounting a volume to `/app/data` (which preserves SQLite storage and Bee device tokens).
+- The web dashboard will be immediately accessible on `http://localhost:8000` and the MCP server at `http://localhost:8000/mcp`.
+
+---
+
+### 3. Production AWS Cloud Deployment
+
+For production, EXAMEN is designed to run cloud-native with high availability, low latency, and per-tenant data isolation:
+- **CloudFront:** SSL/TLS termination at your custom domain (`https://examen.devgiov.com`), edge caching, and SSE streaming.
+- **EC2 (`t3a.small`):** Runs the always-on ingestion daemon and FastMCP server behind NGINX in `eu-central-1`.
+- **Amazon DynamoDB:** Multi-table cloud storage (`examen-user`, `examen-auth`, `examen-ops`) partitioned by `user_id`.
+- **AWS Bedrock & AgentCore:** Nova Micro gatekeeper, Claude 3.5 Sonnet reasoning, Titan V2 embeddings, and AgentCore runtime microVMs.
+
+Complete infrastructure is provisioned declaratively via AWS CloudFormation templates in [`deploy/aws/`](deploy/aws/):
+
+```bash
+# 1. Set target AWS region and credentials
+export AWS_DEFAULT_REGION="eu-central-1"
+
+# 2. Deploy DynamoDB multi-table stack
+aws cloudformation deploy \
+  --stack-name examen-dynamodb \
+  --template-file deploy/aws/dynamodb.yaml \
+  --capabilities CAPABILITY_NAMED_IAM
+
+# 3. Store initial bootstrap administrator credentials in AWS SSM Parameter Store
+.venv/bin/python scripts/aws_deploy.py params --admin-email admin@example.com
+
+# 4. Build release bundle (code + built UI + Bee binary) and upload to artifacts S3 bucket
+.venv/bin/python scripts/aws_bundle.py --bucket <your-artifacts-bucket>
+
+# 5. Deploy compute stack (VPC, Security Groups, EC2 Launch Template, CloudFront)
+.venv/bin/python scripts/aws_deploy.py stack
+
+# 6. Check host bootstrap log and service status
+.venv/bin/python scripts/aws_deploy.py logs
+```
+
+> **Full Production Runbook:** For comprehensive zero-downtime updates, rollback procedures, CloudWatch alarm setups, and custom DNS / ACM certificate cutovers, see [`docs/17_aws_deployment_runbook.md`](docs/17_aws_deployment_runbook.md).
+
+---
+
+### Operational Features & Controls
 
 > **History Sync:** if EXAMEN was offline, Bee conversations recorded meanwhile are recovered automatically on restart/reconnect (`BACKFILL_LOOKBACK_DAYS`). To analyse any past period, open *Overview → History Sync → Analyse past period…* (free preview first). Spec: [historical_backfill/](docs/next_steps/historical_backfill/00_overview.md).
 
 > **Event engine demo:** in the dashboard open *Ambient Simulator → Deep Topic Event Engine*, pick a scenario (e.g. "Single lecture interrupted by a coffee break"), press **Play scenario**, then **Close events** and open *Topic Dossiers → Events*. `EVENT_PROFILE=demo` compresses the timers (20 s / 90 s) for live typing.
 
-- **Web Dashboard & Echo Show Ext-App:** Open [http://localhost:8000/](http://localhost:8000/) or [http://localhost:8000/ext-app/](http://localhost:8000/ext-app/) to monitor verified Peace of Mind actions, daily routine checklists, social rolodex cards, and run ambient audio simulations.
-- **Alexa+ MCP Endpoint:** Connect any MCP-compliant assistant to `http://localhost:8000/mcp` with a personal access token (*Account → Alexa+ / MCP access tokens*) sent as `Authorization: Bearer exm_…`.
 - **Accounts:** multi-user with per-user data, per-user Bee pairing and GDPR export/erasure — see [13_multi_user_accounts.md](docs/13_multi_user_accounts.md). Self-registration (`AUTH_ALLOW_SIGNUP`), a bootstrap admin (`EXAMEN_BOOTSTRAP_ADMIN=<email>`) with an *Admin* tab, one Bee account per user and shared LLM / stream limits. `AUTH_ENABLED=false` restores the single-user mode.
 - **Admin console:** runtime overrides of `.env` tunables (models, Bedrock / Mantle, region, …) with test-before-save and rollback, a sanitised service log with incidents, and a health view — see [admin_console/](docs/next_steps/admin_console/00_overview.md).
 
