@@ -39,3 +39,21 @@ npm run render
 ```
 
 The output file will be generated at `out/examen-pitch.mp4` (1080p, 30 fps, H.264).
+
+---
+
+## 🆕 v2 — Live Demo Edition (2:54.5)
+
+v1 above is unchanged. v2 lives in `src/v2/` (Studio folder **v2**) and adds a live example: you say *"Remind me to contact Danilo and coordinate about the hackathon submission"* and it lands in Daily Routines.
+
+- **`ExamenPitchVideoV2`**: final v2 video with subtitles and a voiceover track (one audio clip per line).
+- **`ExamenPitchVideoV2-Guide`**: same video with a teleprompter overlay, for recording the voiceover.
+- **`V2Scene03-LiveReminder`**: the new live scene alone.
+
+```bash
+npm run vo:placeholders   # silent WAVs in public/voiceover-v2/ (creates missing files only)
+npm run dev               # preview
+npm run render:v2         # out/examen-pitch-v2.mp4
+```
+
+Script, line-by-line timing and the recording checklist: [docs/19_video_pitch_v2_script_live_demo.md](../docs/19_video_pitch_v2_script_live_demo.md). Timing source: `src/v2/voiceover-v2.json`.

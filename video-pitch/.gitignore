@@ -6,3 +6,8 @@ dist
 
 # Ignore the output video from Git but not videos you import into src/.
 out
+
+# Voiceover booth: archive of every take (the chosen takes live in public/voiceover-v2/)
+public/voiceover-v2/takes/
+# Unused screen-recording take (Claude app over the Chrome window)
+public/recordings-v2/cap_walkthrough.mp4

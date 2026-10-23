@@ -1,0 +1,386 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EXAMEN Voiceover Booth</title>
+<style>
+/* Layout: booth console — line list on the left, the current line as a karaoke card, transport controls under it. */
+:root {
+  --bg: #0b0f16; --panel: #121925; --raise: #1a2332; --line: #263244;
+  --ink: #eef2f7; --muted: #8e9aae; --accent: #ffad3d; --accent-ink: #1b1204;
+  --rec: #ff4d4d; --ok: #3ccf91; --warn: #ffcf4d;
+  --read: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  --ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { height: 100%; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--ui); font-size: 14px; }
+.app { display: grid; grid-template-columns: 300px 1fr; height: 100%; }
+aside { border-right: 1px solid var(--line); overflow-y: auto; padding: 16px 12px; display: grid; align-content: start; gap: 4px; }
+aside h1 { font-size: 15px; margin: 0 0 4px 6px; letter-spacing: .02em; }
+aside .sub { color: var(--muted); font-size: 12px; margin: 0 0 10px 6px; }
+.scene { font-family: var(--mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 12px 6px 4px; }
+.item { display: grid; grid-template-columns: 16px 38px 1fr; gap: 6px; align-items: center; text-align: left; width: 100%; padding: 7px 8px; border-radius: 8px; border: 1px solid transparent; background: none; color: var(--ink); font: inherit; cursor: pointer; }
+.item:hover { background: var(--raise); }
+.item.active { border-color: var(--accent); background: var(--raise); }
+.item .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--line); }
+.item.done .dot { background: var(--ok); }
+.item.live .dot { background: var(--rec); }
+.item .iid { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+.item .snip { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12.5px; }
+.progress { margin: 4px 6px 0; height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
+.progress > i { display: block; height: 100%; background: var(--ok); width: 0; }
+
+main { overflow-y: auto; padding: 24px clamp(16px, 4vw, 48px); display: grid; align-content: start; gap: 18px; }
+.top { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; }
+.where { font-family: var(--mono); font-size: 12.5px; color: var(--muted); display: flex; gap: 14px; flex-wrap: wrap; }
+.where b { color: var(--ink); font-weight: 600; }
+.opts { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; font-size: 13px; color: var(--muted); }
+select, button { font: inherit; }
+select { background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; max-width: 260px; }
+label { display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
+
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 18px; padding: clamp(20px, 4vw, 40px); display: grid; gap: 18px; }
+.card.recording { border-color: var(--rec); box-shadow: 0 0 0 1px var(--rec), 0 0 40px rgba(255,77,77,.15); }
+.cardhead { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.cardhead .id { font-family: var(--mono); font-size: 22px; font-weight: 700; }
+.cardhead .plan { font-family: var(--mono); font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.state { font-family: var(--mono); font-size: 12px; letter-spacing: .1em; text-transform: uppercase; padding: 4px 10px; border-radius: 999px; background: var(--raise); color: var(--muted); }
+.state.rec { background: var(--rec); color: #fff; }
+.state.review { background: var(--accent); color: var(--accent-ink); }
+.state.saved { background: var(--ok); color: #05261a; }
+.karaoke { font-family: var(--read); font-size: clamp(28px, 3.6vw, 44px); line-height: 1.45; margin: 0; text-wrap: pretty; }
+.karaoke span { color: var(--muted); transition: color .08s linear; }
+.karaoke span.on { color: var(--ink); }
+.karaoke span.now { color: var(--accent); }
+.hint { color: var(--muted); font-size: 13px; }
+.count { font-family: var(--mono); font-size: 64px; font-weight: 700; color: var(--accent); text-align: center; }
+
+.meters { display: grid; gap: 8px; }
+.bar { position: relative; height: 10px; border-radius: 5px; background: var(--raise); overflow: hidden; }
+.bar > i { position: absolute; inset: 0 auto 0 0; width: 0; background: var(--accent); }
+.bar > .slot { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--rec); }
+.bar.level > i { background: var(--ok); }
+.meterrow { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+canvas { width: 100%; height: 90px; background: var(--raise); border-radius: 10px; display: block; }
+.verdict { font-family: var(--mono); font-size: 13px; }
+.verdict.ok { color: var(--ok); } .verdict.warn { color: var(--warn); } .verdict.bad { color: var(--rec); }
+
+.controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.btn { border: 1px solid var(--line); background: var(--raise); color: var(--ink); border-radius: 12px; padding: 12px 18px; font-weight: 700; cursor: pointer; display: inline-flex; gap: 8px; align-items: center; }
+.btn:hover:not(:disabled) { border-color: var(--accent); }
+.btn:disabled { opacity: .4; cursor: default; }
+.btn.rec { background: var(--rec); border-color: var(--rec); color: #fff; }
+.btn.save { background: var(--ok); border-color: var(--ok); color: #05261a; }
+.btn kbd { font-family: var(--mono); font-size: 11px; opacity: .75; border: 1px solid currentColor; border-radius: 4px; padding: 0 4px; }
+button:focus-visible, select:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+.toast { min-height: 20px; font-size: 13px; color: var(--muted); }
+.next { color: var(--muted); font-family: var(--read); font-size: 17px; border-top: 1px solid var(--line); padding-top: 14px; }
+.err { color: var(--rec); }
+@media (max-width: 760px) { .app { grid-template-columns: 1fr; } aside { max-height: 34vh; border-right: 0; border-bottom: 1px solid var(--line); } }
+@media (prefers-reduced-motion: reduce) { .karaoke span { transition: none; } }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside>
+    <h1>EXAMEN voiceover booth</h1>
+    <p class="sub" id="summary">Loading lines…</p>
+    <div class="progress"><i id="prog"></i></div>
+    <nav id="list" aria-label="Lines"></nav>
+  </aside>
+
+  <main>
+    <div class="top">
+      <div class="where" id="where"></div>
+      <div class="opts">
+        <label>Mic <select id="mic"><option value="">Default microphone</option></select></label>
+        <label><input type="checkbox" id="countin" checked> 3-2-1 count-in</label>
+        <label><input type="checkbox" id="trim" checked> Trim silence</label>
+        <label><input type="checkbox" id="norm" checked> Normalize</label>
+      </div>
+    </div>
+
+    <section class="card" id="card">
+      <div class="cardhead">
+        <span class="id" id="lid">—</span>
+        <span class="state" id="state">Ready</span>
+        <span class="plan" id="plan"></span>
+      </div>
+      <div class="count" id="count" hidden></div>
+      <p class="karaoke" id="karaoke"></p>
+      <div class="hint" id="hint"></div>
+
+      <div class="meters">
+        <div class="bar" id="timebar"><i id="timefill"></i><span class="slot" id="slotmark"></span></div>
+        <div class="meterrow"><span id="elapsed">0.0 s</span><span id="target"></span></div>
+        <div class="bar level"><i id="level"></i></div>
+      </div>
+
+      <canvas id="wave" width="1200" height="180" hidden></canvas>
+      <div class="verdict" id="verdict"></div>
+
+      <div class="controls">
+        <button class="btn rec" id="btn-rec" type="button">● Record <kbd>Space</kbd></button>
+        <button class="btn" id="btn-play" type="button" disabled>▶ Listen <kbd>P</kbd></button>
+        <button class="btn" id="btn-retake" type="button" disabled>↺ Retake <kbd>R</kbd></button>
+        <button class="btn save" id="btn-save" type="button" disabled>✓ Save &amp; next <kbd>Enter</kbd></button>
+        <button class="btn" id="btn-saved" type="button" hidden>▶ Saved take</button>
+      </div>
+      <div class="toast" id="toast" role="status"></div>
+      <div class="next" id="next"></div>
+    </section>
+  </main>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const fmt = (t) => { const m = Math.floor(t / 60); return m + ":" + (t - m * 60).toFixed(1).padStart(4, "0"); };
+const RATE = 48000;
+
+let LINES = [], recorded = {}, idx = 0;
+let stream = null, analyser = null, levelRaf = null, ctx = null;
+let recorder = null, chunks = [], recStart = 0, recRaf = null;
+let take = null; // { wav: Blob, url, samples: Float32Array, seconds }
+let mode = "ready"; // ready | count | rec | review | saved
+let audioEl = null;
+
+async function load() {
+  const res = await fetch("/api/lines");
+  const data = await res.json();
+  const off = Object.fromEntries(data.scenes.map((s) => [s.key, s.startsAt]));
+  const titles = Object.fromEntries(data.scenes.map((s) => [s.key, s.title]));
+  const all = data.lines.map((l) => ({ ...l, abs: off[l.scene] + l.start, sceneTitle: titles[l.scene], file: l.file.split("/").pop() }));
+  all.forEach((l, i) => { l.slot = (i + 1 < all.length ? all[i + 1].abs : data.totalSeconds) - l.abs; });
+  LINES = all;
+  recorded = data.recorded || {};
+  const firstTodo = LINES.findIndex((l) => l.kind !== "live" && !recorded[l.id]);
+  idx = firstTodo >= 0 ? firstTodo : 0;
+  renderList(); select(idx);
+}
+
+function renderList() {
+  let html = "", scene = "";
+  LINES.forEach((l, i) => {
+    if (l.sceneTitle !== scene) { scene = l.sceneTitle; html += `<div class="scene">${scene}</div>`; }
+    const cls = ["item", i === idx ? "active" : "", recorded[l.id] ? "done" : "", l.kind === "live" ? "live" : ""].join(" ");
+    html += `<button class="${cls}" data-i="${i}" type="button"><span class="dot"></span><span class="iid">${l.id}</span><span class="snip">${l.text}</span></button>`;
+  });
+  $("list").innerHTML = html;
+  const todo = LINES.filter((l) => l.kind !== "live");
+  const done = todo.filter((l) => recorded[l.id]).length;
+  $("summary").textContent = `${done} of ${todo.length} lines saved`;
+  $("prog").style.width = (100 * done / todo.length) + "%";
+}
+$("list").addEventListener("click", (e) => { const b = e.target.closest("[data-i]"); if (b && mode !== "rec" && mode !== "count") select(+b.dataset.i); });
+
+function words(text) { return text.split(/(\s+)/); }
+function renderKaraoke(l) {
+  $("karaoke").innerHTML = words(l.text).map((w) => /\s+/.test(w) ? w : `<span>${w.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</span>`).join("");
+}
+function setState(s, label) {
+  mode = s;
+  const el = $("state");
+  el.className = "state " + ({ rec: "rec", review: "review", saved: "saved" }[s] || "");
+  el.textContent = label;
+  $("card").classList.toggle("recording", s === "rec");
+  $("btn-rec").textContent = "";
+  $("btn-rec").innerHTML = s === "rec" ? "■ Stop <kbd>Space</kbd>" : "● Record <kbd>Space</kbd>";
+  $("btn-play").disabled = !take;
+  $("btn-retake").disabled = !(s === "review");
+  $("btn-save").disabled = !(s === "review");
+  $("btn-rec").disabled = s === "count" || LINES[idx]?.kind === "live";
+}
+
+function select(i) {
+  stopPlayback();
+  idx = i; take = null;
+  const l = LINES[i];
+  renderList(); renderKaraoke(l);
+  $("lid").textContent = l.id;
+  $("where").innerHTML = `<span>${l.sceneTitle}</span><span>video <b>${fmt(l.abs)}</b> → ${fmt(l.abs + l.duration)}</span><span>file <b>${l.file}</b></span>`;
+  $("plan").textContent = `target ${l.duration.toFixed(1)} s · max ${l.slot.toFixed(1)} s · ${l.words} words`;
+  $("target").textContent = `target ${l.duration.toFixed(1)} s | max ${l.slot.toFixed(1)} s`;
+  $("slotmark").style.left = Math.min(100, 100 * l.slot / (l.slot * 1.15)) + "%";
+  $("timefill").style.width = "0"; $("elapsed").textContent = "0.0 s";
+  $("wave").hidden = true; $("verdict").textContent = ""; $("toast").textContent = "";
+  $("btn-saved").hidden = !recorded[l.id];
+  const nxt = LINES[i + 1];
+  $("next").textContent = nxt ? `Next ${nxt.id}: ${nxt.text}` : "Last line.";
+  if (l.kind === "live") {
+    $("hint").textContent = "This line is already in the video: your real Bee capture from the screen recording. Nothing to record here.";
+    setState("ready", "Live audio");
+  } else {
+    $("hint").textContent = recorded[l.id] ? `Saved take: ${recorded[l.id].seconds.toFixed(2)} s. Record again to replace it.` : "Press Space, wait for the count-in, read at the highlighted pace, press Space to stop.";
+    setState(recorded[l.id] ? "saved" : "ready", recorded[l.id] ? "Saved" : "Ready");
+    $("btn-play").disabled = true;
+  }
+}
+
+async function ensureMic() {
+  if (stream) return;
+  const id = $("mic").value;
+  stream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: id ? { exact: id } : undefined, echoCancellation: false, noiseSuppression: true, autoGainControl: false, channelCount: 1 } });
+  ctx = ctx || new AudioContext({ sampleRate: RATE });
+  const src = ctx.createMediaStreamSource(stream);
+  analyser = ctx.createAnalyser(); analyser.fftSize = 1024; src.connect(analyser);
+  const buf = new Float32Array(analyser.fftSize);
+  const tick = () => { analyser.getFloatTimeDomainData(buf); let p = 0; for (const v of buf) p = Math.max(p, Math.abs(v)); $("level").style.width = Math.min(100, p * 140) + "%"; levelRaf = requestAnimationFrame(tick); };
+  tick();
+  const devs = await navigator.mediaDevices.enumerateDevices();
+  const cur = $("mic").value;
+  $("mic").innerHTML = '<option value="">Default microphone</option>' + devs.filter((d) => d.kind === "audioinput").map((d) => `<option value="${d.deviceId}">${d.label || "Microphone"}</option>`).join("");
+  $("mic").value = cur;
+}
+$("mic").addEventListener("change", () => { if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; cancelAnimationFrame(levelRaf); } });
+
+async function startRecording() {
+  const l = LINES[idx];
+  if (l.kind === "live") return;
+  stopPlayback();
+  try { await ensureMic(); if (ctx.state === "suspended") await ctx.resume(); }
+  catch (e) { $("toast").innerHTML = `<span class="err">Microphone blocked: ${e.message}. Allow it in the browser's address bar and try again.</span>`; return; }
+  take = null; $("wave").hidden = true; $("verdict").textContent = "";
+  renderKaraoke(l);
+  if ($("countin").checked) {
+    setState("count", "Get ready");
+    $("count").hidden = false;
+    for (const n of [3, 2, 1]) { $("count").textContent = n; await new Promise((r) => setTimeout(r, 650)); }
+    $("count").hidden = true;
+  }
+  chunks = [];
+  recorder = new MediaRecorder(stream);
+  recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+  recorder.onstop = finishRecording;
+  recorder.start();
+  recStart = performance.now();
+  setState("rec", "Recording");
+  const spans = [...$("karaoke").querySelectorAll("span")];
+  const weights = spans.map((s) => s.textContent.length + 2);
+  const total = weights.reduce((a, b) => a + b, 0);
+  const anim = () => {
+    const t = (performance.now() - recStart) / 1000;
+    $("elapsed").textContent = t.toFixed(1) + " s";
+    $("timefill").style.width = Math.min(100, 100 * t / (l.slot * 1.15)) + "%";
+    $("timefill").style.background = t > l.slot ? "var(--rec)" : t > l.duration ? "var(--warn)" : "var(--accent)";
+    let acc = 0; const pos = (t / l.duration) * total;
+    spans.forEach((s, i) => { const a = acc; acc += weights[i]; s.className = pos >= acc ? "on" : pos >= a ? "now" : ""; });
+    recRaf = requestAnimationFrame(anim);
+  };
+  anim();
+}
+
+function stopRecording() { if (recorder && recorder.state === "recording") { cancelAnimationFrame(recRaf); recorder.stop(); } }
+
+async function finishRecording() {
+  const l = LINES[idx];
+  $("karaoke").querySelectorAll("span").forEach((s) => s.className = "on");
+  const blob = new Blob(chunks, { type: recorder.mimeType });
+  const decoded = await ctx.decodeAudioData(await blob.arrayBuffer());
+  let samples = mixdown(decoded);
+  if ($("trim").checked) samples = trimSilence(samples);
+  if ($("norm").checked) samples = normalize(samples, 0.89);
+  const wav = encodeWav(samples, RATE);
+  take = { wav, url: URL.createObjectURL(wav), samples, seconds: samples.length / RATE };
+  drawWave(samples);
+  const s = take.seconds;
+  const v = $("verdict");
+  if (s <= l.duration + 0.3) { v.className = "verdict ok"; v.textContent = `${s.toFixed(2)} s · fits the target (${l.duration.toFixed(1)} s)`; }
+  else if (s <= l.slot) { v.className = "verdict warn"; v.textContent = `${s.toFixed(2)} s · longer than target, still fits before the next line (${l.slot.toFixed(1)} s)`; }
+  else { v.className = "verdict bad"; v.textContent = `${s.toFixed(2)} s · runs into the next line (max ${l.slot.toFixed(1)} s): retake a bit faster`; }
+  setState("review", "Listen, then save or retake");
+  play(take.url);
+}
+
+function mixdown(buf) {
+  const n = buf.length, out = new Float32Array(n);
+  for (let c = 0; c < buf.numberOfChannels; c++) { const d = buf.getChannelData(c); for (let i = 0; i < n; i++) out[i] += d[i] / buf.numberOfChannels; }
+  return out;
+}
+function trimSilence(x) {
+  const win = Math.round(RATE * 0.01), thr = Math.pow(10, -42 / 20);
+  let peak = 0; for (const v of x) peak = Math.max(peak, Math.abs(v));
+  const t = Math.max(thr, peak * 0.06);
+  let first = -1, last = -1;
+  for (let i = 0; i + win <= x.length; i += win) {
+    let s = 0; for (let j = i; j < i + win; j++) s += x[j] * x[j];
+    if (Math.sqrt(s / win) > t * 0.5) { if (first < 0) first = i; last = i + win; }
+  }
+  if (first < 0) return x;
+  const a = Math.max(0, first - Math.round(RATE * 0.06)), b = Math.min(x.length, last + Math.round(RATE * 0.2));
+  return x.slice(a, b);
+}
+function normalize(x, target) {
+  let p = 0; for (const v of x) p = Math.max(p, Math.abs(v));
+  if (p < 1e-4) return x;
+  const g = target / p, out = new Float32Array(x.length);
+  for (let i = 0; i < x.length; i++) out[i] = x[i] * g;
+  return out;
+}
+function encodeWav(x, rate) {
+  const b = new ArrayBuffer(44 + x.length * 2), v = new DataView(b);
+  const w = (o, s) => [...s].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
+  w(0, "RIFF"); v.setUint32(4, 36 + x.length * 2, true); w(8, "WAVE"); w(12, "fmt ");
+  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true); v.setUint32(24, rate, true);
+  v.setUint32(28, rate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true); w(36, "data"); v.setUint32(40, x.length * 2, true);
+  for (let i = 0; i < x.length; i++) { const s = Math.max(-1, Math.min(1, x[i])); v.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true); }
+  return new Blob([b], { type: "audio/wav" });
+}
+function drawWave(x) {
+  const c = $("wave"); c.hidden = false;
+  const g = c.getContext("2d"), W = c.width, H = c.height;
+  g.clearRect(0, 0, W, H);
+  g.fillStyle = getComputedStyle(document.documentElement).getPropertyValue("--accent");
+  const step = Math.max(1, Math.floor(x.length / W));
+  for (let i = 0; i < W; i++) {
+    let mx = 0; for (let j = i * step; j < Math.min(x.length, (i + 1) * step); j++) mx = Math.max(mx, Math.abs(x[j]));
+    const h = Math.max(1, mx * H * 0.95); g.fillRect(i, (H - h) / 2, 1, h);
+  }
+}
+function play(url) { stopPlayback(); audioEl = new Audio(url); audioEl.play().catch(() => {}); }
+function stopPlayback() { if (audioEl) { audioEl.pause(); audioEl = null; } }
+
+async function save() {
+  if (!take || mode !== "review") return;
+  const l = LINES[idx];
+  $("btn-save").disabled = true;
+  try {
+    const res = await fetch(`/api/save?file=${encodeURIComponent(l.file)}&id=${encodeURIComponent(l.id)}`, { method: "POST", body: take.wav });
+    if (!res.ok) throw new Error((await res.json()).error || res.status);
+    recorded[l.id] = { file: l.file, seconds: take.seconds };
+    $("toast").textContent = `Saved ${l.file} (${take.seconds.toFixed(2)} s). Remotion Studio picks it up after a reload.`;
+    setState("saved", "Saved");
+    let n = idx + 1; while (n < LINES.length && LINES[n].kind === "live") n++;
+    renderList();
+    if (n < LINES.length) setTimeout(() => select(n), 500);
+    else $("toast").textContent += " All lines done.";
+  } catch (e) {
+    $("toast").innerHTML = `<span class="err">Could not save: ${e.message}. Is the booth server still running?</span>`;
+    $("btn-save").disabled = false;
+  }
+}
+
+$("btn-rec").addEventListener("click", () => mode === "rec" ? stopRecording() : startRecording());
+$("btn-play").addEventListener("click", () => take && play(take.url));
+$("btn-retake").addEventListener("click", startRecording);
+$("btn-save").addEventListener("click", save);
+$("btn-saved").addEventListener("click", () => play(`/api/audio?file=${LINES[idx].file}&t=${Date.now()}`));
+document.addEventListener("keydown", (e) => {
+  if (e.target.tagName === "SELECT" || e.metaKey || e.ctrlKey) return;
+  if (e.code === "Space") { e.preventDefault(); if (mode === "rec") stopRecording(); else if (mode !== "count") startRecording(); }
+  else if (e.key === "p" || e.key === "P") { if (take) play(take.url); }
+  else if (e.key === "r" || e.key === "R") { if (mode === "review") startRecording(); }
+  else if (e.key === "Enter") { e.preventDefault(); save(); }
+  else if (e.key === "ArrowDown" || e.key === "ArrowRight") { if (mode !== "rec" && mode !== "count" && idx < LINES.length - 1) select(idx + 1); }
+  else if (e.key === "ArrowUp" || e.key === "ArrowLeft") { if (mode !== "rec" && mode !== "count" && idx > 0) select(idx - 1); }
+});
+
+load().catch((e) => { $("summary").innerHTML = `<span class="err">Could not load lines: ${e.message}</span>`; });
+</script>
+</body>
+</html>

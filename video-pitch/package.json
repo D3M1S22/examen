@@ -29,7 +29,11 @@
     "render": "remotion render ExamenPitchVideo out/examen-pitch.mp4",
     "build": "remotion bundle",
     "upgrade": "remotion upgrade",
-    "lint": "eslint src && tsc"
+    "lint": "eslint src && tsc",
+    "render:v2": "remotion render ExamenPitchVideoV2 out/examen-pitch-v2.mp4",
+    "render:v2-guide": "remotion render ExamenPitchVideoV2-Guide out/examen-pitch-v2-guide.mp4",
+    "vo:placeholders": "node scripts/make-vo-placeholders.mjs",
+    "vo:record": "node scripts/vo-recorder/server.mjs"
   },
   "allowScripts": {
     "esbuild": false
